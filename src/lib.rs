@@ -211,14 +211,21 @@ struct Frame {
     window: river_wm::river_window_v1::RiverWindowV1,
 }
 
+struct Seat {
+    seat: river_wm::river_seat_v1::RiverSeatV1,
+    focus: Option<river_wm::river_window_v1::RiverWindowV1>,
+}
+
 struct Reka {
     pid: i32,
 
+    // Emacs-related state
     rx: Receiver<FromEmacs>,
     tx: Sender<ToEmacs>,
     emacs_fd: Arc<EventFd>,
 
-    seat: Option<river_wm::river_seat_v1::RiverSeatV1>,
+    // river-related state
+    seat: Option<Seat>,
     frames: Vec<Frame>,
     outputs: Vec<river_wm::river_output_v1::RiverOutputV1>,
     river_wm: Option<RiverWindowManagerV1>,
@@ -294,10 +301,20 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     }
                 }
 
-                if let Some(seat) = &state.seat
-                    && !state.frames.is_empty()
-                {
-                    seat.focus_window(&state.frames[0].window);
+                // reconcile focus
+                if let Some(seat) = &mut state.seat {
+                    if seat.focus.is_none() {
+                        // just select any active frame
+                        for frame in &state.frames {
+                            if let FrameState::Displayed(_) = frame.state {
+                                seat.focus = Some(frame.window.clone());
+                            }
+                        }
+                    }
+
+                    if let Some(focus) = &seat.focus {
+                        seat.seat.focus_window(focus);
+                    }
                 }
 
                 proxy.manage_finish();
@@ -316,7 +333,10 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             river_wm::river_window_manager_v1::Event::Seat { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Seat received: id={:?}", id);
                 if state.seat.is_none() {
-                    state.seat = Some(id);
+                    state.seat = Some(Seat {
+                        seat: id,
+                        focus: None,
+                    });
                 } else {
                     log::error!(
                         "seat is already taken, reka does not support multi-seats at the moment"
