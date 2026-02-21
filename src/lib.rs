@@ -612,6 +612,15 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
 
                 log::warn!("received title for unknown window, orphan frame?");
             }
+            river_wm::river_window_v1::Event::Closed => {
+                let mut windows = state.windows.write().unwrap();
+                for (i, w) in windows.iter().enumerate() {
+                    if w.window.eq(proxy) {
+                        windows.swap_remove(i);
+                        return;
+                    }
+                }
+            },
             _ => {}
         }
     }
