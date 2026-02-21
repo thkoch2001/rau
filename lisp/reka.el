@@ -20,12 +20,6 @@
   (cl-loop for frame being the frames
            do (reka--set-frame-name frame)))
 
-(defun reka-enable ()
-  (message "Launching native module ...")
-  (reka--ensure-frame-names)
-  (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
-  (setq reka-handle (reka-start-wm)))
-
 (defun reka-handle-sigusr1 ()
   (interactive)
   (let ((cmd (reka-read-command reka-handle)))
@@ -35,17 +29,27 @@
 (define-key special-event-map [sigusr1] #'reka-handle-sigusr1)
 
 ;; Major mode for reka-managed buffers
-(defvar-local reka-window-id nil
-  "Window ID for this reka buffer.")
+(defvar-local reka-window nil
+  "Window object for this reka-mode buffer.")
 
 (define-derived-mode reka-mode special-mode "Reka"
   "Major mode for buffers representing windows managed by reka."
   :group 'reka
   (setq-local buffer-read-only t))
 
+(defun reka--is-reka-buffer (buf)
+  (with-current-buffer buf
+    (eq major-mode 'reka-mode)))
+
+(defun reka--get-window (buffer)
+  (buffer-local-value 'reka-window buffer))
+
+(defun reka--list-buffers ()
+  (apply #'vector (seq-filter #'reka--is-reka-buffer (buffer-list))))
+
 (defun reka--window-parameters (window)
   (let ((edges (window-inside-absolute-pixel-edges window)))
-    (list :id (buffer-local-value 'reka-window-id (window-buffer window))
+    (list :window (buffer-local-value 'reka-window (window-buffer window))
           :x (nth 0 edges)
           :y (nth 1 edges)
           :w (- (nth 2 edges) (nth 0 edges))
@@ -57,12 +61,22 @@
          (cl-loop for frame being the frames
                   collect (cons (frame-parameter frame 'name)
                                 (seq-filter (lambda (window)
-                                              (with-current-buffer (window-buffer window)
-                                                (eq major-mode 'reka-mode)))
+                                              (reka--is-reka-buffer (window-buffer window)))
                                             (window-list frame))))))
     (seq-map (lambda (elem)
                (cons (car elem)
                      (seq-map #'reka--window-parameters (cdr elem))))
              windows-by-frame)))
+
+(defun reka--create-buffer (window)
+  (with-current-buffer (get-buffer-create (make-temp-name "reka-window-"))
+    (reka-mode)
+    (setq-local reka-window window)))
+
+(defun reka-enable ()
+  (message "Launching native module ...")
+  (reka--ensure-frame-names)
+  (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
+  (setq reka-handle (reka-start-wm)))
 
 (provide 'reka)
