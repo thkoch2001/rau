@@ -9,16 +9,20 @@
 (defcustom reka-handle nil
   "Opaque handle for interacting with the WM")
 
+(defun reka--set-frame-name (frame)
+  (unless (string-prefix-p "reka-frame-"
+                           (frame-parameter frame 'name))
+    (set-frame-parameter frame 'name (make-temp-name "reka-frame-"))))
+
 (defun reka--ensure-frame-names ()
   "Ensure each frame has a unique title that reka can match to its xwindow."
   (cl-loop for frame being the frames
-           do (unless (string-prefix-p "reka-frame-"
-                                       (frame-parameter frame 'name))
-                (set-frame-parameter frame 'name (make-temp-name "reka-frame-")))))
+           do (reka--set-frame-name frame)))
 
 (defun reka-enable ()
   (message "Launching native module ...")
   (reka--ensure-frame-names)
+  (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
   (setq reka-handle (reka-start-wm)))
 
 (defun reka-handle-sigusr1 ()
