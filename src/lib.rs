@@ -351,14 +351,27 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
 
 impl Dispatch<river_wm::river_output_v1::RiverOutputV1, ()> for Reka {
     fn event(
-        _state: &mut Self,
-        _proxy: &river_wm::river_output_v1::RiverOutputV1,
+        state: &mut Self,
+        proxy: &river_wm::river_output_v1::RiverOutputV1,
         event: <river_wm::river_output_v1::RiverOutputV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &wayland_client::QueueHandle<Self>,
     ) {
         log::debug!("RiverOutputV1 event received: {:?}", event);
+
+        match event {
+            river_wm::river_output_v1::Event::Removed => {
+                log::debug!("output disconnected, removing");
+                for (idx, output) in state.outputs.iter().enumerate() {
+                    if output == proxy {
+                        state.outputs.remove(idx);
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 
