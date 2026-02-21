@@ -1,4 +1,6 @@
 use std::{
+    cell::RefCell,
+    collections::HashSet,
     os::fd::AsFd,
     sync::{
         Arc, RwLock,
@@ -7,7 +9,7 @@ use std::{
 };
 
 use anyhow::Context;
-use emacs::{Env, FromLisp, IntoLisp, Result, Value, defun};
+use emacs::{Env, FromLisp, IntoLisp, Result, Value, Vector, defun};
 use nix::{
     poll::PollTimeout,
     sys::{
@@ -18,7 +20,9 @@ use nix::{
 };
 use wayland_client::{Connection, Dispatch, protocol::wl_registry};
 
-use crate::river_wm::river_window_manager_v1::RiverWindowManagerV1;
+use crate::river_wm::{
+    river_window_manager_v1::RiverWindowManagerV1, river_window_v1::RiverWindowV1,
+};
 
 mod river_wm {
     pub extern crate wayland_client;
@@ -69,6 +73,61 @@ struct Handle {
     rx: Receiver<ToEmacs>,
     fd: Arc<EventFd>,
     windows: Arc<RwLock<Vec<Window>>>,
+}
+
+fn contains_by<T, F: Fn(&T) -> bool>(v: &Vec<T>, f: F) -> bool {
+    for e in v {
+        if f(e) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#[defun] // TODO: private?
+fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
+    let windows = handle.windows.write().expect("windows rwlock poisoned");
+    let buffers = env
+        .call("reka--list-buffers", [])?
+        .into_rust::<Vector<'e>>()?;
+    let mut seen = HashSet::<RiverWindowV1>::new();
+
+    log::debug!("found {} reka buffers", buffers.len()); // TODO remove
+    for buffer in buffers.into_iter() {
+        let window_ptr = env.call("reka--get-window", [buffer])?;
+        if !window_ptr.is_not_nil() {
+            // invalid buffer?
+            log::warn!("found reka buffer without any window object, destroying!");
+            env.call("kill-buffer", [buffer])?;
+            continue;
+        }
+
+        let window_cell: &RefCell<RiverWindowV1> = window_ptr.into_rust()?;
+        let window = window_cell.borrow();
+        if !contains_by(&windows, |w: &Window| window.eq(&w.window)) {
+            log::info!("found orphaned reka buffer, destroying!");
+            env.call("kill-buffer", [buffer])?;
+            continue;
+        }
+
+        seen.insert(window.clone());
+    }
+
+    log::debug!("saw {} valid reka buffers", seen.len());
+
+    // create missing buffers ...
+    for window in windows.iter() {
+        if seen.contains(&window.window) {
+            continue;
+        }
+
+        log::debug!("creating new buffer for window {:?}", window);
+        let window_value = RefCell::new(window.window.clone()).into_lisp(env)?;
+        env.call("reka--create-buffer", [window_value])?;
+    }
+
+    ().into_lisp(env)
 }
 
 #[defun]
@@ -218,11 +277,12 @@ struct Frame {
     name: Option<String>,
     state: FrameState,
     node: river_wm::river_node_v1::RiverNodeV1,
-    window: river_wm::river_window_v1::RiverWindowV1,
+    window: RiverWindowV1,
 }
 
+#[derive(Debug)]
 struct Window {
-    window: river_wm::river_window_v1::RiverWindowV1,
+    window: RiverWindowV1,
     node: river_wm::river_node_v1::RiverNodeV1,
     title: Option<String>,
     pid: Option<i32>,
@@ -230,7 +290,7 @@ struct Window {
 
 struct Seat {
     seat: river_wm::river_seat_v1::RiverSeatV1,
-    focus: Option<river_wm::river_window_v1::RiverWindowV1>,
+    focus: Option<RiverWindowV1>,
 }
 
 struct Reka {
@@ -468,11 +528,11 @@ impl Dispatch<river_wm::river_seat_v1::RiverSeatV1, ()> for Reka {
     }
 }
 
-impl Dispatch<river_wm::river_window_v1::RiverWindowV1, ()> for Reka {
+impl Dispatch<RiverWindowV1, ()> for Reka {
     fn event(
         state: &mut Self,
-        proxy: &river_wm::river_window_v1::RiverWindowV1,
-        event: <river_wm::river_window_v1::RiverWindowV1 as wayland_client::Proxy>::Event,
+        proxy: &RiverWindowV1,
+        event: <RiverWindowV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qh: &wayland_client::QueueHandle<Self>,
