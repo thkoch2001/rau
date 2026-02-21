@@ -45,9 +45,7 @@ fn init(_: &Env) -> Result<()> {
 }
 
 #[derive(Debug)]
-enum FromEmacs {
-    CloseWindow(RiverWindowV1),
-}
+enum FromEmacs {}
 
 #[derive(Debug)]
 enum ToEmacs {
@@ -143,12 +141,20 @@ fn read_command<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
 }
 
 #[defun]
-fn close_window<'e>(env: &'e Env, handle: &Handle, window_ptr: Value<'e>) -> Result<Value<'e>> {
-    let window_cell: &RefCell<RiverWindowV1> = window_ptr.into_rust()?;
-    let window = window_cell.borrow().clone();
-    handle.tx.send(FromEmacs::CloseWindow(window))?;
-    handle.fd.write(1)?;
-    log::info!("queued window close request from Emacs");
+fn close_window<'e>(
+    env: &'e Env,
+    handle: &Handle,
+    window: &RefCell<RiverWindowV1>,
+) -> Result<Value<'e>> {
+    let mut windows = handle.windows.write().unwrap();
+
+    for w in windows.iter_mut() {
+        if window.borrow().eq(&w.window) {
+            w.state = WindowState::Killed;
+            break;
+        }
+    }
+
     ().into_lisp(env)
 }
 
@@ -325,21 +331,7 @@ struct Reka {
 
 impl Reka {
     fn handle_emacs_commands(&mut self) -> Result<()> {
-        while let Ok(command) = self.rx.try_recv() {
-            match command {
-                FromEmacs::CloseWindow(window) => {
-                    log::debug!("marking window for closure");
-                    let mut windows = self.windows.write().unwrap();
-                    for w in windows.iter_mut() {
-                        if w.window == window {
-                            w.state = WindowState::Killed;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
+        // TODO: maybe we don't need it at all?
         Ok(())
     }
 
