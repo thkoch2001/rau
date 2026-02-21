@@ -265,6 +265,51 @@ impl Reka {
         signal::kill(Pid::this(), Some(signal::Signal::SIGUSR1))?;
         Ok(())
     }
+
+    // reconcile_frames ensures that each output gets one full-screen Emacs frame.
+    fn reconcile_frames(&mut self) {
+        for (idx, frame) in self.frames.iter_mut().enumerate() {
+            if self.outputs.len() > idx {
+                // frame should be displayed
+                match &frame.state {
+                    // everything is correct already
+                    FrameState::Displayed(output) if output == &self.outputs[idx] => {}
+
+                    // need to assign new output
+                    FrameState::Minimized | FrameState::Displayed(_) => {
+                        let output = &self.outputs[idx];
+                        frame.state = FrameState::Displayed(output.clone());
+                        frame.window.fullscreen(output);
+                    }
+                }
+            } else {
+                // frame should be hidden
+                if let FrameState::Displayed(_) = frame.state {
+                    frame.state = FrameState::Minimized;
+                }
+            }
+        }
+    }
+
+    // reconcile_focus updates the seat's focus, attempting to select something
+    // useful if focus is lost
+    fn reconcile_focus(&mut self) {
+        // reconcile focus
+        if let Some(seat) = &mut self.seat {
+            if seat.focus.is_none() {
+                // just select any active frame
+                for frame in &self.frames {
+                    if let FrameState::Displayed(_) = frame.state {
+                        seat.focus = Some(frame.window.clone());
+                    }
+                }
+            }
+
+            if let Some(focus) = &seat.focus {
+                seat.seat.focus_window(focus);
+            }
+        }
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Reka {
@@ -303,44 +348,8 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             river_wm::river_window_manager_v1::Event::ManageStart => {
                 log::debug!("manage sequence started");
 
-                // reconcile frames with outputs (each output gets one full-screen frame)
-                for (idx, frame) in state.frames.iter_mut().enumerate() {
-                    if state.outputs.len() > idx {
-                        // frame should be displayed
-                        match &frame.state {
-                            // everything is correct already
-                            FrameState::Displayed(output) if output == &state.outputs[idx] => {}
-
-                            // need to assign new output
-                            FrameState::Minimized | FrameState::Displayed(_) => {
-                                let output = &state.outputs[idx];
-                                frame.state = FrameState::Displayed(output.clone());
-                                frame.window.fullscreen(output);
-                            }
-                        }
-                    } else {
-                        // frame should be hidden
-                        if let FrameState::Displayed(_) = frame.state {
-                            frame.state = FrameState::Minimized;
-                        }
-                    }
-                }
-
-                // reconcile focus
-                if let Some(seat) = &mut state.seat {
-                    if seat.focus.is_none() {
-                        // just select any active frame
-                        for frame in &state.frames {
-                            if let FrameState::Displayed(_) = frame.state {
-                                seat.focus = Some(frame.window.clone());
-                            }
-                        }
-                    }
-
-                    if let Some(focus) = &seat.focus {
-                        seat.seat.focus_window(focus);
-                    }
-                }
+                state.reconcile_frames();
+                state.reconcile_focus();
 
                 proxy.manage_finish();
             }
