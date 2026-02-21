@@ -208,6 +208,7 @@ enum FrameState {
 
 struct Frame {
     state: FrameState,
+    node: river_wm::river_node_v1::RiverNodeV1,
     window: river_wm::river_window_v1::RiverWindowV1,
 }
 
@@ -298,6 +299,11 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                                 frame.window.fullscreen(output);
                             }
                         }
+                    } else {
+                        // frame should be hidden
+                        if let FrameState::Displayed(_) = frame.state {
+                            frame.state = FrameState::Minimized;
+                        }
                     }
                 }
 
@@ -322,6 +328,17 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
 
             // render sequence: positions, z-order, borders, visibility (?), clipping (?)
             river_wm::river_window_manager_v1::Event::RenderStart => {
+                // reconcile frame display state
+                for frame in state.frames.iter() {
+                    match &frame.state {
+                        FrameState::Minimized => frame.window.hide(),
+                        FrameState::Displayed(_) => {
+                            frame.window.show();
+                            frame.node.place_bottom();
+                        }
+                    }
+                }
+
                 proxy.render_finish();
             }
 
@@ -415,19 +432,34 @@ impl Dispatch<river_wm::river_window_v1::RiverWindowV1, ()> for Reka {
         event: <river_wm::river_window_v1::RiverWindowV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
-        _qhandle: &wayland_client::QueueHandle<Self>,
+        qh: &wayland_client::QueueHandle<Self>,
     ) {
         match event {
             river_wm::river_window_v1::Event::UnreliablePid { unreliable_pid }
                 if unreliable_pid == state.pid =>
             {
+                let node = proxy.get_node(qh, ());
                 log::info!("discovered new Emacs frame ...");
                 state.frames.push(Frame {
                     state: FrameState::Minimized,
+                    node,
                     window: proxy.clone(),
                 });
             }
             _ => log::debug!("RiverWindowV1 event received: {:?}", event),
         }
+    }
+}
+
+impl Dispatch<river_wm::river_node_v1::RiverNodeV1, ()> for Reka {
+    fn event(
+        _state: &mut Self,
+        _proxy: &river_wm::river_node_v1::RiverNodeV1,
+        event: <river_wm::river_node_v1::RiverNodeV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        log::debug!("RiverNodeV1 event received: {:?}", event);
     }
 }
