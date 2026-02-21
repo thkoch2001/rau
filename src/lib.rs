@@ -215,6 +215,7 @@ enum FrameState {
 }
 
 struct Frame {
+    name: Option<String>,
     state: FrameState,
     node: river_wm::river_node_v1::RiverNodeV1,
     window: river_wm::river_window_v1::RiverWindowV1,
@@ -223,7 +224,7 @@ struct Frame {
 struct Window {
     window: river_wm::river_window_v1::RiverWindowV1,
     node: river_wm::river_node_v1::RiverNodeV1,
-    title: String,
+    title: Option<String>,
     pid: Option<i32>,
 }
 
@@ -414,7 +415,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 state.windows.write().unwrap().push(Window {
                     window: id,
                     node,
-                    title: "unknown".into(),
+                    title: None,
                     pid: None,
                 });
             }
@@ -488,6 +489,7 @@ impl Dispatch<river_wm::river_window_v1::RiverWindowV1, ()> for Reka {
                         log::info!("discovered new Emacs frame ...");
                         let window = windows.remove(pos);
                         state.frames.push(Frame {
+                            name: None,
                             state: FrameState::Minimized,
                             node: window.node,
                             window: window.window,
@@ -496,6 +498,28 @@ impl Dispatch<river_wm::river_window_v1::RiverWindowV1, ()> for Reka {
                         log::info!("discovered new window (PID: {}) ...", unreliable_pid);
                     }
                 }
+            }
+            river_wm::river_window_v1::Event::Title { title } => {
+                let mut windows = state.windows.write().unwrap();
+                for w in windows.iter_mut() {
+                    if w.window.eq(proxy) {
+                        w.title = title;
+                        return;
+                    }
+                }
+
+                if let Some(s) = &title
+                    && s.starts_with("reka-frame-")
+                {
+                    for f in state.frames.iter_mut() {
+                        if f.window.eq(proxy) {
+                            f.name = title;
+                            return;
+                        }
+                    }
+                }
+
+                log::warn!("received title for unknown window, orphan frame?");
             }
             _ => {}
         }
