@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::Context;
-use emacs::{Env, IntoLisp, Result, Value, Vector, defun};
+use emacs::{Env, IntoLisp, Result, Value, Vector, defun, use_symbols};
 use nix::{
     poll::PollTimeout,
     sys::{
@@ -38,6 +38,13 @@ mod river_wm {
 }
 
 emacs::plugin_is_GPL_compatible!();
+
+use_symbols!(
+    kill_buffer
+    reka_get_window => "reka--get-window"
+    reka_create_buffer => "reka--create-buffer"
+    reka_list_buffers => "reka--list-buffers"
+);
 
 #[emacs::module(name = "libreka", defun_prefix = "reka")]
 fn init(_: &Env) -> Result<()> {
@@ -80,18 +87,16 @@ fn contains_by<T, F: Fn(&T) -> bool>(v: &Vec<T>, f: F) -> bool {
 #[defun] // TODO: private?
 fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
     let mut windows = handle.windows.write().expect("windows rwlock poisoned");
-    let buffers = env
-        .call("reka--list-buffers", [])?
-        .into_rust::<Vector<'e>>()?;
+    let buffers = env.call(reka_list_buffers, [])?.into_rust::<Vector<'e>>()?;
     let mut seen = HashSet::<RiverWindowV1>::new();
 
     log::debug!("found {} reka buffers", buffers.len()); // TODO remove
     for buffer in buffers.into_iter() {
-        let window_ptr = env.call("reka--get-window", [buffer])?;
+        let window_ptr = env.call(reka_get_window, [buffer])?;
         if !window_ptr.is_not_nil() {
             // invalid buffer?
             log::warn!("found reka buffer without any window object, destroying!");
-            env.call("kill-buffer", [buffer])?;
+            env.call(kill_buffer, [buffer])?;
             continue;
         }
 
@@ -99,7 +104,7 @@ fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'
         let window = window_cell.borrow();
         if !contains_by(&windows, |w: &Window| window.eq(&w.window)) {
             log::info!("found orphaned reka buffer, destroying!");
-            env.call("kill-buffer", [buffer])?;
+            env.call(kill_buffer, [buffer])?;
             continue;
         }
 
@@ -122,7 +127,7 @@ fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'
             WindowState::Starting => {
                 log::debug!("creating new buffer for window {:?}", window);
                 let window_value = RefCell::new(window.window.clone()).into_lisp(env)?;
-                env.call("reka--create-buffer", [window_value])?;
+                env.call(reka_create_buffer, [window_value])?;
                 window.state = WindowState::Active;
             }
         }
