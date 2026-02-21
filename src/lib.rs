@@ -201,6 +201,16 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
     }
 }
 
+enum FrameState {
+    Minimized,
+    Displayed(river_wm::river_output_v1::RiverOutputV1),
+}
+
+struct Frame {
+    state: FrameState,
+    window: river_wm::river_window_v1::RiverWindowV1,
+}
+
 struct Reka {
     pid: i32,
 
@@ -209,7 +219,7 @@ struct Reka {
     emacs_fd: Arc<EventFd>,
 
     seat: Option<river_wm::river_seat_v1::RiverSeatV1>,
-    frames: Vec<river_wm::river_window_v1::RiverWindowV1>,
+    frames: Vec<Frame>,
     outputs: Vec<river_wm::river_output_v1::RiverOutputV1>,
     river_wm: Option<RiverWindowManagerV1>,
 }
@@ -266,17 +276,28 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             river_wm::river_window_manager_v1::Event::ManageStart => {
                 log::debug!("manage sequence started");
 
-                // fullscreen the frames?
-                for (idx, frame) in state.frames.iter().enumerate() {
+                // reconcile frames with outputs (each output gets one full-screen frame)
+                for (idx, frame) in state.frames.iter_mut().enumerate() {
                     if state.outputs.len() > idx {
-                        frame.fullscreen(&state.outputs[idx]);
+                        // frame should be displayed
+                        match &frame.state {
+                            // everything is correct already
+                            FrameState::Displayed(output) if output == &state.outputs[idx] => {}
+
+                            // need to assign new output
+                            FrameState::Minimized | FrameState::Displayed(_) => {
+                                let output = &state.outputs[idx];
+                                frame.state = FrameState::Displayed(output.clone());
+                                frame.window.fullscreen(output);
+                            }
+                        }
                     }
                 }
 
                 if let Some(seat) = &state.seat
                     && !state.frames.is_empty()
                 {
-                    seat.focus_window(&state.frames[0]);
+                    seat.focus_window(&state.frames[0].window);
                 }
 
                 proxy.manage_finish();
@@ -368,7 +389,10 @@ impl Dispatch<river_wm::river_window_v1::RiverWindowV1, ()> for Reka {
                 if unreliable_pid == state.pid =>
             {
                 log::info!("discovered new Emacs frame ...");
-                state.frames.push(proxy.clone());
+                state.frames.push(Frame {
+                    state: FrameState::Minimized,
+                    window: proxy.clone(),
+                });
             }
             _ => log::debug!("RiverWindowV1 event received: {:?}", event),
         }
