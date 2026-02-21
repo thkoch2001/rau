@@ -53,7 +53,7 @@ impl<'e> FromLisp<'e> for FromEmacs {
 
 #[derive(Debug)]
 enum ToEmacs {
-    Next(usize),
+    Next(u64),
 }
 
 impl<'e> IntoLisp<'e> for ToEmacs {
@@ -134,6 +134,7 @@ fn wm_loop(
     let qh = event_queue.handle();
     let mut wm = Reka {
         pid,
+        iteration: 0,
         rx,
         tx,
         emacs_fd,
@@ -144,8 +145,6 @@ fn wm_loop(
         windows,
     };
     let _registry = display.get_registry(&qh, ());
-
-    let mut counter = 0;
 
     loop {
         event_queue.flush()?;
@@ -206,8 +205,6 @@ fn wm_loop(
             log::debug!("river has events ready");
             guard.read()?;
             event_queue.dispatch_pending(&mut wm)?;
-            wm.send(ToEmacs::Next(counter))?;
-            counter += 1;
         }
     }
 }
@@ -237,6 +234,7 @@ struct Seat {
 
 struct Reka {
     pid: i32,
+    iteration: u64,
 
     // Emacs-related state
     rx: Receiver<FromEmacs>,
@@ -344,13 +342,22 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
         qhandle: &wayland_client::QueueHandle<Self>,
     ) {
         match event {
-            // manage sequence: window dimensions, fullscreen state, keyboard focus, decorations, capabilities ...
+            // manage sequence: window dimensions, fullscreen state, keyboard
+            // focus, decorations, capabilities ...
             river_wm::river_window_manager_v1::Event::ManageStart => {
                 log::debug!("manage sequence started");
 
                 state.reconcile_frames();
                 state.reconcile_focus();
 
+                state.iteration += 1;
+                if let Err(e) = state.send(ToEmacs::Next(state.iteration)) {
+                    log::error!(
+                        "failed to notify Emacs (iteration {}): {}",
+                        state.iteration,
+                        e
+                    );
+                }
                 proxy.manage_finish();
             }
 
