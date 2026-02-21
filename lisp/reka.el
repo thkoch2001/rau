@@ -22,9 +22,8 @@
 
 (defun reka-handle-sigusr1 ()
   (interactive)
-  (let ((cmd (reka-read-command reka-handle)))
-    (message "Got command from WM: %s" cmd)
-    (reka-send-command reka-handle "whatever")))
+  (while (reka-read-command reka-handle)
+    (reka-reconcile-window-buffers reka-handle)))
 
 (define-key special-event-map [sigusr1] #'reka-handle-sigusr1)
 
