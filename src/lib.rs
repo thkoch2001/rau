@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::Context;
-use emacs::{Env, FromLisp, IntoLisp, Result, Value, Vector, defun};
+use emacs::{Env, IntoLisp, Result, Value, Vector, defun};
 use nix::{
     poll::PollTimeout,
     sys::{
@@ -46,13 +46,7 @@ fn init(_: &Env) -> Result<()> {
 
 #[derive(Debug)]
 enum FromEmacs {
-    Whatever,
-}
-
-impl<'e> FromLisp<'e> for FromEmacs {
-    fn from_lisp(_value: Value<'e>) -> Result<Self> {
-        Ok(FromEmacs::Whatever)
-    }
+    CloseWindow(RiverWindowV1),
 }
 
 #[derive(Debug)]
@@ -87,7 +81,7 @@ fn contains_by<T, F: Fn(&T) -> bool>(v: &Vec<T>, f: F) -> bool {
 
 #[defun] // TODO: private?
 fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
-    let windows = handle.windows.write().expect("windows rwlock poisoned");
+    let mut windows = handle.windows.write().expect("windows rwlock poisoned");
     let buffers = env
         .call("reka--list-buffers", [])?
         .into_rust::<Vector<'e>>()?;
@@ -116,15 +110,24 @@ fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'
 
     log::debug!("saw {} valid reka buffers", seen.len());
 
-    // create missing buffers ...
-    for window in windows.iter() {
-        if seen.contains(&window.window) {
-            continue;
-        }
+    // create missing buffers and mark windows as active
+    for window in windows.iter_mut() {
+        match &window.state {
+            WindowState::Active if seen.contains(&window.window) => {}
+            WindowState::Killed => {}
 
-        log::debug!("creating new buffer for window {:?}", window);
-        let window_value = RefCell::new(window.window.clone()).into_lisp(env)?;
-        env.call("reka--create-buffer", [window_value])?;
+            WindowState::Active => {
+                // buffer is gone, but maybe the hook didn't run? clean up
+                window.state = WindowState::Killed;
+            }
+
+            WindowState::Starting => {
+                log::debug!("creating new buffer for window {:?}", window);
+                let window_value = RefCell::new(window.window.clone()).into_lisp(env)?;
+                env.call("reka--create-buffer", [window_value])?;
+                window.state = WindowState::Active;
+            }
+        }
     }
 
     ().into_lisp(env)
@@ -140,10 +143,12 @@ fn read_command<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
 }
 
 #[defun]
-fn send_command<'e>(env: &'e Env, handle: &Handle, val: Value<'e>) -> Result<Value<'e>> {
-    handle.tx.send(FromEmacs::from_lisp(val)?)?;
+fn close_window<'e>(env: &'e Env, handle: &Handle, window_ptr: Value<'e>) -> Result<Value<'e>> {
+    let window_cell: &RefCell<RiverWindowV1> = window_ptr.into_rust()?;
+    let window = window_cell.borrow().clone();
+    handle.tx.send(FromEmacs::CloseWindow(window))?;
     handle.fd.write(1)?;
-    log::info!("sent command from Emacs");
+    log::info!("queued window close request from Emacs");
     ().into_lisp(env)
 }
 
@@ -280,12 +285,20 @@ struct Frame {
     window: RiverWindowV1,
 }
 
+#[derive(Debug, PartialEq)]
+enum WindowState {
+    Starting,
+    Active,
+    Killed,
+}
+
 #[derive(Debug)]
 struct Window {
     window: RiverWindowV1,
     node: river_wm::river_node_v1::RiverNodeV1,
     title: Option<String>,
     pid: Option<i32>,
+    state: WindowState,
 }
 
 struct Seat {
@@ -313,7 +326,18 @@ struct Reka {
 impl Reka {
     fn handle_emacs_commands(&mut self) -> Result<()> {
         while let Ok(command) = self.rx.try_recv() {
-            log::debug!("got command: {:?}", command)
+            match command {
+                FromEmacs::CloseWindow(window) => {
+                    log::debug!("marking window for closure");
+                    let mut windows = self.windows.write().unwrap();
+                    for w in windows.iter_mut() {
+                        if w.window == window {
+                            w.state = WindowState::Killed;
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -369,6 +393,19 @@ impl Reka {
             }
         }
     }
+
+    // reconcile_windows closes killed windows and removes them from the list
+    fn reconcile_windows(&mut self) {
+        let windows = self.windows.read().unwrap();
+        for w in windows.iter() {
+            if w.state == WindowState::Killed {
+                log::info!("requesting window closure");
+                w.window.close();
+            }
+        }
+
+        // TODO: force kill at some point
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Reka {
@@ -410,6 +447,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
 
                 state.reconcile_frames();
                 state.reconcile_focus();
+                state.reconcile_windows();
 
                 state.iteration += 1;
                 if let Err(e) = state.send(ToEmacs::Next(state.iteration)) {
@@ -477,6 +515,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     node,
                     title: None,
                     pid: None,
+                    state: WindowState::Starting,
                 });
             }
         }

@@ -31,10 +31,15 @@
 (defvar-local reka-window nil
   "Window object for this reka-mode buffer.")
 
+(defun reka--buffer-killed ()
+  (when reka-window
+    (reka-close-window reka-handle reka-window)))
+
 (define-derived-mode reka-mode special-mode "Reka"
   "Major mode for buffers representing windows managed by reka."
   :group 'reka
-  (setq-local buffer-read-only t))
+  (setq-local buffer-read-only t)
+  (add-hook 'kill-buffer-hook #'reka--buffer-killed nil t))
 
 (defun reka--is-reka-buffer (buf)
   (with-current-buffer buf
