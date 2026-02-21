@@ -1,7 +1,7 @@
 use std::{
     os::fd::AsFd,
     sync::{
-        Arc,
+        Arc, RwLock,
         mpsc::{Receiver, Sender, channel},
     },
 };
@@ -68,6 +68,7 @@ struct Handle {
     tx: Sender<FromEmacs>,
     rx: Receiver<ToEmacs>,
     fd: Arc<EventFd>,
+    windows: Arc<RwLock<Vec<Window>>>,
 }
 
 #[defun]
@@ -95,8 +96,11 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let emacs_fd = Arc::new(EventFd::from_value_and_flags(0, EfdFlags::EFD_NONBLOCK)?);
     let emacs_fd_wmside = emacs_fd.clone();
 
+    let windows = Arc::new(RwLock::new(Vec::new()));
+    let windows_wmside = windows.clone();
+
     std::thread::spawn(move || {
-        let result = wm_loop(rx, tx_e, emacs_fd_wmside);
+        let result = wm_loop(rx, tx_e, emacs_fd_wmside, windows_wmside);
         if let Err(e) = result {
             log::error!("reka window manager thread crashed: {:?}", e);
         }
@@ -107,10 +111,16 @@ fn start_wm(env: &Env) -> Result<Handle> {
         tx,
         rx: rx_e,
         fd: emacs_fd,
+        windows,
     })
 }
 
-fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>) -> Result<()> {
+fn wm_loop(
+    rx: Receiver<FromEmacs>,
+    tx: Sender<ToEmacs>,
+    emacs_fd: Arc<EventFd>,
+    windows: Arc<RwLock<Vec<Window>>>,
+) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)
         .init();
@@ -131,6 +141,7 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
         frames: vec![],
         outputs: vec![],
         river_wm: None,
+        windows,
     };
     let _registry = display.get_registry(&qh, ());
 
@@ -212,6 +223,13 @@ struct Frame {
     window: river_wm::river_window_v1::RiverWindowV1,
 }
 
+struct Window {
+    window: river_wm::river_window_v1::RiverWindowV1,
+    node: river_wm::river_node_v1::RiverNodeV1,
+    title: String,
+    pid: Option<i32>,
+}
+
 struct Seat {
     seat: river_wm::river_seat_v1::RiverSeatV1,
     focus: Option<river_wm::river_window_v1::RiverWindowV1>,
@@ -230,6 +248,7 @@ struct Reka {
     frames: Vec<Frame>,
     outputs: Vec<river_wm::river_output_v1::RiverOutputV1>,
     river_wm: Option<RiverWindowManagerV1>,
+    windows: Arc<RwLock<Vec<Window>>>,
 }
 
 impl Reka {
@@ -277,7 +296,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
         event: <RiverWindowManagerV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
-        _qhandle: &wayland_client::QueueHandle<Self>,
+        qhandle: &wayland_client::QueueHandle<Self>,
     ) {
         match event {
             // manage sequence: window dimensions, fullscreen state, keyboard focus, decorations, capabilities ...
@@ -375,6 +394,13 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             }
             river_wm::river_window_manager_v1::Event::Window { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Window received: id={:?}", id);
+                let node = id.get_node(qhandle, ());
+                state.windows.write().unwrap().push(Window {
+                    window: id,
+                    node,
+                    title: "unknown".into(),
+                    pid: None,
+                });
             }
         }
     }
@@ -432,21 +458,30 @@ impl Dispatch<river_wm::river_window_v1::RiverWindowV1, ()> for Reka {
         event: <river_wm::river_window_v1::RiverWindowV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
-        qh: &wayland_client::QueueHandle<Self>,
+        _qh: &wayland_client::QueueHandle<Self>,
     ) {
+        log::debug!("RiverWindowV1 event received: {:?}", event);
+
         match event {
-            river_wm::river_window_v1::Event::UnreliablePid { unreliable_pid }
-                if unreliable_pid == state.pid =>
-            {
-                let node = proxy.get_node(qh, ());
-                log::info!("discovered new Emacs frame ...");
-                state.frames.push(Frame {
-                    state: FrameState::Minimized,
-                    node,
-                    window: proxy.clone(),
-                });
+            river_wm::river_window_v1::Event::UnreliablePid { unreliable_pid } => {
+                let mut windows = state.windows.write().unwrap();
+                if let Some(pos) = windows.iter().position(|w| &w.window == proxy) {
+                    windows[pos].pid = Some(unreliable_pid);
+
+                    if unreliable_pid == state.pid {
+                        log::info!("discovered new Emacs frame ...");
+                        let window = windows.remove(pos);
+                        state.frames.push(Frame {
+                            state: FrameState::Minimized,
+                            node: window.node,
+                            window: window.window,
+                        });
+                    } else {
+                        log::info!("discovered new window (PID: {}) ...", unreliable_pid);
+                    }
+                }
             }
-            _ => log::debug!("RiverWindowV1 event received: {:?}", event),
+            _ => {}
         }
     }
 }
