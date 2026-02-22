@@ -443,23 +443,33 @@ impl Reka {
         }
     }
 
-    // reconcile_focus updates the seat's focus, attempting to select something
-    // useful if focus is lost
+    // reconcile_focus updates the seat's focus, focusing the window of the
+    // active reka-mode buffer (if any), or Emacs itself otherwise.
     fn reconcile_focus(&mut self) {
-        // reconcile focus
-        if let Some(seat) = &mut self.seat {
-            if seat.focus.is_none() {
-                // just select any active frame
-                for frame in &self.frames {
-                    if let FrameState::Displayed(_) = frame.state {
-                        seat.focus = Some(frame.window.clone());
-                    }
-                }
-            }
+        if self.seat.is_none() {
+            log::warn!("no seat present, something might have gone wrong");
+            return;
+        }
 
-            if let Some(focus) = &seat.focus {
-                seat.seat.focus_window(focus);
-            }
+        let focused_window = {
+            let windows = self.windows.read().unwrap();
+            windows
+                .iter()
+                .find(|w| w.params.as_ref().map_or(false, |p| p.focused))
+                .map(|w| w.window.clone())
+                // TODO: but which frame to select? is there an "active output"?
+                .or_else(|| {
+                    self.frames
+                        .iter()
+                        .find(|f| matches!(f.state, FrameState::Displayed(_)))
+                        .map(|f| f.window.clone())
+                })
+        };
+
+        let seat = self.seat.as_mut().unwrap();
+        seat.focus = focused_window;
+        if let Some(focus) = &seat.focus {
+            seat.seat.focus_window(focus);
         }
     }
 
@@ -753,6 +763,14 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 log::warn!("received title for unknown window, orphan frame?");
             }
             river_wm::river_window_v1::Event::Closed => {
+                if let Some(seat) = &mut state.seat {
+                    if let Some(focus) = &seat.focus {
+                        if focus.eq(proxy) {
+                            seat.focus = None;
+                        }
+                    }
+                }
+
                 {
                     let mut windows = state.windows.write().unwrap();
                     for (i, w) in windows.iter().enumerate() {
@@ -769,7 +787,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                         return;
                     }
                 }
-            },
+            }
             _ => {}
         }
     }
