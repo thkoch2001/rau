@@ -64,51 +64,75 @@ fn contains_by<T, F: Fn(&T) -> bool>(v: &Vec<T>, f: F) -> bool {
     return false;
 }
 
-#[defun] // TODO: private?
+#[defun]
 fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
-    let mut windows = handle.windows.write().expect("windows rwlock poisoned");
+    // We need to be careful about locking here: Creating/destroying buffers
+    // triggers layout changes, which (through hooks) might call back into the
+    // Rust code and attempt to acquire locks. The idea is to split this into
+    // three phases, where we first hold a read lock and figure out what needs
+    // to be created/destroyed, then do it without a lock, and finally update
+    // the stack under a write lock.
+    //
+    // It's important that none of the Lisp functions called from here try to do
+    // anything that needs the lock!
+
     let buffers = env.call(reka_list_buffers, [])?.into_rust::<Vector<'e>>()?;
-    let mut seen = HashSet::<RiverWindowV1>::new();
+    let mut orphaned: Vec<Value<'e>> = vec![];
+    let mut starting: Vec<RiverWindowV1> = vec![];
+    let mut seen: HashSet<RiverWindowV1> = HashSet::new();
+    {
+        let windows = handle.windows.read().expect("windows rwlock poisoned");
 
-    log::debug!("found {} reka buffers", buffers.len()); // TODO remove
-    for buffer in buffers.into_iter() {
-        let window_ptr = env.call(reka_get_window, [buffer])?;
-        if !window_ptr.is_not_nil() {
-            // invalid buffer?
-            log::warn!("found reka buffer without any window object, destroying!");
-            env.call(kill_buffer, [buffer])?;
-            continue;
+        for buffer in buffers.into_iter() {
+            let window_ptr = env.call(reka_get_window, [buffer])?;
+            if !window_ptr.is_not_nil() {
+                log::warn!("found reka buffer without any window object, destroying!");
+                orphaned.push(buffer);
+                continue;
+            }
+            let window_cell: &RefCell<RiverWindowV1> = window_ptr.into_rust()?;
+            let window = window_cell.borrow();
+            if !contains_by(&*windows, |w: &Window| window.eq(&w.window)) {
+                log::info!("found orphaned reka buffer, destroying!");
+                orphaned.push(buffer);
+            } else {
+                seen.insert(window.clone());
+            }
         }
 
-        let window_cell: &RefCell<RiverWindowV1> = window_ptr.into_rust()?;
-        let window = window_cell.borrow();
-        if !contains_by(&windows, |w: &Window| window.eq(&w.window)) {
-            log::info!("found orphaned reka buffer, destroying!");
-            env.call(kill_buffer, [buffer])?;
-            continue;
+        for window in windows.iter() {
+            if matches!(window.state, WindowState::Starting) {
+                starting.push(window.window.clone());
+            }
         }
+    } // "phase 1" end
 
-        seen.insert(window.clone());
+    // phase 2: mutating without lock
+    for buffer in orphaned {
+        env.call(kill_buffer, [buffer])?;
     }
 
-    log::debug!("saw {} valid reka buffers", seen.len());
+    for window in &starting {
+        log::debug!("creating new buffer for starting window");
+        let window_value = RefCell::new(window.clone()).into_lisp(env)?;
+        env.call(reka_create_buffer, [window_value])?;
+    }
 
-    // create missing buffers and mark windows as active
-    for window in windows.iter_mut() {
-        match &window.state {
-            WindowState::Active if seen.contains(&window.window) => {}
-            WindowState::Killed => {}
-
-            WindowState::Active => {
-                // buffer is gone, but maybe the hook didn't run? clean up
-                window.state = WindowState::Killed;
-            }
-
-            WindowState::Starting => {
-                log::debug!("creating new buffer for window {:?}", window);
-                let window_value = RefCell::new(window.window.clone()).into_lisp(env)?;
-                env.call(reka_create_buffer, [window_value])?;
-                window.state = WindowState::Active;
+    // phase 3: write back states
+    {
+        let mut windows = handle.windows.write().expect("windows rwlock poisoned");
+        for window in windows.iter_mut() {
+            match window.state {
+                WindowState::Active if seen.contains(&window.window) => {}
+                WindowState::Killed => {}
+                WindowState::Active => {
+                    // not seen -> buffer was removed
+                    window.state = WindowState::Killed;
+                }
+                WindowState::Starting if starting.iter().any(|w| w.eq(&window.window)) => {
+                    window.state = WindowState::Active;
+                }
+                WindowState::Starting => {}
             }
         }
     }
