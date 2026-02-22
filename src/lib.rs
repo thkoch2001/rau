@@ -134,6 +134,12 @@ fn close_window<'e>(
     ().into_lisp(env)
 }
 
+#[defun]
+fn manage_dirty<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
+    handle.fd.write(1)?;
+    ().into_lisp(env)
+}
+
 #[defun(user_ptr)]
 fn start_wm(env: &Env) -> Result<Handle> {
     let emacs_fd = Arc::new(EventFd::from_value_and_flags(0, EfdFlags::EFD_NONBLOCK)?);
@@ -284,12 +290,15 @@ fn wm_loop(emacs_fd: Arc<EventFd>, windows: Arc<RwLock<Vec<Window>>>) -> Result<
             )
         };
 
-        // handle commands from emacs first (as they might influence what we respond to river)
         if emacs_ready {
-            log::debug!("emacs has commands ready");
+            log::debug!("calling emacs-initiated manage_dirty");
             let mut buf = [0u8; 8];
             let _ = nix::unistd::read(&wm.emacs_fd, &mut buf);
-            wm.handle_emacs_commands()?;
+            if let Some(river_wm) = &wm.river_wm {
+                river_wm.manage_dirty();
+            } else {
+                log::warn!("manage_dirty requested but river_wm not yet bound");
+            }
         }
 
         if river_ready {
@@ -358,11 +367,6 @@ struct Reka {
 }
 
 impl Reka {
-    fn handle_emacs_commands(&mut self) -> Result<()> {
-        // TODO: call manage_dirty here once Emacs-initiated sequences are implemented
-        Ok(())
-    }
-
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
         for (idx, frame) in self.frames.iter_mut().enumerate() {
