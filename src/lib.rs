@@ -2,10 +2,7 @@ use std::{
     cell::RefCell,
     collections::HashSet,
     os::fd::AsFd,
-    sync::{
-        Arc, RwLock,
-        mpsc::{Receiver, Sender, channel},
-    },
+    sync::{Arc, RwLock},
 };
 
 use anyhow::Context;
@@ -52,25 +49,7 @@ fn init(_: &Env) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
-enum FromEmacs {}
-
-#[derive(Debug)]
-enum ToEmacs {
-    Next(u64),
-}
-
-impl<'e> IntoLisp<'e> for ToEmacs {
-    fn into_lisp(self, env: &'e Env) -> Result<Value<'e>> {
-        match self {
-            ToEmacs::Next(n) => n.into_lisp(env),
-        }
-    }
-}
-
 struct Handle {
-    tx: Sender<FromEmacs>,
-    rx: Receiver<ToEmacs>,
     fd: Arc<EventFd>,
     windows: Arc<RwLock<Vec<Window>>>,
 }
@@ -138,15 +117,6 @@ fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'
 }
 
 #[defun]
-fn read_command<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
-    if let Ok(value) = handle.rx.try_recv() {
-        return value.into_lisp(env);
-    }
-
-    ().into_lisp(env)
-}
-
-#[defun]
 fn close_window<'e>(
     env: &'e Env,
     handle: &Handle,
@@ -166,9 +136,6 @@ fn close_window<'e>(
 
 #[defun(user_ptr)]
 fn start_wm(env: &Env) -> Result<Handle> {
-    let (tx, rx) = channel::<FromEmacs>();
-    let (tx_e, rx_e) = channel::<ToEmacs>();
-
     let emacs_fd = Arc::new(EventFd::from_value_and_flags(0, EfdFlags::EFD_NONBLOCK)?);
     let emacs_fd_wmside = emacs_fd.clone();
 
@@ -176,7 +143,7 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let windows_wmside = windows.clone();
 
     std::thread::spawn(move || {
-        let result = wm_loop(rx, tx_e, emacs_fd_wmside, windows_wmside);
+        let result = wm_loop(emacs_fd_wmside, windows_wmside);
         if let Err(e) = result {
             log::error!("reka window manager thread crashed: {:?}", e);
         }
@@ -184,8 +151,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
 
     env.message("launched reka window manager! have fun ...")?;
     Ok(Handle {
-        tx,
-        rx: rx_e,
         fd: emacs_fd,
         windows,
     })
@@ -248,12 +213,7 @@ fn update_window_parameters<'e>(
     ().into_lisp(env)
 }
 
-fn wm_loop(
-    rx: Receiver<FromEmacs>,
-    tx: Sender<ToEmacs>,
-    emacs_fd: Arc<EventFd>,
-    windows: Arc<RwLock<Vec<Window>>>,
-) -> Result<()> {
+fn wm_loop(emacs_fd: Arc<EventFd>, windows: Arc<RwLock<Vec<Window>>>) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)
         .init();
@@ -268,8 +228,6 @@ fn wm_loop(
     let mut wm = Reka {
         pid,
         iteration: 0,
-        rx,
-        tx,
         emacs_fd,
         seat: None,
         frames: vec![],
@@ -389,8 +347,6 @@ struct Reka {
     iteration: u64,
 
     // Emacs-related state
-    rx: Receiver<FromEmacs>,
-    tx: Sender<ToEmacs>,
     emacs_fd: Arc<EventFd>,
 
     // river-related state
@@ -403,13 +359,7 @@ struct Reka {
 
 impl Reka {
     fn handle_emacs_commands(&mut self) -> Result<()> {
-        // TODO: maybe we don't need it at all?
-        Ok(())
-    }
-
-    fn send(&self, cmd: ToEmacs) -> Result<()> {
-        self.tx.send(cmd)?;
-        signal::kill(Pid::this(), Some(signal::Signal::SIGUSR1))?;
+        // TODO: call manage_dirty here once Emacs-initiated sequences are implemented
         Ok(())
     }
 
@@ -542,7 +492,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 state.reconcile_windows();
 
                 state.iteration += 1;
-                if let Err(e) = state.send(ToEmacs::Next(state.iteration)) {
+                if let Err(e) = signal::kill(Pid::this(), Some(signal::Signal::SIGUSR1)) {
                     log::error!(
                         "failed to notify Emacs (iteration {}): {}",
                         state.iteration,
