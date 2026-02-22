@@ -117,15 +117,11 @@ fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'
 }
 
 #[defun]
-fn close_window<'e>(
-    env: &'e Env,
-    handle: &Handle,
-    window: &RefCell<RiverWindowV1>,
-) -> Result<Value<'e>> {
+fn close_window<'e>(env: &'e Env, handle: &Handle, window: &RiverWindowV1) -> Result<Value<'e>> {
     let mut windows = handle.windows.write().unwrap();
 
     for w in windows.iter_mut() {
-        if window.borrow().eq(&w.window) {
+        if window.eq(&w.window) {
             w.state = WindowState::Killed;
             break;
         }
