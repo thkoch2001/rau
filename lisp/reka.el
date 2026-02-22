@@ -42,7 +42,10 @@
   "Major mode for buffers representing windows managed by reka."
   :group 'reka
   (setq-local buffer-read-only t)
-  (add-hook 'kill-buffer-hook #'reka--buffer-killed nil t))
+  (add-hook 'kill-buffer-hook #'reka--buffer-killed nil t)
+  (scroll-bar-mode 0)
+  (setq-local left-fringe-width 0
+              right-fringe-width 0))
 
 (defun reka--is-reka-buffer (buf)
   (with-current-buffer buf
@@ -86,6 +89,11 @@
     (display-buffer buffer)))
 
 (defun reka-enable ()
+  ;; TODO: this is a hack for lack of ability to figure out alignment ...
+  (menu-bar-mode 0)
+  (tool-bar-mode 0)
+  (add-to-list 'default-frame-alist '(undecorated . t))
+
   (message "Launching native module ...")
   (reka--ensure-frame-names)
   (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
