@@ -21,7 +21,8 @@ use nix::{
 use wayland_client::{Connection, Dispatch, protocol::wl_registry};
 
 use crate::river_wm::{
-    river_window_manager_v1::RiverWindowManagerV1, river_window_v1::RiverWindowV1,
+    river_window_manager_v1::RiverWindowManagerV1,
+    river_window_v1::{Edges, RiverWindowV1},
 };
 
 mod river_wm {
@@ -190,6 +191,66 @@ fn start_wm(env: &Env) -> Result<Handle> {
     })
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct WindowParameters {
+    window: RiverWindowV1,
+    focused: bool,
+    x: i32,
+    y: i32,
+    h: i32,
+    w: i32,
+}
+
+#[defun(user_ptr)]
+fn make_window_parameters<'e>(
+    _env: &'e Env,
+    window: &RiverWindowV1,
+    focused: Value<'e>,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> Result<WindowParameters> {
+    let params = WindowParameters {
+        window: window.clone(),
+        focused: focused.is_not_nil(),
+        x,
+        y,
+        w,
+        h,
+    };
+
+    log::debug!("created window params: {:?}", params);
+    Ok(params)
+}
+
+#[defun]
+fn update_window_parameters<'e>(
+    env: &'e Env,
+    handle: &Handle,
+    per_frame: Vector<'e>,
+) -> Result<Value<'e>> {
+    for frame in per_frame.into_iter() {
+        let params = frame.cdr::<Vector<'e>>()?;
+
+        'params: for p in params.into_iter() {
+            // TODO: what a mess!
+            let wp: &RefCell<WindowParameters> = p.into_rust()?;
+            let wp_ref = wp.borrow();
+            let mut windows = handle.windows.write().unwrap();
+
+            for w in windows.iter_mut() {
+                if w.window.eq(&wp_ref.window) {
+                    w.params = Some(wp_ref.clone());
+                    continue 'params;
+                }
+            }
+        }
+    }
+
+    ().into_lisp(env)
+}
+
 fn wm_loop(
     rx: Receiver<FromEmacs>,
     tx: Sender<ToEmacs>,
@@ -284,6 +345,14 @@ fn wm_loop(
     }
 }
 
+struct Output {
+    output: river_wm::river_output_v1::RiverOutputV1,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
 enum FrameState {
     Minimized,
     Displayed(river_wm::river_output_v1::RiverOutputV1),
@@ -310,6 +379,7 @@ struct Window {
     title: Option<String>,
     pid: Option<i32>,
     state: WindowState,
+    params: Option<WindowParameters>,
 }
 
 struct Seat {
@@ -329,7 +399,7 @@ struct Reka {
     // river-related state
     seat: Option<Seat>,
     frames: Vec<Frame>,
-    outputs: Vec<river_wm::river_output_v1::RiverOutputV1>,
+    outputs: Vec<Output>,
     river_wm: Option<RiverWindowManagerV1>,
     windows: Arc<RwLock<Vec<Window>>>,
 }
@@ -346,22 +416,27 @@ impl Reka {
         Ok(())
     }
 
-    // reconcile_frames ensures that each output gets one full-screen Emacs frame.
+    // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
         for (idx, frame) in self.frames.iter_mut().enumerate() {
             if self.outputs.len() > idx {
+                let output = &self.outputs[idx];
+
                 // frame should be displayed
                 match &frame.state {
                     // everything is correct already
-                    FrameState::Displayed(output) if output == &self.outputs[idx] => {}
+                    FrameState::Displayed(o) if o == &output.output => {}
 
                     // need to assign new output
                     FrameState::Minimized | FrameState::Displayed(_) => {
-                        let output = &self.outputs[idx];
-                        frame.state = FrameState::Displayed(output.clone());
-                        frame.window.fullscreen(output);
+                        frame.state = FrameState::Displayed(output.output.clone());
                     }
                 }
+
+                // always propose dimensions to keep frame sized to output
+                frame.window.propose_dimensions(output.width, output.height);
+                frame.window.inform_maximized();
+                frame.window.set_tiled(Edges::all());
             } else {
                 // frame should be hidden
                 if let FrameState::Displayed(_) = frame.state {
@@ -395,9 +470,22 @@ impl Reka {
     fn reconcile_windows(&mut self) {
         let windows = self.windows.read().unwrap();
         for w in windows.iter() {
-            if w.state == WindowState::Killed {
-                log::info!("requesting window closure");
-                w.window.close();
+            match &w.state {
+                WindowState::Killed => {
+                    log::info!("requesting window closure");
+                    w.window.close();
+                }
+                WindowState::Starting => {
+                    log::info!("ignoring starting window");
+                }
+                WindowState::Active => {
+                    log::info!("found active window: {:?}", w);
+                    if let Some(params) = &w.params {
+                        log::info!("proposing dimensions etc");
+                        w.window.set_tiled(Edges::all());
+                        w.window.propose_dimensions(params.w, params.h);
+                    }
+                }
             }
         }
 
@@ -463,9 +551,32 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 for frame in state.frames.iter() {
                     match &frame.state {
                         FrameState::Minimized => frame.window.hide(),
-                        FrameState::Displayed(_) => {
+                        FrameState::Displayed(output_proxy) => {
                             frame.window.show();
                             frame.node.place_bottom();
+
+                            // position frame at its output's origin
+                            if let Some(output) =
+                                state.outputs.iter().find(|o| &o.output == output_proxy)
+                            {
+                                frame.node.set_position(output.x, output.y);
+                            }
+                        }
+                    }
+                }
+
+                let windows = state.windows.read().unwrap();
+                for window in windows.iter() {
+                    if let WindowState::Active = window.state {
+                        log::info!("display time!!");
+                        if let Some(params) = &window.params {
+                            log::info!("showing!!");
+                            window.window.show();
+                            window.node.set_position(params.x, params.y);
+                            window.node.place_top();
+                        } else {
+                            log::info!("hiding!!");
+                            window.window.hide();
                         }
                     }
                 }
@@ -475,7 +586,13 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
 
             river_wm::river_window_manager_v1::Event::Output { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Output received: id={:?}", id);
-                state.outputs.push(id);
+                state.outputs.push(Output {
+                    output: id,
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                });
             }
 
             river_wm::river_window_manager_v1::Event::Seat { id } => {
@@ -513,6 +630,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     title: None,
                     pid: None,
                     state: WindowState::Starting,
+                    params: None,
                 });
             }
         }
@@ -540,8 +658,28 @@ impl Dispatch<river_wm::river_output_v1::RiverOutputV1, ()> for Reka {
             river_wm::river_output_v1::Event::Removed => {
                 log::debug!("output disconnected, removing");
                 for (idx, output) in state.outputs.iter().enumerate() {
-                    if output == proxy {
+                    if &output.output == proxy {
                         state.outputs.remove(idx);
+                        break;
+                    }
+                }
+            }
+            river_wm::river_output_v1::Event::Position { x, y } => {
+                log::debug!("output position: x={}, y={}", x, y);
+                for output in state.outputs.iter_mut() {
+                    if &output.output == proxy {
+                        output.x = x;
+                        output.y = y;
+                        break;
+                    }
+                }
+            }
+            river_wm::river_output_v1::Event::Dimensions { width, height } => {
+                log::debug!("output dimensions: {}x{}", width, height);
+                for output in state.outputs.iter_mut() {
+                    if &output.output == proxy {
+                        output.width = width;
+                        output.height = height;
                         break;
                     }
                 }
