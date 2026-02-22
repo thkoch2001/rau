@@ -52,6 +52,7 @@ fn init(_: &Env) -> Result<()> {
 struct Handle {
     fd: Arc<EventFd>,
     windows: Arc<RwLock<Vec<Window>>>,
+    focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
 }
 
 fn contains_by<T, F: Fn(&T) -> bool>(v: &Vec<T>, f: F) -> bool {
@@ -168,8 +169,11 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let windows = Arc::new(RwLock::new(Vec::new()));
     let windows_wmside = windows.clone();
 
+    let focused_window = Arc::new(RwLock::new(None));
+    let focused_window_wmside = focused_window.clone();
+
     std::thread::spawn(move || {
-        let result = wm_loop(emacs_fd_wmside, windows_wmside);
+        let result = wm_loop(emacs_fd_wmside, windows_wmside, focused_window_wmside);
         if let Err(e) = result {
             log::error!("reka window manager thread crashed: {:?}", e);
         }
@@ -179,6 +183,7 @@ fn start_wm(env: &Env) -> Result<Handle> {
     Ok(Handle {
         fd: emacs_fd,
         windows,
+        focused_window,
     })
 }
 
@@ -239,7 +244,25 @@ fn update_window_parameters<'e>(
     ().into_lisp(env)
 }
 
-fn wm_loop(emacs_fd: Arc<EventFd>, windows: Arc<RwLock<Vec<Window>>>) -> Result<()> {
+#[defun]
+fn get_focused_window<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
+    let focused = handle.focused_window.read().unwrap();
+    match focused.as_ref() {
+        Some(window) => RefCell::new(window.clone()).into_lisp(env),
+        None => ().into_lisp(env),
+    }
+}
+
+#[defun]
+fn window_equal<'e>(env: &'e Env, a: &RiverWindowV1, b: &RiverWindowV1) -> Result<Value<'e>> {
+    a.eq(b).into_lisp(env)
+}
+
+fn wm_loop(
+    emacs_fd: Arc<EventFd>,
+    windows: Arc<RwLock<Vec<Window>>>,
+    focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
+) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)
         .init();
@@ -255,6 +278,7 @@ fn wm_loop(emacs_fd: Arc<EventFd>, windows: Arc<RwLock<Vec<Window>>>) -> Result<
         pid,
         iteration: 0,
         emacs_fd,
+        focused_window,
         seat: None,
         frames: vec![],
         outputs: vec![],
@@ -377,6 +401,7 @@ struct Reka {
 
     // Emacs-related state
     emacs_fd: Arc<EventFd>,
+    focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
 
     // river-related state
     seat: Option<Seat>,
@@ -425,23 +450,29 @@ impl Reka {
             return;
         }
 
-        let focused_window = {
+        // Find which app window (if any) Emacs says is focused.
+        let app_focused = {
             let windows = self.windows.read().unwrap();
             windows
                 .iter()
                 .find(|w| w.params.as_ref().map_or(false, |p| p.focused))
                 .map(|w| w.window.clone())
-                // TODO: but which frame to select? is there an "active output"?
-                .or_else(|| {
-                    self.frames
-                        .iter()
-                        .find(|f| matches!(f.state, FrameState::Displayed(_)))
-                        .map(|f| f.window.clone())
-                })
         };
 
+        // Publish to Emacs: only app windows, not frames (None means Emacs itself is focused).
+        *self.focused_window.write().unwrap() = app_focused.clone();
+
+        // Seat focus falls back to first displayed frame if no app window is focused.
+        // TODO: pick the frame on the active output rather than the first.
+        let seat_focus = app_focused.or_else(|| {
+            self.frames
+                .iter()
+                .find(|f| matches!(f.state, FrameState::Displayed(_)))
+                .map(|f| f.window.clone())
+        });
+
         let seat = self.seat.as_mut().unwrap();
-        seat.focus = focused_window;
+        seat.focus = seat_focus;
         if let Some(focus) = &seat.focus {
             seat.seat.focus_window(focus);
         }

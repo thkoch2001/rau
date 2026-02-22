@@ -22,11 +22,25 @@
   (cl-loop for frame being the frames
            do (reka--set-frame-name frame)))
 
+(defun reka--select-focused-wayland-window ()
+  "If an app window has Wayland focus, select its reka buffer's Emacs window."
+  (let ((focused (reka-get-focused-window reka-handle)))
+    (when focused
+      (let ((buf (seq-find (lambda (buf)
+                             (let ((w (buffer-local-value 'reka-window buf)))
+                               (and w (reka-window-equal w focused))))
+                           (reka--list-buffers))))
+        (when buf
+          (let ((win (get-buffer-window buf t)))
+            (when win
+              (select-window win 'norecord))))))))
+
 (defun reka-handle-sigusr1 ()
   (interactive)
   (reka-reconcile-window-buffers reka-handle)
   (let ((params (reka--all-window-parameters)))
-    (reka-update-window-parameters reka-handle params)))
+    (reka-update-window-parameters reka-handle params))
+  (reka--select-focused-wayland-window))
 
 (define-key special-event-map [sigusr1] #'reka-handle-sigusr1)
 
