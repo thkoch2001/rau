@@ -88,6 +88,11 @@
       (setq-local reka-window window))
     (display-buffer buffer)))
 
+(defun reka--signal-wm-hook (&rest _)
+  (when reka-handle
+    (reka-handle-sigusr1) ;; TODO: rename that?
+    (reka-manage-dirty reka-handle)))
+
 (defun reka-enable ()
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
@@ -97,7 +102,11 @@
   (message "Launching native module ...")
   (reka--ensure-frame-names)
   (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
-  (setq reka-handle (reka-start-wm)))
+  (setq reka-handle (reka-start-wm))
+
+  (add-hook 'window-configuration-change-hook #'reka--signal-wm-hook)
+  (add-hook 'minibuffer-setup-hook #'reka--signal-wm-hook)
+  (add-hook 'minibuffer-exit-hook #'reka--signal-wm-hook))
 
 (defun rtest ()
   (async-shell-command "pavucontrol"))
