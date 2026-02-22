@@ -230,22 +230,19 @@ fn update_window_parameters<'e>(
     handle: &Handle,
     per_frame: Vector<'e>,
 ) -> Result<Value<'e>> {
+    // TODO: turn this into a nicer overall structure, store frame info
+    let mut new_params: Vec<WindowParameters> = Vec::new();
     for frame in per_frame.into_iter() {
         let params = frame.cdr::<Vector<'e>>()?;
-
-        'params: for p in params.into_iter() {
-            // TODO: what a mess!
+        for p in params.into_iter() {
             let wp: &RefCell<WindowParameters> = p.into_rust()?;
-            let wp_ref = wp.borrow();
-            let mut windows = handle.windows.write().unwrap();
-
-            for w in windows.iter_mut() {
-                if w.window.eq(&wp_ref.window) {
-                    w.params = Some(wp_ref.clone());
-                    continue 'params;
-                }
-            }
+            new_params.push(wp.borrow().clone());
         }
+    }
+
+    let mut windows = handle.windows.write().unwrap();
+    for w in windows.iter_mut() {
+        w.params = new_params.iter().find(|p| p.window.eq(&w.window)).cloned();
     }
 
     ().into_lisp(env)
