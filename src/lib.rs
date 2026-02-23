@@ -17,22 +17,32 @@ use nix::{
 };
 use wayland_client::{Connection, Dispatch, protocol::wl_registry};
 
-use crate::river_wm::{
+use crate::river::{
     river_window_manager_v1::RiverWindowManagerV1,
     river_window_v1::{Edges, RiverWindowV1},
+    river_xkb_bindings_v1::RiverXkbBindingsV1,
 };
 
-mod river_wm {
+mod river {
     pub extern crate wayland_client;
     pub use wayland_client::protocol::wl_surface;
 
     mod interfaces {
-        pub use wayland_client::protocol::__interfaces::*;
-        wayland_scanner::generate_interfaces!("./protocol/river-window-management-v1.xml");
+        pub(super) mod wm {
+            pub use wayland_client::protocol::__interfaces::*;
+            wayland_scanner::generate_interfaces!("./protocol/river-window-management-v1.xml");
+        }
+
+        pub(super) mod xkb {
+            use super::wm::*;
+            wayland_scanner::generate_interfaces!("./protocol/river-xkb-bindings-v1.xml");
+        }
     }
 
-    use self::interfaces::*;
+    use self::interfaces::wm::*;
+    use self::interfaces::xkb::*;
     wayland_scanner::generate_client_code!("./protocol/river-window-management-v1.xml");
+    wayland_scanner::generate_client_code!("./protocol/river-xkb-bindings-v1.xml");
 }
 
 emacs::plugin_is_GPL_compatible!();
@@ -307,6 +317,7 @@ fn wm_loop(
         frames: vec![],
         outputs: vec![],
         river_wm: None,
+        xkb_bindings: None,
         windows,
     };
     let _registry = display.get_registry(&qh, ());
@@ -394,7 +405,7 @@ fn wm_loop(
 }
 
 struct Output {
-    output: river_wm::river_output_v1::RiverOutputV1,
+    output: river::river_output_v1::RiverOutputV1,
     x: i32,
     y: i32,
     width: i32,
@@ -403,13 +414,13 @@ struct Output {
 
 enum FrameState {
     Minimized,
-    Displayed(river_wm::river_output_v1::RiverOutputV1),
+    Displayed(river::river_output_v1::RiverOutputV1),
 }
 
 struct Frame {
     name: Option<String>,
     state: FrameState,
-    node: river_wm::river_node_v1::RiverNodeV1,
+    node: river::river_node_v1::RiverNodeV1,
     window: RiverWindowV1,
 }
 
@@ -423,7 +434,7 @@ enum WindowState {
 #[derive(Debug)]
 struct Window {
     window: RiverWindowV1,
-    node: river_wm::river_node_v1::RiverNodeV1,
+    node: river::river_node_v1::RiverNodeV1,
     title: Option<String>,
     pid: Option<i32>,
     state: WindowState,
@@ -431,7 +442,7 @@ struct Window {
 }
 
 struct Seat {
-    seat: river_wm::river_seat_v1::RiverSeatV1,
+    seat: river::river_seat_v1::RiverSeatV1,
     focus: Option<RiverWindowV1>,
 }
 
@@ -450,6 +461,7 @@ struct Reka {
     frames: Vec<Frame>,
     outputs: Vec<Output>,
     river_wm: Option<RiverWindowManagerV1>,
+    xkb_bindings: Option<RiverXkbBindingsV1>,
     windows: Arc<RwLock<Vec<Window>>>,
 }
 
@@ -563,6 +575,10 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Reka {
                 let wm = proxy.bind::<RiverWindowManagerV1, _, _>(name, 3, qhandle, ());
                 state.river_wm = Some(wm);
                 log::debug!("registering reka window manager ...");
+            } else if interface == "river_xkb_bindings_v1" {
+                let xkb = proxy.bind::<RiverXkbBindingsV1, _, _>(name, 2, qhandle, ());
+                state.xkb_bindings = Some(xkb);
+                log::debug!("registering river xkb bindings ...");
             }
         }
     }
@@ -580,7 +596,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
         match event {
             // manage sequence: window dimensions, fullscreen state, keyboard
             // focus, decorations, capabilities ...
-            river_wm::river_window_manager_v1::Event::ManageStart => {
+            river::river_window_manager_v1::Event::ManageStart => {
                 log::debug!("manage sequence started");
 
                 state.reconcile_frames();
@@ -599,7 +615,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             }
 
             // render sequence: positions, z-order, borders, visibility (?), clipping (?)
-            river_wm::river_window_manager_v1::Event::RenderStart => {
+            river::river_window_manager_v1::Event::RenderStart => {
                 // reconcile frame display state
                 for frame in state.frames.iter() {
                     match &frame.state {
@@ -637,7 +653,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 proxy.render_finish();
             }
 
-            river_wm::river_window_manager_v1::Event::Output { id } => {
+            river::river_window_manager_v1::Event::Output { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Output received: id={:?}", id);
                 state.outputs.push(Output {
                     output: id,
@@ -648,7 +664,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 });
             }
 
-            river_wm::river_window_manager_v1::Event::Seat { id } => {
+            river::river_window_manager_v1::Event::Seat { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Seat received: id={:?}", id);
                 if state.seat.is_none() {
                     state.seat = Some(Seat {
@@ -662,19 +678,19 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 }
             }
 
-            river_wm::river_window_manager_v1::Event::Unavailable => {
+            river::river_window_manager_v1::Event::Unavailable => {
                 log::info!("RiverWindowManagerV1::Event::Unavailable received");
             }
-            river_wm::river_window_manager_v1::Event::Finished => {
+            river::river_window_manager_v1::Event::Finished => {
                 log::info!("RiverWindowManagerV1::Event::Finished received");
             }
-            river_wm::river_window_manager_v1::Event::SessionLocked => {
+            river::river_window_manager_v1::Event::SessionLocked => {
                 log::info!("RiverWindowManagerV1::Event::SessionLocked received");
             }
-            river_wm::river_window_manager_v1::Event::SessionUnlocked => {
+            river::river_window_manager_v1::Event::SessionUnlocked => {
                 log::info!("RiverWindowManagerV1::Event::SessionUnlocked received");
             }
-            river_wm::river_window_manager_v1::Event::Window { id } => {
+            river::river_window_manager_v1::Event::Window { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Window received: id={:?}", id);
                 let node = id.get_node(qhandle, ());
                 state.windows.write().unwrap().push(Window {
@@ -690,17 +706,17 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
     }
 
     wayland_client::event_created_child!(Reka, RiverWindowManagerV1, [
-        river_wm::river_window_manager_v1::EVT_WINDOW_OPCODE => (river_wm::river_window_v1::RiverWindowV1, ()),
-        river_wm::river_window_manager_v1::EVT_OUTPUT_OPCODE => (river_wm::river_output_v1::RiverOutputV1, ()),
-        river_wm::river_window_manager_v1::EVT_SEAT_OPCODE => (river_wm::river_seat_v1::RiverSeatV1, ()),
+        river::river_window_manager_v1::EVT_WINDOW_OPCODE => (river::river_window_v1::RiverWindowV1, ()),
+        river::river_window_manager_v1::EVT_OUTPUT_OPCODE => (river::river_output_v1::RiverOutputV1, ()),
+        river::river_window_manager_v1::EVT_SEAT_OPCODE => (river::river_seat_v1::RiverSeatV1, ()),
     ]);
 }
 
-impl Dispatch<river_wm::river_output_v1::RiverOutputV1, ()> for Reka {
+impl Dispatch<river::river_output_v1::RiverOutputV1, ()> for Reka {
     fn event(
         state: &mut Self,
-        proxy: &river_wm::river_output_v1::RiverOutputV1,
-        event: <river_wm::river_output_v1::RiverOutputV1 as wayland_client::Proxy>::Event,
+        proxy: &river::river_output_v1::RiverOutputV1,
+        event: <river::river_output_v1::RiverOutputV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &wayland_client::QueueHandle<Self>,
@@ -708,7 +724,7 @@ impl Dispatch<river_wm::river_output_v1::RiverOutputV1, ()> for Reka {
         log::debug!("RiverOutputV1 event received: {:?}", event);
 
         match event {
-            river_wm::river_output_v1::Event::Removed => {
+            river::river_output_v1::Event::Removed => {
                 log::debug!("output disconnected, removing");
                 for (idx, output) in state.outputs.iter().enumerate() {
                     if &output.output == proxy {
@@ -717,7 +733,7 @@ impl Dispatch<river_wm::river_output_v1::RiverOutputV1, ()> for Reka {
                     }
                 }
             }
-            river_wm::river_output_v1::Event::Position { x, y } => {
+            river::river_output_v1::Event::Position { x, y } => {
                 log::debug!("output position: x={}, y={}", x, y);
                 for output in state.outputs.iter_mut() {
                     if &output.output == proxy {
@@ -727,7 +743,7 @@ impl Dispatch<river_wm::river_output_v1::RiverOutputV1, ()> for Reka {
                     }
                 }
             }
-            river_wm::river_output_v1::Event::Dimensions { width, height } => {
+            river::river_output_v1::Event::Dimensions { width, height } => {
                 log::debug!("output dimensions: {}x{}", width, height);
                 for output in state.outputs.iter_mut() {
                     if &output.output == proxy {
@@ -742,18 +758,18 @@ impl Dispatch<river_wm::river_output_v1::RiverOutputV1, ()> for Reka {
     }
 }
 
-impl Dispatch<river_wm::river_seat_v1::RiverSeatV1, ()> for Reka {
+impl Dispatch<river::river_seat_v1::RiverSeatV1, ()> for Reka {
     fn event(
         state: &mut Self,
-        _proxy: &river_wm::river_seat_v1::RiverSeatV1,
-        event: <river_wm::river_seat_v1::RiverSeatV1 as wayland_client::Proxy>::Event,
+        _proxy: &river::river_seat_v1::RiverSeatV1,
+        event: <river::river_seat_v1::RiverSeatV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &wayland_client::QueueHandle<Self>,
     ) {
         log::debug!("RiverSeatV1 event received: {:?}", event);
 
-        if let river_wm::river_seat_v1::Event::WindowInteraction { window } = event {
+        if let river::river_seat_v1::Event::WindowInteraction { window } = event {
             log::debug!("window interaction, setting pending focus: {:?}", window);
             state.pending_focus = Some(window);
         }
@@ -772,7 +788,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
         log::debug!("RiverWindowV1 event received: {:?}", event);
 
         match event {
-            river_wm::river_window_v1::Event::UnreliablePid { unreliable_pid } => {
+            river::river_window_v1::Event::UnreliablePid { unreliable_pid } => {
                 let mut windows = state.windows.write().unwrap();
                 if let Some(pos) = windows.iter().position(|w| &w.window == proxy) {
                     windows[pos].pid = Some(unreliable_pid);
@@ -791,7 +807,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     }
                 }
             }
-            river_wm::river_window_v1::Event::Title { title } => {
+            river::river_window_v1::Event::Title { title } => {
                 let mut windows = state.windows.write().unwrap();
                 for w in windows.iter_mut() {
                     if w.window.eq(proxy) {
@@ -813,7 +829,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
 
                 log::warn!("received title for unknown window, orphan frame?");
             }
-            river_wm::river_window_v1::Event::Closed => {
+            river::river_window_v1::Event::Closed => {
                 if let Some(seat) = &mut state.seat {
                     if let Some(focus) = &seat.focus {
                         if focus.eq(proxy) {
@@ -845,15 +861,57 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
     }
 }
 
-impl Dispatch<river_wm::river_node_v1::RiverNodeV1, ()> for Reka {
+impl Dispatch<river::river_node_v1::RiverNodeV1, ()> for Reka {
     fn event(
         _state: &mut Self,
-        _proxy: &river_wm::river_node_v1::RiverNodeV1,
-        event: <river_wm::river_node_v1::RiverNodeV1 as wayland_client::Proxy>::Event,
+        _proxy: &river::river_node_v1::RiverNodeV1,
+        event: <river::river_node_v1::RiverNodeV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &wayland_client::QueueHandle<Self>,
     ) {
         log::debug!("RiverNodeV1 event received: {:?}", event);
+    }
+}
+
+impl Dispatch<river::river_xkb_bindings_v1::RiverXkbBindingsV1, ()> for Reka {
+    fn event(
+        _state: &mut Self,
+        _proxy: &river::river_xkb_bindings_v1::RiverXkbBindingsV1,
+        event: <river::river_xkb_bindings_v1::RiverXkbBindingsV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        log::debug!("RiverXkbBindingsV1 event received: {:?}", event);
+    }
+}
+
+impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
+    fn event(
+        _state: &mut Self,
+        _proxy: &river::river_xkb_binding_v1::RiverXkbBindingV1,
+        event: <river::river_xkb_binding_v1::RiverXkbBindingV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        log::debug!("RiverXkbBindingV1 event received: {:?}", event);
+        if matches!(event, river::river_xkb_binding_v1::Event::Pressed) {
+            // TODO: store pending key, set pending_focus to Emacs frame
+        }
+    }
+}
+
+impl Dispatch<river::river_xkb_bindings_seat_v1::RiverXkbBindingsSeatV1, ()> for Reka {
+    fn event(
+        _state: &mut Self,
+        _proxy: &river::river_xkb_bindings_seat_v1::RiverXkbBindingsSeatV1,
+        event: <river::river_xkb_bindings_seat_v1::RiverXkbBindingsSeatV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        log::debug!("RiverXkbBindingsSeatV1 event received: {:?}", event);
     }
 }
