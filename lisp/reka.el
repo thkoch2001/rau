@@ -75,7 +75,6 @@
   (let ((edges (window-inside-absolute-pixel-edges window)))
     (reka-make-window-parameters
      (buffer-local-value 'reka-window (window-buffer window))
-     (eq window (selected-window))
      (nth 0 edges)
      (nth 1 edges)
      (- (nth 2 edges) (nth 0 edges))
@@ -107,6 +106,22 @@
     (reka-handle-sigusr1) ;; TODO: rename that?
     (reka-manage-dirty reka-handle)))
 
+(defvar reka--last-focused-buffer nil
+  "Last buffer for which a focus request was sent.")
+
+(defun reka--update-focus-request (&rest _) ;; TODO: take & forward frame for active output logic
+  "Send a focus request to the WM reflecting the current selected-window."
+  (when reka-handle
+    (let* ((buf (window-buffer (selected-window)))
+           (is-reka (reka--is-reka-buffer buf))
+           (key (if is-reka buf nil)))
+      ;; avoid infinite loops of focus change <> focus update notification
+      (unless (eq key reka--last-focused-buffer)
+        (setq reka--last-focused-buffer key)
+        (reka-set-focus-request reka-handle
+                                (when is-reka
+                                  (buffer-local-value 'reka-window buf)))))))
+
 (defun reka-enable ()
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
@@ -118,9 +133,14 @@
   (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
   (setq reka-handle (reka-start-wm))
 
+  ;; Layout signals
   (add-hook 'window-configuration-change-hook #'reka--signal-wm-hook)
-  (add-hook 'minibuffer-setup-hook #'reka--signal-wm-hook)
-  (add-hook 'minibuffer-exit-hook #'reka--signal-wm-hook))
+
+  ;; Focus signals
+  (add-hook 'window-selection-change-functions #'reka--update-focus-request)
+  (add-hook 'window-buffer-change-functions    #'reka--update-focus-request)
+  (add-hook 'minibuffer-setup-hook             #'reka--update-focus-request)
+  (add-hook 'minibuffer-exit-hook              #'reka--update-focus-request))
 
 (defun rtest ()
   (async-shell-command "pavucontrol"))
