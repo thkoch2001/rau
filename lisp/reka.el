@@ -12,6 +12,10 @@
 (defcustom reka-handle nil
   "Opaque handle for interacting with the WM")
 
+(defcustom reka-intercept-prefixes
+  '("C-x" "C-u" "C-h" "M-x")
+  "Prefix keys that should always go to Emacs.")
+
 (defun reka--set-frame-name (frame)
   (unless (string-prefix-p "reka-frame-"
                            (frame-parameter frame 'name))
@@ -40,7 +44,9 @@
   (reka-reconcile-window-buffers reka-handle)
   (let ((params (reka--all-window-parameters)))
     (reka-update-window-parameters reka-handle params))
-  (reka--select-focused-wayland-window))
+  (reka--select-focused-wayland-window)
+  (if-let ((injected (reka-get-next-event reka-handle)))
+      (push injected unread-command-events)))
 
 (define-key special-event-map [sigusr1] #'reka-handle-sigusr1)
 
@@ -121,6 +127,26 @@
         (reka-set-focus-request reka-handle
                                 (when is-reka
                                   (buffer-local-value 'reka-window buf)))))))
+
+(defconst reka--modifier-bits
+  '((shift   . 1)
+    (control . 4)
+    (meta    . 8)
+    (super   . 64)
+    (hyper   . 128))
+  "Modifier bits as per river_seat_v1.modifiers / XKB")
+
+(defun reka--key-to-xkb (key-string)
+  "Turns an Emacs key-string (e.g. `C-x') into an xkb keysym that river can bind."
+  (let* ((event (aref (kbd key-string) 0))
+         (keysym (event-basic-type event))
+         (mods (seq-map (lambda (mod) (alist-get mod reka--modifier-bits))
+                        (event-modifiers event)))
+         ;; (mask (apply #'logior (cons keysym mods))) TODO: actually unnecessary?
+         )
+    (unless (characterp keysym)
+      (error "only plain characters are supported as base right now")) ;; TODO: maybe support space, enter etc.
+    (list event keysym (apply #'logior mods))))
 
 (defun reka-enable ()
   ;; TODO: this is a hack for lack of ability to figure out alignment ...

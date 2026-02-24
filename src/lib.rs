@@ -1,8 +1,8 @@
 use std::{
-    cell::RefCell,
-    collections::HashSet,
+    cell::{RefCell},
+    collections::{HashMap, HashSet},
     os::fd::AsFd,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use anyhow::Context;
@@ -18,8 +18,10 @@ use nix::{
 use wayland_client::{Connection, Dispatch, protocol::wl_registry};
 
 use crate::river::{
+    river_seat_v1::Modifiers,
     river_window_manager_v1::RiverWindowManagerV1,
     river_window_v1::{Edges, RiverWindowV1},
+    river_xkb_binding_v1::RiverXkbBindingV1,
     river_xkb_bindings_v1::RiverXkbBindingsV1,
 };
 
@@ -62,9 +64,14 @@ fn init(_: &Env) -> Result<()> {
 struct Handle {
     fd: Arc<EventFd>,
     windows: Arc<RwLock<Vec<Window>>>,
+    prefixes: Arc<Mutex<HashMap<XKBPrefix, BindingState>>>,
+
     // TODO: naming? focused_window is wm->emacs, focus_request is emacs->wm
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
     focus_request: Arc<RwLock<Option<RiverWindowV1>>>,
+
+    // key presses etc. injected by the WM
+    next_event: Arc<Mutex<Option<u32>>>,
 }
 
 fn contains_by<T, F: Fn(&T) -> bool>(v: &Vec<T>, f: F) -> bool {
@@ -187,12 +194,20 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let focus_request = Arc::new(RwLock::new(None));
     let focus_request_wmside = focus_request.clone();
 
+    let prefixes = <Arc<Mutex<HashMap<XKBPrefix, BindingState>>>>::default();
+    let prefixes_wmside = prefixes.clone();
+
+    let next_event = <Arc<Mutex<Option<u32>>>>::default();
+    let next_event_wmside = next_event.clone();
+
     std::thread::spawn(move || {
         let result = wm_loop(
             emacs_fd_wmside,
             windows_wmside,
             focused_window_wmside,
             focus_request_wmside,
+            prefixes_wmside,
+            next_event_wmside,
         );
         if let Err(e) = result {
             log::error!("reka window manager thread crashed: {:?}", e);
@@ -205,6 +220,8 @@ fn start_wm(env: &Env) -> Result<Handle> {
         windows,
         focused_window,
         focus_request,
+        prefixes,
+        next_event,
     })
 }
 
@@ -289,11 +306,51 @@ fn window_equal<'e>(env: &'e Env, a: &RiverWindowV1, b: &RiverWindowV1) -> Resul
     a.eq(b).into_lisp(env)
 }
 
+#[defun]
+fn register_xkb_prefix<'e>(
+    env: &'e Env,
+    handle: &Handle,
+    event: u32,
+    keysym: u32,
+    modifiers_bits: u32,
+) -> Result<Value<'e>> {
+    let modifiers = Modifiers::from_bits(modifiers_bits).context("unknown modifier bits")?;
+    let key = XKBPrefix {
+        event,
+        keysym,
+        modifiers,
+    };
+    let mut guard = handle.prefixes.lock().expect("prefixes lock poisoned");
+
+    if !guard.contains_key(&key) {
+        log::info!(
+            "requesting prefix registration for keysym {} with modifiers {:?}",
+            keysym,
+            modifiers
+        );
+        guard.insert(key, BindingState::Requested);
+        handle.fd.write(1)?;
+    }
+
+    ().into_lisp(env)
+}
+
+#[defun]
+fn get_next_event<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
+    if let Some(event) = handle.next_event.lock().unwrap().take() {
+        return event.into_lisp(env);
+    }
+
+    ().into_lisp(env)
+}
+
 fn wm_loop(
     emacs_fd: Arc<EventFd>,
     windows: Arc<RwLock<Vec<Window>>>,
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
     focus_request: Arc<RwLock<Option<RiverWindowV1>>>,
+    prefixes: Arc<Mutex<HashMap<XKBPrefix, BindingState>>>,
+    next_event: Arc<Mutex<Option<u32>>>,
 ) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)
@@ -319,6 +376,8 @@ fn wm_loop(
         river_wm: None,
         xkb_bindings: None,
         windows,
+        prefixes,
+        next_event,
     };
     let _registry = display.get_registry(&qh, ());
 
@@ -376,7 +435,6 @@ fn wm_loop(
 
             // TODO: reconsider whether to overwrite? maybe emacs events are actually higher precedence
             if wm.pending_focus.is_none() {
-
                 let requested = wm.focus_request.read().unwrap().clone();
                 wm.pending_focus = match requested {
                     Some(window) => Some(window),
@@ -393,6 +451,33 @@ fn wm_loop(
                 river_wm.manage_dirty();
             } else {
                 log::warn!("manage_dirty requested but river_wm not yet bound");
+            }
+
+            let register_prefixes = {
+                let guard = wm.prefixes.lock().expect("prefixes lock poisoned");
+                guard
+                    .iter()
+                    .filter_map(|(k, v)| match v {
+                        BindingState::Requested => Some(*k),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            if !register_prefixes.is_empty() && wm.xkb_bindings.is_some() && wm.seat.is_some() {
+                let xkb = wm.xkb_bindings.as_ref().unwrap();
+                let seat = wm.seat.as_ref().unwrap().seat.clone();
+                let mut bindings = vec![];
+
+                for p in &register_prefixes {
+                    let b = xkb.get_xkb_binding(&seat, p.keysym, p.modifiers, &qh, ());
+                    bindings.push(b);
+                }
+
+                let mut guard = wm.prefixes.lock().expect("prefixes lock poisoned");
+                for (p, b) in register_prefixes.into_iter().zip(bindings.into_iter()) {
+                    guard.insert(p, BindingState::Registered(b));
+                }
             }
         }
 
@@ -446,6 +531,19 @@ struct Seat {
     focus: Option<RiverWindowV1>,
 }
 
+#[derive(Hash, PartialEq, Eq, Clone, Copy)]
+struct XKBPrefix {
+    event: u32,
+    keysym: u32,
+    modifiers: Modifiers,
+}
+
+enum BindingState {
+    Requested,
+    Registered(RiverXkbBindingV1),
+    Enabled(RiverXkbBindingV1),
+}
+
 struct Reka {
     pid: i32,
     iteration: u64,
@@ -456,13 +554,16 @@ struct Reka {
     focus_request: Arc<RwLock<Option<RiverWindowV1>>>,
 
     // river-related state
+    river_wm: Option<RiverWindowManagerV1>,
+    xkb_bindings: Option<RiverXkbBindingsV1>,
+
     seat: Option<Seat>,
     pending_focus: Option<RiverWindowV1>,
     frames: Vec<Frame>,
     outputs: Vec<Output>,
-    river_wm: Option<RiverWindowManagerV1>,
-    xkb_bindings: Option<RiverXkbBindingsV1>,
     windows: Arc<RwLock<Vec<Window>>>,
+    prefixes: Arc<Mutex<HashMap<XKBPrefix, BindingState>>>,
+    next_event: Arc<Mutex<Option<u32>>>,
 }
 
 impl Reka {
@@ -556,6 +657,23 @@ impl Reka {
 
         // TODO: force kill at some point
     }
+
+    fn reconcile_bindings(&self) {
+        let mut to_enable = vec![];
+        {
+            let mut guard = self.prefixes.lock().expect("prefixes lock poisoned");
+            for (_, v) in guard.iter_mut() {
+                if let BindingState::Registered(b) = v {
+                    to_enable.push(b.clone());
+                    *v = BindingState::Enabled(b.clone());
+                }
+            }
+        };
+        log::info!("enabling {} bindings", to_enable.len());
+        for binding in to_enable.into_iter() {
+            binding.enable();
+        }
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Reka {
@@ -602,6 +720,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 state.reconcile_frames();
                 state.reconcile_focus();
                 state.reconcile_windows();
+                state.reconcile_bindings();
 
                 state.iteration += 1;
                 if let Err(e) = signal::kill(Pid::this(), Some(signal::Signal::SIGUSR1)) {
@@ -889,8 +1008,8 @@ impl Dispatch<river::river_xkb_bindings_v1::RiverXkbBindingsV1, ()> for Reka {
 
 impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
     fn event(
-        _state: &mut Self,
-        _proxy: &river::river_xkb_binding_v1::RiverXkbBindingV1,
+        state: &mut Self,
+        proxy: &river::river_xkb_binding_v1::RiverXkbBindingV1,
         event: <river::river_xkb_binding_v1::RiverXkbBindingV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
@@ -898,7 +1017,16 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
     ) {
         log::debug!("RiverXkbBindingV1 event received: {:?}", event);
         if matches!(event, river::river_xkb_binding_v1::Event::Pressed) {
-            // TODO: store pending key, set pending_focus to Emacs frame
+            let mut next = None;
+            for (k, v) in state.prefixes.lock().unwrap().iter() {
+                if let BindingState::Enabled(this) = v && this.eq(proxy) {
+                    next = Some(k.event);
+                    break;
+                }
+            }
+            let mut guard = state.next_event.lock().unwrap();
+            *guard = next;
+            state.pending_focus = Some(state.frames[0].window.clone());
         }
     }
 }
