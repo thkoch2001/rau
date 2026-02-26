@@ -67,6 +67,7 @@ enum FromEmacs {
     RegisterPrefix(XKBPrefix),
     FocusWindow(RiverWindowV1),
     FocusFrame,
+    CloseWindow(RiverWindowV1),
 }
 
 #[derive(Debug)]
@@ -182,15 +183,7 @@ fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'
 
 #[defun]
 fn close_window<'e>(env: &'e Env, handle: &Handle, window: &RiverWindowV1) -> Result<Value<'e>> {
-    let mut windows = handle.windows.write().unwrap();
-
-    for w in windows.iter_mut() {
-        if window.eq(&w.window) {
-            w.state = WindowState::Killed;
-            break;
-        }
-    }
-
+    handle.send(FromEmacs::CloseWindow(window.clone()))?;
     ().into_lisp(env)
 }
 
@@ -452,6 +445,15 @@ fn wm_loop(
                             .iter()
                             .find(|f| matches!(f.state, FrameState::Displayed(_)))
                             .map(|f| f.window.clone());
+                    }
+                    FromEmacs::CloseWindow(window) => {
+                        let mut windows = wm.windows.write().unwrap();
+                        for w in windows.iter_mut() {
+                            if window.eq(&w.window) {
+                                w.state = WindowState::Killed;
+                                break;
+                            }
+                        }
                     }
                 }
             }
