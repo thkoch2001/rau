@@ -109,8 +109,7 @@
 
 (defun reka--signal-wm-hook (&rest _)
   (when reka-handle
-    (reka-handle-sigusr1) ;; TODO: rename that?
-    (reka-manage-dirty reka-handle)))
+    (reka-handle-sigusr1)))
 
 (defvar reka--last-focused-buffer nil
   "Last buffer for which a focus request was sent.")
@@ -166,7 +165,8 @@
   (add-hook 'window-selection-change-functions #'reka--update-focus-request)
   (add-hook 'window-buffer-change-functions    #'reka--update-focus-request)
   (add-hook 'minibuffer-setup-hook             #'reka--update-focus-request)
-  (add-hook 'minibuffer-exit-hook              #'reka--update-focus-request))
+  (add-hook 'minibuffer-exit-hook              #'reka--update-focus-request)
+  (add-hook 'post-command-hook                 #'reka--update-focus-request))
 
 (defun rtest ()
   (async-shell-command "pavucontrol"))
