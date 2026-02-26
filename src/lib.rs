@@ -51,12 +51,13 @@ mod river {
 emacs::plugin_is_GPL_compatible!();
 
 use_symbols!(
-    kill_buffer
     cons
+    list
     key_event
     new_window
     window_closed
     focused
+    title_change
     reka_get_window => "reka--get-window"
     reka_create_buffer => "reka--create-buffer"
     reka_list_buffers => "reka--list-buffers"
@@ -83,6 +84,7 @@ enum ToEmacs {
     NewWindow(RiverWindowV1),
     WindowClosed(RiverWindowV1),
     Focused(RiverWindowV1),
+    TitleChange(RiverWindowV1, String),
 }
 
 impl<'e> IntoLisp<'e> for ToEmacs {
@@ -92,6 +94,9 @@ impl<'e> IntoLisp<'e> for ToEmacs {
             ToEmacs::NewWindow(win) => env.call(cons, (new_window, RefCell::new(win))),
             ToEmacs::WindowClosed(win) => env.call(cons, (window_closed, RefCell::new(win))),
             ToEmacs::Focused(win) => env.call(cons, (focused, RefCell::new(win))),
+            ToEmacs::TitleChange(win, title) => {
+                env.call(list, (title_change, RefCell::new(win), title))
+            }
         }
     }
 }
@@ -860,13 +865,6 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 }
             }
             river::river_window_v1::Event::Title { title } => {
-                for w in state.windows.iter_mut() {
-                    if w.window.eq(proxy) {
-                        w.title = title;
-                        return;
-                    }
-                }
-
                 if let Some(s) = &title
                     && s.starts_with("reka-frame-")
                 {
@@ -875,6 +873,19 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                             f.name = title;
                             return;
                         }
+                    }
+                }
+
+                if let Some(title) = title.as_ref() {
+                    state
+                        .send(ToEmacs::TitleChange(proxy.clone(), title.clone()))
+                        .unwrap();
+                }
+
+                for w in state.windows.iter_mut() {
+                    if w.window.eq(proxy) {
+                        w.title = title;
+                        return;
                     }
                 }
 

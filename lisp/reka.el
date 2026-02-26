@@ -9,7 +9,7 @@
   :group 'environment
   :prefix "reka-")
 
-(defcustom reka-handle nil
+(defvar reka-handle nil
   "Opaque handle for interacting with the WM")
 
 (defcustom reka-intercept-prefixes
@@ -54,6 +54,11 @@
        (when-let* ((buf (reka--find-buffer-for-window window))
                  (win (get-buffer-window buf t)))
            (select-window win 'norecord)))
+
+      (`(title-change ,window ,title)
+       (when-let* ((buf (reka--find-buffer-for-window window)))
+         (with-current-buffer buf
+           (rename-buffer title))))
 
       (_ (error "received unknown command from reka: %s" cmd)))))
 
