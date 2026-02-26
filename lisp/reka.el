@@ -161,6 +161,11 @@
       (error "only plain characters are supported as base right now")) ;; TODO: maybe support space, enter etc.
     (list event keysym (apply #'logior mods))))
 
+(defun reka-push-intercept-prefixes ()
+  (dolist (prefix reka-intercept-prefixes)
+    (let ((data (reka--key-to-xkb prefix)))
+      (reka-register-xkb-prefix reka-handle (car data) (cadr data) (caddr data)))))
+
 (defun reka-enable ()
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
@@ -171,6 +176,7 @@
   (reka--ensure-frame-names)
   (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
   (setq reka-handle (reka-start-wm))
+  (reka-push-intercept-prefixes)
 
   ;; Layout signals
   (add-hook 'window-configuration-change-hook #'reka--signal-wm-hook)
