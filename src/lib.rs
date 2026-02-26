@@ -59,6 +59,7 @@ use_symbols!(
     window_closed
     focused
     title_change
+    frame_request
     reka_get_window => "reka--get-window"
     reka_create_buffer => "reka--create-buffer"
     reka_list_buffers => "reka--list-buffers"
@@ -86,6 +87,7 @@ enum ToEmacs {
     WindowClosed(RiverWindowV1),
     Focused(RiverWindowV1),
     TitleChange(RiverWindowV1, String),
+    RequestFrame,
 }
 
 impl<'e> IntoLisp<'e> for ToEmacs {
@@ -98,6 +100,7 @@ impl<'e> IntoLisp<'e> for ToEmacs {
             ToEmacs::TitleChange(win, title) => {
                 env.call(list, (title_change, RefCell::new(win), title))
             }
+            ToEmacs::RequestFrame => frame_request.into_lisp(env),
         }
     }
 }
@@ -520,7 +523,7 @@ impl Reka {
 
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
-        for output in &self.outputs {
+        'outputs: for output in &self.outputs {
             if self.frame_by_output(&output.output).is_some() {
                 continue;
             }
@@ -537,7 +540,11 @@ impl Reka {
                 f.window.propose_dimensions(output.width, output.height);
                 f.window.inform_maximized();
                 f.window.set_tiled(Edges::all());
+                continue 'outputs;
             }
+
+            // no frame found -> ask emacs for a new one
+            self.send(ToEmacs::RequestFrame).unwrap();
         }
     }
 

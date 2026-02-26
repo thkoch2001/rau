@@ -60,6 +60,8 @@
          (with-current-buffer buf
            (rename-buffer title))))
 
+      ('frame-request (make-frame))
+
       (_ (error "received unknown command from reka: %s" cmd)))))
 
 (define-key special-event-map [sigusr1] #'reka-handle-sigusr1)
