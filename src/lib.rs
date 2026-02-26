@@ -2,8 +2,8 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     os::fd::AsFd,
+    sync::Arc,
     sync::mpsc::{Receiver, Sender, channel},
-    sync::{Arc, RwLock},
 };
 
 use anyhow::Context;
@@ -74,6 +74,7 @@ enum FromEmacs {
     FocusFrame,
     CloseWindow(RiverWindowV1),
     BufferCreated(RiverWindowV1),
+    UpdateParameters(Vec<WindowParameters>),
 }
 
 #[derive(Debug)]
@@ -99,8 +100,6 @@ struct Handle {
     fd: Arc<EventFd>,
     tx: Sender<FromEmacs>,
     rx: Receiver<ToEmacs>,
-
-    windows: Arc<RwLock<Vec<Window>>>,
 }
 
 impl Handle {
@@ -125,11 +124,8 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let emacs_fd = Arc::new(EventFd::from_value_and_flags(0, EfdFlags::EFD_NONBLOCK)?);
     let emacs_fd_wmside = emacs_fd.clone();
 
-    let windows = Arc::new(RwLock::new(Vec::new()));
-    let windows_wmside = windows.clone();
-
     std::thread::spawn(move || {
-        let result = wm_loop(rx, tx_e, emacs_fd_wmside, windows_wmside);
+        let result = wm_loop(rx, tx_e, emacs_fd_wmside);
         if let Err(e) = result {
             log::error!("reka window manager thread crashed: {:?}", e);
         }
@@ -140,7 +136,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
         fd: emacs_fd,
         tx,
         rx: rx_e,
-        windows,
     })
 }
 
@@ -190,11 +185,7 @@ fn update_window_parameters<'e>(
         }
     }
 
-    let mut windows = handle.windows.write().unwrap();
-    for w in windows.iter_mut() {
-        w.params = new_params.iter().find(|p| p.window.eq(&w.window)).cloned();
-    }
-
+    handle.send(FromEmacs::UpdateParameters(new_params))?;
     ().into_lisp(env)
 }
 
@@ -254,12 +245,7 @@ fn get_next_command<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
     ().into_lisp(env)
 }
 
-fn wm_loop(
-    rx: Receiver<FromEmacs>,
-    tx: Sender<ToEmacs>,
-    emacs_fd: Arc<EventFd>,
-    windows: Arc<RwLock<Vec<Window>>>,
-) -> Result<()> {
+fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)
         .init();
@@ -281,9 +267,9 @@ fn wm_loop(
         pending_focus: None,
         frames: vec![],
         outputs: vec![],
+        windows: vec![],
         river_wm: None,
         xkb_bindings: None,
-        windows,
         prefixes: Default::default(),
     };
     let _registry = display.get_registry(&qh, ());
@@ -340,19 +326,23 @@ fn wm_loop(
             let mut buf = [0u8; 8];
             let _ = nix::unistd::read(&wm.emacs_fd, &mut buf);
 
+            let mut needs_manage = false;
             while let Ok(message) = wm.rx.try_recv() {
                 log::debug!("message from emacs: {:?}", message);
                 match message {
                     FromEmacs::RegisterPrefix(prefix) => {
+                        needs_manage = true;
                         if !wm.prefixes.contains_key(&prefix) {
                             wm.prefixes.insert(prefix, BindingState::Requested);
                         }
                     }
                     FromEmacs::FocusWindow(window) => {
+                        needs_manage = true;
                         wm.pending_focus = Some(window);
                     }
                     FromEmacs::FocusFrame => {
                         // TODO: *which* frame?
+                        needs_manage = true;
                         wm.pending_focus = wm
                             .frames
                             .iter()
@@ -360,19 +350,29 @@ fn wm_loop(
                             .map(|f| f.window.clone());
                     }
                     FromEmacs::CloseWindow(window) => {
-                        let mut windows = wm.windows.write().unwrap();
-                        for w in windows.iter_mut() {
+                        for w in wm.windows.iter_mut() {
                             if window.eq(&w.window) {
                                 w.state = WindowState::Killed;
+                                needs_manage = true;
                                 break;
                             }
                         }
                     }
                     FromEmacs::BufferCreated(window) => {
-                        let mut windows = wm.windows.write().unwrap();
-                        for w in windows.iter_mut() {
+                        for w in wm.windows.iter_mut() {
                             if window.eq(&w.window) {
+                                needs_manage = true;
                                 w.state = WindowState::Active;
+                            }
+                        }
+                    }
+                    FromEmacs::UpdateParameters(new_params) => {
+                        for w in wm.windows.iter_mut() {
+                            let result =
+                                new_params.iter().find(|p| p.window.eq(&w.window)).cloned();
+                            if w.params != result {
+                                w.params = result;
+                                needs_manage = true;
                             }
                         }
                     }
@@ -380,7 +380,9 @@ fn wm_loop(
             }
 
             // All commands from Emacs need a manage sequence.
-            if let Some(river_wm) = &wm.river_wm {
+            if let Some(river_wm) = &wm.river_wm
+                && needs_manage
+            {
                 river_wm.manage_dirty();
             }
 
@@ -489,7 +491,7 @@ struct Reka {
     pending_focus: Option<RiverWindowV1>,
     frames: Vec<Frame>,
     outputs: Vec<Output>,
-    windows: Arc<RwLock<Vec<Window>>>,
+    windows: Vec<Window>,
     prefixes: HashMap<XKBPrefix, BindingState>,
 }
 
@@ -569,8 +571,7 @@ impl Reka {
 
     // reconcile_windows closes killed windows and removes them from the list
     fn reconcile_windows(&mut self) {
-        let windows = self.windows.read().unwrap();
-        for w in windows.iter() {
+        for w in self.windows.iter() {
             match &w.state {
                 WindowState::Killed => {
                     log::info!("requesting window closure");
@@ -687,8 +688,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     }
                 }
 
-                let windows = state.windows.read().unwrap();
-                for window in windows.iter() {
+                for window in state.windows.iter() {
                     if let WindowState::Active = window.state {
                         if let Some(params) = &window.params {
                             window.window.show();
@@ -743,7 +743,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             river::river_window_manager_v1::Event::Window { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Window received: id={:?}", id);
                 let node = id.get_node(qhandle, ());
-                state.windows.write().unwrap().push(Window {
+                state.windows.push(Window {
                     window: id,
                     node,
                     title: None,
@@ -839,13 +839,12 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
 
         match event {
             river::river_window_v1::Event::UnreliablePid { unreliable_pid } => {
-                let mut windows = state.windows.write().unwrap();
-                if let Some(pos) = windows.iter().position(|w| &w.window == proxy) {
-                    windows[pos].pid = Some(unreliable_pid);
+                if let Some(pos) = state.windows.iter().position(|w| &w.window == proxy) {
+                    state.windows[pos].pid = Some(unreliable_pid);
 
                     if unreliable_pid == state.pid {
                         log::info!("discovered new Emacs frame ...");
-                        let window = windows.remove(pos);
+                        let window = state.windows.remove(pos);
                         state.frames.push(Frame {
                             name: None,
                             state: FrameState::Minimized,
@@ -861,8 +860,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 }
             }
             river::river_window_v1::Event::Title { title } => {
-                let mut windows = state.windows.write().unwrap();
-                for w in windows.iter_mut() {
+                for w in state.windows.iter_mut() {
                     if w.window.eq(proxy) {
                         w.title = title;
                         return;
@@ -896,10 +894,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 }
 
                 {
-                    let mut windows = state.windows.write().unwrap();
-                    for (i, w) in windows.iter().enumerate() {
+                    for (i, w) in state.windows.iter().enumerate() {
                         if w.window.eq(proxy) {
-                            windows.swap_remove(i);
+                            state.windows.swap_remove(i);
                             return;
                         }
                     }
