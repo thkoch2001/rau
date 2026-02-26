@@ -147,6 +147,7 @@ fn start_wm(env: &Env) -> Result<Handle> {
 #[derive(Clone, Debug, PartialEq)]
 struct WindowParameters {
     window: RiverWindowV1,
+    frame_name: String,
     x: i32,
     y: i32,
     h: i32,
@@ -157,6 +158,7 @@ struct WindowParameters {
 fn make_window_parameters<'e>(
     _env: &'e Env,
     window: &RiverWindowV1,
+    frame_name: String,
     x: i32,
     y: i32,
     w: i32,
@@ -164,6 +166,7 @@ fn make_window_parameters<'e>(
 ) -> Result<WindowParameters> {
     let params = WindowParameters {
         window: window.clone(),
+        frame_name,
         x,
         y,
         w,
@@ -180,10 +183,9 @@ fn update_window_parameters<'e>(
     handle: &Handle,
     per_frame: Vector<'e>,
 ) -> Result<Value<'e>> {
-    // TODO: turn this into a nicer overall structure, store frame info
     let mut new_params: Vec<WindowParameters> = Vec::new();
-    for frame in per_frame.into_iter() {
-        let params = frame.cdr::<Vector<'e>>()?;
+    for elem in per_frame.into_iter() {
+        let params: Vector<'e> = elem.into_rust()?;
         for p in params.into_iter() {
             let wp: &RefCell<WindowParameters> = p.into_rust()?;
             new_params.push(wp.borrow().clone());

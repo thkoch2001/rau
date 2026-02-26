@@ -22,7 +22,7 @@
     (set-frame-parameter frame 'name (make-temp-name "reka-frame-"))))
 
 (defun reka--ensure-frame-names ()
-  "Ensure each frame has a unique title that reka can match to its xwindow."
+  "Ensure each frame has a unique title that reka can match to its window."
   (cl-loop for frame being the frames
            do (reka--set-frame-name frame)))
 
@@ -91,10 +91,11 @@
 (defun reka--list-buffers ()
   (apply #'vector (seq-filter #'reka--is-reka-buffer (buffer-list))))
 
-(defun reka--window-parameters (window)
+(defun reka--window-parameters (frame window)
   (let ((edges (window-inside-absolute-pixel-edges window)))
     (reka-make-window-parameters
      (buffer-local-value 'reka-window (window-buffer window))
+     frame
      (nth 0 edges)
      (nth 1 edges)
      (- (nth 2 edges) (nth 0 edges))
@@ -109,9 +110,11 @@
                                             (window-list frame))))))
     (apply #'vector
            (seq-map (lambda (elem)
-                      (cons (car elem)
-                            (apply #'vector
-                                   (seq-map #'reka--window-parameters (cdr elem)))))
+                      (let ((frame-name (car elem))
+                            (windows (cdr elem)))
+                        (apply #'vector
+                               (seq-map (lambda (w) (reka--window-parameters frame-name w))
+                                        windows))))
                     windows-by-frame))))
 
 (defun reka--create-buffer (window)
