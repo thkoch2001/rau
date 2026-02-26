@@ -67,6 +67,7 @@ enum FromEmacs {
     RegisterPrefix(XKBPrefix),
     FocusWindow(RiverWindowV1),
     FocusFrame,
+    ManageDirty,
 }
 
 #[derive(Debug)]
@@ -196,7 +197,7 @@ fn close_window<'e>(env: &'e Env, handle: &Handle, window: &RiverWindowV1) -> Re
 
 #[defun]
 fn manage_dirty<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
-    handle.fd.write(1)?;
+    handle.send(FromEmacs::ManageDirty)?;
     ().into_lisp(env)
 }
 
@@ -459,13 +460,12 @@ fn wm_loop(
                             .find(|f| matches!(f.state, FrameState::Displayed(_)))
                             .map(|f| f.window.clone());
                     }
+                    FromEmacs::ManageDirty => if let Some(river_wm) = &wm.river_wm {
+                        river_wm.manage_dirty();
+                    } else {
+                        log::warn!("manage_dirty requested but river_wm not yet bound");
+                    },
                 }
-            }
-
-            if let Some(river_wm) = &wm.river_wm {
-                river_wm.manage_dirty();
-            } else {
-                log::warn!("manage_dirty requested but river_wm not yet bound");
             }
 
             let register_prefixes = wm
