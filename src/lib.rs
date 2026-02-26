@@ -63,7 +63,9 @@ fn init(_: &Env) -> Result<()> {
 }
 
 #[derive(Debug)]
-enum FromEmacs {}
+enum FromEmacs {
+    RegisterPrefix(XKBPrefix),
+}
 
 #[derive(Debug)]
 enum ToEmacs {}
@@ -74,7 +76,6 @@ struct Handle {
     rx: Receiver<ToEmacs>,
 
     windows: Arc<RwLock<Vec<Window>>>,
-    prefixes: Arc<Mutex<HashMap<XKBPrefix, BindingState>>>,
 
     // TODO: naming? focused_window is wm->emacs, focus_request is emacs->wm
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
@@ -82,6 +83,14 @@ struct Handle {
 
     // key presses etc. injected by the WM
     next_event: Arc<Mutex<Option<u32>>>,
+}
+
+impl Handle {
+    fn send(&self, msg: FromEmacs) -> Result<()> {
+        self.tx.send(msg)?;
+        self.fd.write(1)?;
+        Ok(())
+    }
 }
 
 fn contains_by<T, F: Fn(&T) -> bool>(v: &Vec<T>, f: F) -> bool {
@@ -207,9 +216,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let focus_request = Arc::new(RwLock::new(None));
     let focus_request_wmside = focus_request.clone();
 
-    let prefixes = <Arc<Mutex<HashMap<XKBPrefix, BindingState>>>>::default();
-    let prefixes_wmside = prefixes.clone();
-
     let next_event = <Arc<Mutex<Option<u32>>>>::default();
     let next_event_wmside = next_event.clone();
 
@@ -221,7 +227,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
             windows_wmside,
             focused_window_wmside,
             focus_request_wmside,
-            prefixes_wmside,
             next_event_wmside,
         );
         if let Err(e) = result {
@@ -237,7 +242,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
         windows,
         focused_window,
         focus_request,
-        prefixes,
         next_event,
     })
 }
@@ -337,17 +341,7 @@ fn register_xkb_prefix<'e>(
         keysym,
         modifiers,
     };
-    let mut guard = handle.prefixes.lock().expect("prefixes lock poisoned");
-
-    if !guard.contains_key(&key) {
-        log::info!(
-            "requesting prefix registration for keysym {} with modifiers {:?}",
-            keysym,
-            modifiers
-        );
-        guard.insert(key, BindingState::Requested);
-        handle.fd.write(1)?;
-    }
+    handle.send(FromEmacs::RegisterPrefix(key))?;
 
     ().into_lisp(env)
 }
@@ -368,7 +362,6 @@ fn wm_loop(
     windows: Arc<RwLock<Vec<Window>>>,
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
     focus_request: Arc<RwLock<Option<RiverWindowV1>>>,
-    prefixes: Arc<Mutex<HashMap<XKBPrefix, BindingState>>>,
     next_event: Arc<Mutex<Option<u32>>>,
 ) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -385,6 +378,8 @@ fn wm_loop(
     let mut wm = Reka {
         pid,
         iteration: 0,
+        rx,
+        tx,
         emacs_fd,
         focused_window,
         focus_request,
@@ -395,7 +390,7 @@ fn wm_loop(
         river_wm: None,
         xkb_bindings: None,
         windows,
-        prefixes,
+        prefixes: Default::default(),
         next_event,
     };
     let _registry = display.get_registry(&qh, ());
@@ -452,6 +447,17 @@ fn wm_loop(
             let mut buf = [0u8; 8];
             let _ = nix::unistd::read(&wm.emacs_fd, &mut buf);
 
+            while let Ok(message) = wm.rx.try_recv() {
+                log::debug!("message from emacs: {:?}", message);
+                match message {
+                    FromEmacs::RegisterPrefix(prefix) => {
+                        if !wm.prefixes.contains_key(&prefix) {
+                            wm.prefixes.insert(prefix, BindingState::Requested);
+                        }
+                    }
+                }
+            }
+
             // TODO: reconsider whether to overwrite? maybe emacs events are actually higher precedence
             if wm.pending_focus.is_none() {
                 let requested = wm.focus_request.read().unwrap().clone();
@@ -472,16 +478,14 @@ fn wm_loop(
                 log::warn!("manage_dirty requested but river_wm not yet bound");
             }
 
-            let register_prefixes = {
-                let guard = wm.prefixes.lock().expect("prefixes lock poisoned");
-                guard
-                    .iter()
-                    .filter_map(|(k, v)| match v {
-                        BindingState::Requested => Some(*k),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            };
+            let register_prefixes = wm
+                .prefixes
+                .iter()
+                .filter_map(|(k, v)| match v {
+                    BindingState::Requested => Some(*k),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
 
             if !register_prefixes.is_empty() && wm.xkb_bindings.is_some() && wm.seat.is_some() {
                 let xkb = wm.xkb_bindings.as_ref().unwrap();
@@ -493,9 +497,8 @@ fn wm_loop(
                     bindings.push(b);
                 }
 
-                let mut guard = wm.prefixes.lock().expect("prefixes lock poisoned");
                 for (p, b) in register_prefixes.into_iter().zip(bindings.into_iter()) {
-                    guard.insert(p, BindingState::Registered(b));
+                    wm.prefixes.insert(p, BindingState::Registered(b));
                 }
             }
         }
@@ -550,7 +553,7 @@ struct Seat {
     focus: Option<RiverWindowV1>,
 }
 
-#[derive(Hash, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 struct XKBPrefix {
     event: u32,
     keysym: u32,
@@ -568,6 +571,8 @@ struct Reka {
     iteration: u64,
 
     // Emacs-related state
+    rx: Receiver<FromEmacs>,
+    tx: Sender<ToEmacs>,
     emacs_fd: Arc<EventFd>,
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
     focus_request: Arc<RwLock<Option<RiverWindowV1>>>,
@@ -581,11 +586,17 @@ struct Reka {
     frames: Vec<Frame>,
     outputs: Vec<Output>,
     windows: Arc<RwLock<Vec<Window>>>,
-    prefixes: Arc<Mutex<HashMap<XKBPrefix, BindingState>>>,
+    prefixes: HashMap<XKBPrefix, BindingState>,
     next_event: Arc<Mutex<Option<u32>>>,
 }
 
 impl Reka {
+    fn send(&self, cmd: ToEmacs) -> Result<()> {
+        self.tx.send(cmd)?;
+        signal::kill(Pid::this(), Some(signal::Signal::SIGUSR1))?;
+        Ok(())
+    }
+
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
         for (idx, frame) in self.frames.iter_mut().enumerate() {
@@ -677,11 +688,10 @@ impl Reka {
         // TODO: force kill at some point
     }
 
-    fn reconcile_bindings(&self) {
+    fn reconcile_bindings(&mut self) {
         let mut to_enable = vec![];
         {
-            let mut guard = self.prefixes.lock().expect("prefixes lock poisoned");
-            for (_, v) in guard.iter_mut() {
+            for (_, v) in self.prefixes.iter_mut() {
                 if let BindingState::Registered(b) = v {
                     to_enable.push(b.clone());
                     *v = BindingState::Enabled(b.clone());
@@ -1037,7 +1047,7 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
         log::debug!("RiverXkbBindingV1 event received: {:?}", event);
         if matches!(event, river::river_xkb_binding_v1::Event::Pressed) {
             let mut next = None;
-            for (k, v) in state.prefixes.lock().unwrap().iter() {
+            for (k, v) in state.prefixes.iter() {
                 if let BindingState::Enabled(this) = v
                     && this.eq(proxy)
                 {
