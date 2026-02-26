@@ -524,7 +524,8 @@ impl Reka {
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
         'outputs: for output in &self.outputs {
-            if self.frame_by_output(&output.output).is_some() {
+            if let Some(f) = self.frame_by_output(&output.output) {
+                f.window.propose_dimensions(output.width, output.height);
                 continue;
             }
 
