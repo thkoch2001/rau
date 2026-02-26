@@ -45,8 +45,12 @@
   (let ((params (reka--all-window-parameters)))
     (reka-update-window-parameters reka-handle params))
   (reka--select-focused-wayland-window)
-  (if-let ((injected (reka-get-next-event reka-handle)))
-      (push injected unread-command-events)))
+
+  (while-let ((cmd (reka-get-next-command reka-handle)))
+    (pcase cmd
+      (`(key-event . ,key)
+       (push key unread-command-events))
+      (_ (error "received unknown command from reka: %s" cmd)))))
 
 (define-key special-event-map [sigusr1] #'reka-handle-sigusr1)
 

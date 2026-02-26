@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     os::fd::AsFd,
     sync::mpsc::{Receiver, Sender, channel},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
 use anyhow::Context;
@@ -52,6 +52,8 @@ emacs::plugin_is_GPL_compatible!();
 
 use_symbols!(
     kill_buffer
+    cons
+    key_event
     reka_get_window => "reka--get-window"
     reka_create_buffer => "reka--create-buffer"
     reka_list_buffers => "reka--list-buffers"
@@ -71,7 +73,17 @@ enum FromEmacs {
 }
 
 #[derive(Debug)]
-enum ToEmacs {}
+enum ToEmacs {
+    KeyEvent(u32),
+}
+
+impl<'e> IntoLisp<'e> for ToEmacs {
+    fn into_lisp(self, env: &'e Env) -> Result<Value<'e>> {
+        match self {
+            ToEmacs::KeyEvent(event) => env.call(cons, (key_event, event)),
+        }
+    }
+}
 
 struct Handle {
     fd: Arc<EventFd>,
@@ -82,9 +94,6 @@ struct Handle {
 
     // TODO: naming? focused_window is wm->emacs, focus_request is emacs->wm
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
-
-    // key presses etc. injected by the WM
-    next_event: Arc<Mutex<Option<u32>>>,
 }
 
 impl Handle {
@@ -201,9 +210,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let focused_window = Arc::new(RwLock::new(None));
     let focused_window_wmside = focused_window.clone();
 
-    let next_event = <Arc<Mutex<Option<u32>>>>::default();
-    let next_event_wmside = next_event.clone();
-
     std::thread::spawn(move || {
         let result = wm_loop(
             rx,
@@ -211,7 +217,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
             emacs_fd_wmside,
             windows_wmside,
             focused_window_wmside,
-            next_event_wmside,
         );
         if let Err(e) = result {
             log::error!("reka window manager thread crashed: {:?}", e);
@@ -225,7 +230,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
         rx: rx_e,
         windows,
         focused_window,
-        next_event,
     })
 }
 
@@ -329,9 +333,10 @@ fn register_xkb_prefix<'e>(
 }
 
 #[defun]
-fn get_next_event<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
-    if let Some(event) = handle.next_event.lock().unwrap().take() {
-        return event.into_lisp(env);
+fn get_next_command<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
+    if let Ok(cmd) = handle.rx.try_recv() {
+        log::debug!("emacs received command {:?}", cmd);
+        return cmd.into_lisp(env);
     }
 
     ().into_lisp(env)
@@ -343,7 +348,6 @@ fn wm_loop(
     emacs_fd: Arc<EventFd>,
     windows: Arc<RwLock<Vec<Window>>>,
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
-    next_event: Arc<Mutex<Option<u32>>>,
 ) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)
@@ -371,7 +375,6 @@ fn wm_loop(
         xkb_bindings: None,
         windows,
         prefixes: Default::default(),
-        next_event,
     };
     let _registry = display.get_registry(&qh, ());
 
@@ -571,7 +574,6 @@ struct Reka {
     outputs: Vec<Output>,
     windows: Arc<RwLock<Vec<Window>>>,
     prefixes: HashMap<XKBPrefix, BindingState>,
-    next_event: Arc<Mutex<Option<u32>>>,
 }
 
 impl Reka {
@@ -1027,18 +1029,17 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
     ) {
         log::debug!("RiverXkbBindingV1 event received: {:?}", event);
         if matches!(event, river::river_xkb_binding_v1::Event::Pressed) {
-            let mut next = None;
             for (k, v) in state.prefixes.iter() {
                 if let BindingState::Enabled(this) = v
                     && this.eq(proxy)
                 {
-                    next = Some(k.event);
+                    if let Err(err) = state.send(ToEmacs::KeyEvent(k.event)) {
+                        log::error!("failed to send key event to Emacs: {}", err);
+                    }
+                    state.pending_focus = Some(state.frames[0].window.clone());
                     break;
                 }
             }
-            let mut guard = state.next_event.lock().unwrap();
-            *guard = next;
-            state.pending_focus = Some(state.frames[0].window.clone());
         }
     }
 }
