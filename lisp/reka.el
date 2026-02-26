@@ -170,6 +170,7 @@
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
   (tool-bar-mode 0)
+  (set-frame-parameter nil 'undecorated t)
   (add-to-list 'default-frame-alist '(undecorated . t))
 
   (message "Launching native module ...")
