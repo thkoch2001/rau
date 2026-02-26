@@ -19,6 +19,7 @@ use nix::{
 use wayland_client::{Connection, Dispatch, protocol::wl_registry};
 
 use crate::river::{
+    river_output_v1::RiverOutputV1,
     river_seat_v1::Modifiers,
     river_window_manager_v1::RiverWindowManagerV1,
     river_window_v1::{Edges, RiverWindowV1},
@@ -353,7 +354,7 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
                         wm.pending_focus = wm
                             .frames
                             .iter()
-                            .find(|f| matches!(f.state, FrameState::Displayed(_)))
+                            .find(|f| f.displayed_on.is_some())
                             .map(|f| f.window.clone());
                     }
                     FromEmacs::CloseWindow(window) => {
@@ -427,21 +428,16 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
 }
 
 struct Output {
-    output: river::river_output_v1::RiverOutputV1,
+    output: RiverOutputV1,
     x: i32,
     y: i32,
     width: i32,
     height: i32,
 }
 
-enum FrameState {
-    Minimized,
-    Displayed(river::river_output_v1::RiverOutputV1),
-}
-
 struct Frame {
     name: Option<String>,
-    state: FrameState,
+    displayed_on: Option<RiverOutputV1>,
     node: river::river_node_v1::RiverNodeV1,
     window: RiverWindowV1,
 }
@@ -510,32 +506,37 @@ impl Reka {
         Ok(())
     }
 
+    fn frame_by_output(&self, output: &RiverOutputV1) -> Option<&Frame> {
+        for f in &self.frames {
+            if let Some(o) = f.displayed_on.as_ref()
+                && o.eq(output)
+            {
+                return Some(f);
+            }
+        }
+
+        None
+    }
+
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
-        for (idx, frame) in self.frames.iter_mut().enumerate() {
-            if self.outputs.len() > idx {
-                let output = &self.outputs[idx];
+        for output in &self.outputs {
+            if self.frame_by_output(&output.output).is_some() {
+                continue;
+            }
 
-                // frame should be displayed
-                match &frame.state {
-                    // everything is correct already
-                    FrameState::Displayed(o) if o == &output.output => {}
-
-                    // need to assign new output
-                    FrameState::Minimized | FrameState::Displayed(_) => {
-                        frame.state = FrameState::Displayed(output.output.clone());
-                    }
+            // try to find an existing frame that is minimised and reuse it
+            'frames: for f in &mut self.frames {
+                if f.displayed_on.is_some() {
+                    continue 'frames;
                 }
+
+                f.displayed_on = Some(output.output.clone());
 
                 // always propose dimensions to keep frame sized to output
-                frame.window.propose_dimensions(output.width, output.height);
-                frame.window.inform_maximized();
-                frame.window.set_tiled(Edges::all());
-            } else {
-                // frame should be hidden
-                if let FrameState::Displayed(_) = frame.state {
-                    frame.state = FrameState::Minimized;
-                }
+                f.window.propose_dimensions(output.width, output.height);
+                f.window.inform_maximized();
+                f.window.set_tiled(Edges::all());
             }
         }
     }
@@ -559,7 +560,7 @@ impl Reka {
             self.pending_focus = self
                 .frames
                 .iter()
-                .find(|f| matches!(f.state, FrameState::Displayed(_)))
+                .find(|f| f.displayed_on.is_some())
                 .map(|f| f.window.clone());
         }
 
@@ -680,9 +681,9 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             river::river_window_manager_v1::Event::RenderStart => {
                 // reconcile frame display state
                 for frame in state.frames.iter() {
-                    match &frame.state {
-                        FrameState::Minimized => frame.window.hide(),
-                        FrameState::Displayed(output_proxy) => {
+                    match frame.displayed_on.as_ref() {
+                        None => frame.window.hide(),
+                        Some(output_proxy) => {
                             frame.window.show();
                             frame.node.place_bottom();
 
@@ -776,11 +777,11 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
     ]);
 }
 
-impl Dispatch<river::river_output_v1::RiverOutputV1, ()> for Reka {
+impl Dispatch<RiverOutputV1, ()> for Reka {
     fn event(
         state: &mut Self,
-        proxy: &river::river_output_v1::RiverOutputV1,
-        event: <river::river_output_v1::RiverOutputV1 as wayland_client::Proxy>::Event,
+        proxy: &RiverOutputV1,
+        event: <RiverOutputV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &wayland_client::QueueHandle<Self>,
@@ -790,6 +791,14 @@ impl Dispatch<river::river_output_v1::RiverOutputV1, ()> for Reka {
         match event {
             river::river_output_v1::Event::Removed => {
                 log::debug!("output disconnected, removing");
+                for frame in &mut state.frames {
+                    if let Some(o) = frame.displayed_on.as_ref()
+                        && o.eq(proxy)
+                    {
+                        frame.displayed_on = None;
+                    }
+                }
+
                 for (idx, output) in state.outputs.iter().enumerate() {
                     if &output.output == proxy {
                         state.outputs.remove(idx);
@@ -861,7 +870,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                         let window = state.windows.remove(pos);
                         state.frames.push(Frame {
                             name: None,
-                            state: FrameState::Minimized,
+                            displayed_on: None,
                             node: window.node,
                             window: window.window,
                         });
