@@ -1,7 +1,8 @@
 use std::{
-    cell::{RefCell},
+    cell::RefCell,
     collections::{HashMap, HashSet},
     os::fd::AsFd,
+    sync::mpsc::{Receiver, Sender, channel},
     sync::{Arc, Mutex, RwLock},
 };
 
@@ -61,8 +62,17 @@ fn init(_: &Env) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+enum FromEmacs {}
+
+#[derive(Debug)]
+enum ToEmacs {}
+
 struct Handle {
     fd: Arc<EventFd>,
+    tx: Sender<FromEmacs>,
+    rx: Receiver<ToEmacs>,
+
     windows: Arc<RwLock<Vec<Window>>>,
     prefixes: Arc<Mutex<HashMap<XKBPrefix, BindingState>>>,
 
@@ -182,6 +192,9 @@ fn manage_dirty<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
 
 #[defun(user_ptr)]
 fn start_wm(env: &Env) -> Result<Handle> {
+    let (tx, rx) = channel::<FromEmacs>();
+    let (tx_e, rx_e) = channel::<ToEmacs>();
+
     let emacs_fd = Arc::new(EventFd::from_value_and_flags(0, EfdFlags::EFD_NONBLOCK)?);
     let emacs_fd_wmside = emacs_fd.clone();
 
@@ -202,6 +215,8 @@ fn start_wm(env: &Env) -> Result<Handle> {
 
     std::thread::spawn(move || {
         let result = wm_loop(
+            rx,
+            tx_e,
             emacs_fd_wmside,
             windows_wmside,
             focused_window_wmside,
@@ -217,6 +232,8 @@ fn start_wm(env: &Env) -> Result<Handle> {
     env.message("launched reka window manager! have fun ...")?;
     Ok(Handle {
         fd: emacs_fd,
+        tx,
+        rx: rx_e,
         windows,
         focused_window,
         focus_request,
@@ -345,6 +362,8 @@ fn get_next_event<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
 }
 
 fn wm_loop(
+    rx: Receiver<FromEmacs>,
+    tx: Sender<ToEmacs>,
     emacs_fd: Arc<EventFd>,
     windows: Arc<RwLock<Vec<Window>>>,
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
@@ -1019,7 +1038,9 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
         if matches!(event, river::river_xkb_binding_v1::Event::Pressed) {
             let mut next = None;
             for (k, v) in state.prefixes.lock().unwrap().iter() {
-                if let BindingState::Enabled(this) = v && this.eq(proxy) {
+                if let BindingState::Enabled(this) = v
+                    && this.eq(proxy)
+                {
                     next = Some(k.event);
                     break;
                 }
