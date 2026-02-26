@@ -774,14 +774,11 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 let windows = state.windows.read().unwrap();
                 for window in windows.iter() {
                     if let WindowState::Active = window.state {
-                        log::info!("display time!!");
                         if let Some(params) = &window.params {
-                            log::info!("showing!!");
                             window.window.show();
                             window.node.set_position(params.x, params.y);
                             window.node.place_top();
                         } else {
-                            log::info!("hiding!!");
                             window.window.hide();
                         }
                     }
