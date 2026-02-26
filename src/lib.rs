@@ -65,6 +65,8 @@ fn init(_: &Env) -> Result<()> {
 #[derive(Debug)]
 enum FromEmacs {
     RegisterPrefix(XKBPrefix),
+    FocusWindow(RiverWindowV1),
+    FocusFrame,
 }
 
 #[derive(Debug)]
@@ -79,7 +81,6 @@ struct Handle {
 
     // TODO: naming? focused_window is wm->emacs, focus_request is emacs->wm
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
-    focus_request: Arc<RwLock<Option<RiverWindowV1>>>,
 
     // key presses etc. injected by the WM
     next_event: Arc<Mutex<Option<u32>>>,
@@ -213,9 +214,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let focused_window = Arc::new(RwLock::new(None));
     let focused_window_wmside = focused_window.clone();
 
-    let focus_request = Arc::new(RwLock::new(None));
-    let focus_request_wmside = focus_request.clone();
-
     let next_event = <Arc<Mutex<Option<u32>>>>::default();
     let next_event_wmside = next_event.clone();
 
@@ -226,7 +224,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
             emacs_fd_wmside,
             windows_wmside,
             focused_window_wmside,
-            focus_request_wmside,
             next_event_wmside,
         );
         if let Err(e) = result {
@@ -241,7 +238,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
         rx: rx_e,
         windows,
         focused_window,
-        focus_request,
         next_event,
     })
 }
@@ -302,14 +298,13 @@ fn update_window_parameters<'e>(
 
 #[defun]
 fn set_focus_request<'e>(env: &'e Env, handle: &Handle, window: Value<'e>) -> Result<Value<'e>> {
-    let request = if window.is_not_nil() {
+    if window.is_not_nil() {
         let cell: &RefCell<RiverWindowV1> = window.into_rust()?;
-        Some(cell.borrow().clone())
+        handle.send(FromEmacs::FocusWindow(cell.borrow().clone()))?;
     } else {
-        None
-    };
-    *handle.focus_request.write().unwrap() = request;
-    handle.fd.write(1)?;
+        handle.send(FromEmacs::FocusFrame)?;
+    }
+
     ().into_lisp(env)
 }
 
@@ -361,7 +356,6 @@ fn wm_loop(
     emacs_fd: Arc<EventFd>,
     windows: Arc<RwLock<Vec<Window>>>,
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
-    focus_request: Arc<RwLock<Option<RiverWindowV1>>>,
     next_event: Arc<Mutex<Option<u32>>>,
 ) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -382,7 +376,6 @@ fn wm_loop(
         tx,
         emacs_fd,
         focused_window,
-        focus_request,
         seat: None,
         pending_focus: None,
         frames: vec![],
@@ -455,21 +448,18 @@ fn wm_loop(
                             wm.prefixes.insert(prefix, BindingState::Requested);
                         }
                     }
+                    FromEmacs::FocusWindow(window) => {
+                        wm.pending_focus = Some(window);
+                    }
+                    FromEmacs::FocusFrame => {
+                        // TODO: *which* frame?
+                        wm.pending_focus = wm
+                            .frames
+                            .iter()
+                            .find(|f| matches!(f.state, FrameState::Displayed(_)))
+                            .map(|f| f.window.clone());
+                    }
                 }
-            }
-
-            // TODO: reconsider whether to overwrite? maybe emacs events are actually higher precedence
-            if wm.pending_focus.is_none() {
-                let requested = wm.focus_request.read().unwrap().clone();
-                wm.pending_focus = match requested {
-                    Some(window) => Some(window),
-                    // emacs side sets None if it wants *itself* to be focused
-                    None => wm
-                        .frames
-                        .iter()
-                        .find(|f| matches!(f.state, FrameState::Displayed(_)))
-                        .map(|f| f.window.clone()),
-                };
             }
 
             if let Some(river_wm) = &wm.river_wm {
@@ -575,7 +565,6 @@ struct Reka {
     tx: Sender<ToEmacs>,
     emacs_fd: Arc<EventFd>,
     focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
-    focus_request: Arc<RwLock<Option<RiverWindowV1>>>,
 
     // river-related state
     river_wm: Option<RiverWindowManagerV1>,
