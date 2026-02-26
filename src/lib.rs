@@ -459,6 +459,7 @@ struct Window {
     pid: Option<i32>,
     state: WindowState,
     params: Option<WindowParameters>,
+    actual_width_height: Option<(i32, i32)>,
 }
 
 struct Seat {
@@ -673,7 +674,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 proxy.manage_finish();
             }
 
-            // render sequence: positions, z-order, borders, visibility (?), clipping (?)
+            // render sequence: positions, z-order, borders, visibility (?), clipping
             river::river_window_manager_v1::Event::RenderStart => {
                 // reconcile frame display state
                 for frame in state.frames.iter() {
@@ -699,6 +700,11 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                             window.window.show();
                             window.node.set_position(params.x, params.y);
                             window.node.place_top();
+
+                            // clip to actual content size, to get rid of unwanted decorations
+                            let (clip_w, clip_h) =
+                                window.actual_width_height.unwrap_or((params.w, params.h));
+                            window.window.set_clip_box(0, 0, clip_w, clip_h);
                         } else {
                             window.window.hide();
                         }
@@ -755,6 +761,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     pid: None,
                     state: WindowState::Starting,
                     params: None,
+                    actual_width_height: None,
                 });
             }
         }
@@ -890,6 +897,14 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 }
 
                 log::warn!("received title for unknown window, orphan frame?");
+            }
+            river::river_window_v1::Event::Dimensions { width, height } => {
+                for w in state.windows.iter_mut() {
+                    if w.window.eq(proxy) {
+                        w.actual_width_height = Some((width, height));
+                        return;
+                    }
+                }
             }
             river::river_window_v1::Event::Closed => {
                 state
