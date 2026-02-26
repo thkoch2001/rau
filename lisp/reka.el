@@ -26,30 +26,35 @@
   (cl-loop for frame being the frames
            do (reka--set-frame-name frame)))
 
-(defun reka--select-focused-wayland-window ()
-  "If an app window has Wayland focus, select its reka buffer's Emacs window."
-  (let ((focused (reka-get-focused-window reka-handle)))
-    (when focused
-      (let ((buf (seq-find (lambda (buf)
-                             (let ((w (buffer-local-value 'reka-window buf)))
-                               (and w (reka-window-equal w focused))))
-                           (reka--list-buffers))))
-        (when buf
-          (let ((win (get-buffer-window buf t)))
-            (when win
-              (select-window win 'norecord))))))))
+(defun reka--find-buffer-for-window (window)
+  (seq-find (lambda (buf)
+              (when-let ((w (buffer-local-value 'reka-window buf)))
+                (reka-window-equal w window)))
+            (reka--list-buffers)))
 
 (defun reka-handle-sigusr1 ()
   (interactive)
-  (reka-reconcile-window-buffers reka-handle)
   (let ((params (reka--all-window-parameters)))
     (reka-update-window-parameters reka-handle params))
-  (reka--select-focused-wayland-window)
 
   (while-let ((cmd (reka-get-next-command reka-handle)))
     (pcase cmd
       (`(key-event . ,key)
        (push key unread-command-events))
+
+      (`(new-window . ,window)
+       (reka--create-buffer window)
+       (reka-notify-buffer-created reka-handle window))
+
+      (`(window-closed . ,window)
+       (when-let ((buf (reka--find-buffer-for-window window)))
+           (kill-buffer buf)))
+
+      (`(focused . ,window)
+       (when-let* ((buf (reka--find-buffer-for-window window))
+                 (win (get-buffer-window buf t)))
+           (select-window win 'norecord)))
+
       (_ (error "received unknown command from reka: %s" cmd)))))
 
 (define-key special-event-map [sigusr1] #'reka-handle-sigusr1)

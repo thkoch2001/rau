@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     os::fd::AsFd,
     sync::mpsc::{Receiver, Sender, channel},
     sync::{Arc, RwLock},
@@ -54,6 +54,9 @@ use_symbols!(
     kill_buffer
     cons
     key_event
+    new_window
+    window_closed
+    focused
     reka_get_window => "reka--get-window"
     reka_create_buffer => "reka--create-buffer"
     reka_list_buffers => "reka--list-buffers"
@@ -70,17 +73,24 @@ enum FromEmacs {
     FocusWindow(RiverWindowV1),
     FocusFrame,
     CloseWindow(RiverWindowV1),
+    BufferCreated(RiverWindowV1),
 }
 
 #[derive(Debug)]
 enum ToEmacs {
     KeyEvent(u32),
+    NewWindow(RiverWindowV1),
+    WindowClosed(RiverWindowV1),
+    Focused(RiverWindowV1),
 }
 
 impl<'e> IntoLisp<'e> for ToEmacs {
     fn into_lisp(self, env: &'e Env) -> Result<Value<'e>> {
         match self {
             ToEmacs::KeyEvent(event) => env.call(cons, (key_event, event)),
+            ToEmacs::NewWindow(win) => env.call(cons, (new_window, RefCell::new(win))),
+            ToEmacs::WindowClosed(win) => env.call(cons, (window_closed, RefCell::new(win))),
+            ToEmacs::Focused(win) => env.call(cons, (focused, RefCell::new(win))),
         }
     }
 }
@@ -91,9 +101,6 @@ struct Handle {
     rx: Receiver<ToEmacs>,
 
     windows: Arc<RwLock<Vec<Window>>>,
-
-    // TODO: naming? focused_window is wm->emacs, focus_request is emacs->wm
-    focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
 }
 
 impl Handle {
@@ -102,92 +109,6 @@ impl Handle {
         self.fd.write(1)?;
         Ok(())
     }
-}
-
-fn contains_by<T, F: Fn(&T) -> bool>(v: &Vec<T>, f: F) -> bool {
-    for e in v {
-        if f(e) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-#[defun]
-fn reconcile_window_buffers<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
-    // We need to be careful about locking here: Creating/destroying buffers
-    // triggers layout changes, which (through hooks) might call back into the
-    // Rust code and attempt to acquire locks. The idea is to split this into
-    // three phases, where we first hold a read lock and figure out what needs
-    // to be created/destroyed, then do it without a lock, and finally update
-    // the stack under a write lock.
-    //
-    // It's important that none of the Lisp functions called from here try to do
-    // anything that needs the lock!
-
-    let buffers = env.call(reka_list_buffers, [])?.into_rust::<Vector<'e>>()?;
-    let mut orphaned: Vec<Value<'e>> = vec![];
-    let mut starting: Vec<RiverWindowV1> = vec![];
-    let mut seen: HashSet<RiverWindowV1> = HashSet::new();
-    {
-        let windows = handle.windows.read().expect("windows rwlock poisoned");
-
-        for buffer in buffers.into_iter() {
-            let window_ptr = env.call(reka_get_window, [buffer])?;
-            if !window_ptr.is_not_nil() {
-                log::warn!("found reka buffer without any window object, destroying!");
-                orphaned.push(buffer);
-                continue;
-            }
-            let window_cell: &RefCell<RiverWindowV1> = window_ptr.into_rust()?;
-            let window = window_cell.borrow();
-            if !contains_by(&*windows, |w: &Window| window.eq(&w.window)) {
-                log::info!("found orphaned reka buffer, destroying!");
-                orphaned.push(buffer);
-            } else {
-                seen.insert(window.clone());
-            }
-        }
-
-        for window in windows.iter() {
-            if matches!(window.state, WindowState::Starting) {
-                starting.push(window.window.clone());
-            }
-        }
-    } // "phase 1" end
-
-    // phase 2: mutating without lock
-    for buffer in orphaned {
-        env.call(kill_buffer, [buffer])?;
-    }
-
-    for window in &starting {
-        log::debug!("creating new buffer for starting window");
-        let window_value = RefCell::new(window.clone()).into_lisp(env)?;
-        env.call(reka_create_buffer, [window_value])?;
-    }
-
-    // phase 3: write back states
-    {
-        let mut windows = handle.windows.write().expect("windows rwlock poisoned");
-        for window in windows.iter_mut() {
-            match window.state {
-                WindowState::Active if seen.contains(&window.window) => {}
-                WindowState::Killed => {}
-                WindowState::Active => {
-                    // not seen -> buffer was removed
-                    window.state = WindowState::Killed;
-                }
-                WindowState::Starting if starting.iter().any(|w| w.eq(&window.window)) => {
-                    window.state = WindowState::Active;
-                }
-                WindowState::Starting => {}
-            }
-        }
-    }
-
-    ().into_lisp(env)
 }
 
 #[defun]
@@ -207,17 +128,8 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let windows = Arc::new(RwLock::new(Vec::new()));
     let windows_wmside = windows.clone();
 
-    let focused_window = Arc::new(RwLock::new(None));
-    let focused_window_wmside = focused_window.clone();
-
     std::thread::spawn(move || {
-        let result = wm_loop(
-            rx,
-            tx_e,
-            emacs_fd_wmside,
-            windows_wmside,
-            focused_window_wmside,
-        );
+        let result = wm_loop(rx, tx_e, emacs_fd_wmside, windows_wmside);
         if let Err(e) = result {
             log::error!("reka window manager thread crashed: {:?}", e);
         }
@@ -229,7 +141,6 @@ fn start_wm(env: &Env) -> Result<Handle> {
         tx,
         rx: rx_e,
         windows,
-        focused_window,
     })
 }
 
@@ -300,12 +211,13 @@ fn set_focus_request<'e>(env: &'e Env, handle: &Handle, window: Value<'e>) -> Re
 }
 
 #[defun]
-fn get_focused_window<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
-    let focused = handle.focused_window.read().unwrap();
-    match focused.as_ref() {
-        Some(window) => RefCell::new(window.clone()).into_lisp(env),
-        None => ().into_lisp(env),
-    }
+fn notify_buffer_created<'e>(
+    env: &'e Env,
+    handle: &Handle,
+    w: &RiverWindowV1,
+) -> Result<Value<'e>> {
+    handle.send(FromEmacs::BufferCreated(w.clone()))?;
+    ().into_lisp(env)
 }
 
 #[defun]
@@ -347,7 +259,6 @@ fn wm_loop(
     tx: Sender<ToEmacs>,
     emacs_fd: Arc<EventFd>,
     windows: Arc<RwLock<Vec<Window>>>,
-    focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
 ) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)
@@ -366,7 +277,6 @@ fn wm_loop(
         rx,
         tx,
         emacs_fd,
-        focused_window,
         seat: None,
         pending_focus: None,
         frames: vec![],
@@ -455,6 +365,14 @@ fn wm_loop(
                             if window.eq(&w.window) {
                                 w.state = WindowState::Killed;
                                 break;
+                            }
+                        }
+                    }
+                    FromEmacs::BufferCreated(window) => {
+                        let mut windows = wm.windows.write().unwrap();
+                        for w in windows.iter_mut() {
+                            if window.eq(&w.window) {
+                                w.state = WindowState::Active;
                             }
                         }
                     }
@@ -562,7 +480,6 @@ struct Reka {
     rx: Receiver<FromEmacs>,
     tx: Sender<ToEmacs>,
     emacs_fd: Arc<EventFd>,
-    focused_window: Arc<RwLock<Option<RiverWindowV1>>>,
 
     // river-related state
     river_wm: Option<RiverWindowManagerV1>,
@@ -643,7 +560,9 @@ impl Reka {
 
                 // TODO: the frame/window split is getting annoying ...
                 let is_frame = self.frames.iter().any(|f| f.window.eq(&window));
-                *self.focused_window.write().unwrap() = if is_frame { None } else { Some(window) };
+                if !is_frame {
+                    self.send(ToEmacs::Focused(window)).expect("sending failed");
+                }
             }
         }
     }
@@ -935,6 +854,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                         });
                     } else {
                         log::info!("discovered new window (PID: {}) ...", unreliable_pid);
+                        if let Err(err) = state.send(ToEmacs::NewWindow(proxy.clone())) {
+                            log::error!("failed to send new window command to Emacs: {}", err);
+                        }
                     }
                 }
             }
@@ -961,6 +883,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 log::warn!("received title for unknown window, orphan frame?");
             }
             river::river_window_v1::Event::Closed => {
+                state
+                    .send(ToEmacs::WindowClosed(proxy.clone()))
+                    .expect("could not signal emacs"); // TODO: fix the error handling for all of these
                 if let Some(seat) = &mut state.seat {
                     if let Some(focus) = &seat.focus {
                         if focus.eq(proxy) {
