@@ -282,6 +282,7 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
         river_wm: None,
         xkb_bindings: None,
         prefixes: Default::default(),
+        active_frame: None,
     };
     let _registry = display.get_registry(&qh, ());
 
@@ -352,13 +353,8 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
                         wm.pending_focus = Some(window);
                     }
                     FromEmacs::FocusFrame => {
-                        // TODO: *which* frame?
                         needs_manage = true;
-                        wm.pending_focus = wm
-                            .frames
-                            .iter()
-                            .find(|f| f.displayed_on.is_some())
-                            .map(|f| f.window.clone());
+                        wm.pending_focus = wm.active_frame.clone();
                     }
                     FromEmacs::CloseWindow(window) => {
                         for w in wm.windows.iter_mut() {
@@ -496,6 +492,8 @@ struct Reka {
 
     seat: Option<Seat>,
     pending_focus: Option<RiverWindowV1>,
+    active_frame: Option<RiverWindowV1>,
+
     frames: Vec<Frame>,
     outputs: Vec<Output>,
     windows: Vec<Window>,
@@ -510,15 +508,19 @@ impl Reka {
     }
 
     fn frame_by_output(&self, output: &RiverOutputV1) -> Option<&Frame> {
-        for f in &self.frames {
-            if let Some(o) = f.displayed_on.as_ref()
-                && o.eq(output)
-            {
-                return Some(f);
-            }
-        }
+        self.frames
+            .iter()
+            .find(|f| f.displayed_on.is_some() && f.displayed_on.as_ref().unwrap().eq(output))
+    }
 
-        None
+    fn frame_by_name(&self, name: &str) -> Option<&Frame> {
+        self.frames
+            .iter()
+            .find(|f| f.name.is_some() && f.name.as_ref().unwrap().eq(name))
+    }
+
+    fn window_by_proxy(&self, proxy: &RiverWindowV1) -> Option<&Window> {
+        self.windows.iter().find(|w| proxy.eq(&w.window))
     }
 
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
@@ -551,7 +553,6 @@ impl Reka {
 
     // reconcile_focus updates the seat's focus based on pending_focus (set by
     // events)
-    // TODO: probably broken for multi-output atm
     fn reconcile_focus(&mut self) {
         let seat = match &mut self.seat {
             Some(s) => s,
@@ -564,12 +565,16 @@ impl Reka {
         // There might be no focus if the session is new, or a window was closed
         if seat.focus.is_none() && self.pending_focus.is_none() {
             log::debug!("recovering focus");
-            // TODO: pick the frame on the active/last output rather than the first?
-            self.pending_focus = self
-                .frames
-                .iter()
-                .find(|f| f.displayed_on.is_some())
-                .map(|f| f.window.clone());
+            if self.active_frame.is_some() {
+                self.pending_focus = self.active_frame.clone()
+            } else {
+                // pick any displayed frame, we don't know which one is active ...
+                self.pending_focus = self
+                    .frames
+                    .iter()
+                    .find(|f| f.displayed_on.is_some())
+                    .map(|f| f.window.clone());
+            }
         }
 
         if let Some(window) = self.pending_focus.take() {
@@ -579,8 +584,21 @@ impl Reka {
 
                 // TODO: the frame/window split is getting annoying ...
                 let is_frame = self.frames.iter().any(|f| f.window.eq(&window));
-                if !is_frame {
-                    self.send(ToEmacs::Focused(window)).expect("sending failed");
+                if is_frame {
+                    self.active_frame = Some(window);
+                    return;
+                }
+
+                self.send(ToEmacs::Focused(window.clone()))
+                    .expect("sending failed");
+
+                if let Some(frame_window) = self
+                    .window_by_proxy(&window)
+                    .and_then(|w| w.params.as_ref())
+                    .and_then(|p| self.frame_by_name(&p.frame_name))
+                    .map(|f| f.window.clone())
+                {
+                    self.active_frame = Some(frame_window);
                 }
             }
         }
@@ -709,7 +727,19 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     if let WindowState::Active = window.state {
                         if let Some(params) = &window.params {
                             window.window.show();
-                            window.node.set_position(params.x, params.y);
+
+                            // params.x/y are frame-relative; add the output origin
+                            // to get absolute screen coordinates.
+                            let output_origin = state
+                                .frame_by_name(&params.frame_name)
+                                .and_then(|f| f.displayed_on.clone())
+                                .and_then(|op| state.outputs.iter().find(|o| o.output == op))
+                                .map(|o| (o.x, o.y))
+                                .unwrap_or((0, 0));
+                            window.node.set_position(
+                                params.x + output_origin.0,
+                                params.y + output_origin.1,
+                            );
                             window.node.place_top();
 
                             // clip to actual content size, to get rid of unwanted decorations
@@ -1003,7 +1033,10 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
                     if let Err(err) = state.send(ToEmacs::KeyEvent(k.event)) {
                         log::error!("failed to send key event to Emacs: {}", err);
                     }
-                    state.pending_focus = Some(state.frames[0].window.clone());
+                    state.pending_focus = state
+                        .active_frame
+                        .clone()
+                        .or_else(|| state.frames.first().map(|f| f.window.clone()));
                     break;
                 }
             }
