@@ -19,6 +19,7 @@ use nix::{
     unistd::Pid,
 };
 use wayland_client::{Connection, Dispatch, protocol::wl_registry};
+use xkbcommon::xkb;
 
 use crate::river::{
     river_output_v1::RiverOutputV1,
@@ -234,16 +235,30 @@ fn register_xkb_prefix<'e>(
     env: &'e Env,
     handle: &Handle,
     event: u32,
-    keysym: u32,
+    key: Value<'e>,
     modifiers_bits: u32,
 ) -> Result<Value<'e>> {
+    // Emacs hands us either an int (Unicode codepoint for the key), or a string
+    // with a "key name". The later is stuff like "XF86AudioRaiseVolume",
+    // "Return", etc. which we map back to a keysym with XKB here.
+    let keysym = if let Ok(codepoint) = key.into_rust::<i64>() {
+        xkb::utf32_to_keysym(codepoint as u32)
+    } else {
+        let name: String = key.into_rust()?;
+        xkb::keysym_from_name(&name, xkb::KEYSYM_CASE_INSENSITIVE)
+    };
+
+    if keysym == xkb::keysyms::KEY_NoSymbol.into() {
+        return Err(anyhow::anyhow!("could not resolve XKB keysym for key").into());
+    }
+
     let modifiers = Modifiers::from_bits(modifiers_bits).context("unknown modifier bits")?;
-    let key = XKBPrefix {
+    let prefix = XKBPrefix {
         event,
-        keysym,
+        keysym: u32::from(keysym),
         modifiers,
     };
-    handle.send(FromEmacs::RegisterPrefix(key))?;
+    handle.send(FromEmacs::RegisterPrefix(prefix))?;
 
     ().into_lisp(env)
 }
@@ -739,10 +754,9 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
 
                             if let Some(output) = output {
                                 window.window.show();
-                                window.node.set_position(
-                                    params.x + output.x,
-                                    params.y + output.y,
-                                );
+                                window
+                                    .node
+                                    .set_position(params.x + output.x, params.y + output.y);
                                 window.node.place_top();
 
                                 // clip to actual content size, to get rid of unwanted decorations

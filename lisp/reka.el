@@ -149,6 +149,7 @@
                                   (buffer-local-value 'reka-window buf)))))))
 
 (defconst reka--modifier-bits
+  ;; TODO: can we handle this with XKB on the rust side, too?
   '((shift   . 1)
     (control . 4)
     (meta    . 8)
@@ -157,16 +158,14 @@
   "Modifier bits as per river_seat_v1.modifiers / XKB")
 
 (defun reka--key-to-xkb (key-string)
-  "Turns an Emacs key-string (e.g. `C-x') into an xkb keysym that river can bind."
+  "Decomposes an Emacs key-string (e.g. `C-x') into (event key modifiers).
+The Rust side resolves the keysyms using xkbcommon."
   (let* ((event (aref (kbd key-string) 0))
-         (keysym (event-basic-type event))
+         (basic (event-basic-type event))
          (mods (seq-map (lambda (mod) (alist-get mod reka--modifier-bits))
                         (event-modifiers event)))
-         ;; (mask (apply #'logior (cons keysym mods))) TODO: actually unnecessary?
-         )
-    (unless (characterp keysym)
-      (error "only plain characters are supported as base right now")) ;; TODO: maybe support space, enter etc.
-    (list event keysym (apply #'logior mods))))
+         (key (if (characterp basic) basic (symbol-name basic))))
+    (list event key (apply #'logior mods))))
 
 (defun reka-push-intercept-prefixes ()
   (dolist (prefix reka-intercept-prefixes)
