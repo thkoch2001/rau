@@ -726,26 +726,30 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 for window in state.windows.iter() {
                     if let WindowState::Active = window.state {
                         if let Some(params) = &window.params {
-                            window.window.show();
-
-                            // params.x/y are frame-relative; add the output origin
-                            // to get absolute screen coordinates.
-                            let output_origin = state
+                            // look up frame-relative output coordinates, but
+                            // hide the window if no output is found (this
+                            // occurs after outputs are disconnected but frames
+                            // on them have remaining alive window parameters)
+                            let output = state
                                 .frame_by_name(&params.frame_name)
                                 .and_then(|f| f.displayed_on.clone())
-                                .and_then(|op| state.outputs.iter().find(|o| o.output == op))
-                                .map(|o| (o.x, o.y))
-                                .unwrap_or((0, 0));
-                            window.node.set_position(
-                                params.x + output_origin.0,
-                                params.y + output_origin.1,
-                            );
-                            window.node.place_top();
+                                .and_then(|op| state.outputs.iter().find(|o| o.output == op));
 
-                            // clip to actual content size, to get rid of unwanted decorations
-                            let (clip_w, clip_h) =
-                                window.actual_width_height.unwrap_or((params.w, params.h));
-                            window.window.set_clip_box(0, 0, clip_w, clip_h);
+                            if let Some(output) = output {
+                                window.window.show();
+                                window.node.set_position(
+                                    params.x + output.x,
+                                    params.y + output.y,
+                                );
+                                window.node.place_top();
+
+                                // clip to actual content size, to get rid of unwanted decorations
+                                let (clip_w, clip_h) =
+                                    window.actual_width_height.unwrap_or((params.w, params.h));
+                                window.window.set_clip_box(0, 0, clip_w, clip_h);
+                            } else {
+                                window.window.hide();
+                            }
                         } else {
                             window.window.hide();
                         }
