@@ -42,7 +42,7 @@
   (while-let ((cmd (reka-get-next-command reka-handle)))
     (pcase cmd
       (`(key-event . ,key)
-       (push key unread-command-events))
+       (push (cons t key) unread-command-events))
 
       (`(new-window . ,window)
        (reka--create-buffer window)
