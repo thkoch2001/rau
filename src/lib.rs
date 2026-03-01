@@ -631,9 +631,7 @@ impl Reka {
                     log::info!("ignoring starting window");
                 }
                 WindowState::Active => {
-                    log::info!("found active window: {:?}", w);
                     if let Some(params) = &w.params {
-                        log::info!("proposing dimensions etc");
                         w.window.set_tiled(Edges::all());
                         w.window.propose_dimensions(params.w, params.h);
                     }
