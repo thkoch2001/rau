@@ -442,12 +442,20 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
     }
 }
 
+enum FullscreenState {
+    None,
+    Requested(RiverWindowV1),
+    Fullscreen(RiverWindowV1),
+    Exiting(RiverWindowV1),
+}
+
 struct Output {
     output: RiverOutputV1,
     x: i32,
     y: i32,
     width: i32,
     height: i32,
+    fullscreen: FullscreenState,
 }
 
 struct Frame {
@@ -657,6 +665,24 @@ impl Reka {
             binding.enable();
         }
     }
+
+    fn reconcile_fullscreen(&mut self) {
+        for output in self.outputs.iter_mut() {
+            match &output.fullscreen {
+                FullscreenState::Requested(win) => {
+                    win.inform_fullscreen();
+                    win.fullscreen(&output.output);
+                    output.fullscreen = FullscreenState::Fullscreen(win.clone());
+                }
+                FullscreenState::Exiting(win) => {
+                    win.inform_not_fullscreen();
+                    win.exit_fullscreen();
+                    output.fullscreen = FullscreenState::None;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Reka {
@@ -704,6 +730,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 state.reconcile_focus();
                 state.reconcile_windows();
                 state.reconcile_bindings();
+                state.reconcile_fullscreen();
 
                 proxy.manage_finish();
             }
@@ -771,6 +798,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     y: 0,
                     width: 0,
                     height: 0,
+                    fullscreen: FullscreenState::None,
                 });
             }
 
@@ -997,6 +1025,55 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                         state.frames.swap_remove(i);
                         return;
                     }
+                }
+            }
+            river::river_window_v1::Event::FullscreenRequested { output: target } => {
+                // one of the denser pieces of logic here ... figure out which output to fullscreen on:
+                // 1. the requested output
+                // 2. the output the window is already on
+                // 3. the active output
+                let potential_target = target
+                    .or_else(|| {
+                        state // where is this window?
+                            .window_by_proxy(proxy)
+                            .and_then(|w| w.params.as_ref())
+                            .and_then(|p| state.frame_by_name(&p.frame_name))
+                            .and_then(|f| f.displayed_on.clone())
+                    })
+                    .or_else(|| {
+                        state
+                            .active_frame
+                            .as_ref()
+                            .and_then(|fw| state.frames.iter().find(|f| f.window.eq(fw)))
+                            .and_then(|f| f.displayed_on.clone())
+                    });
+                let Some(target) = potential_target else {
+                    log::warn!("fullscreen requested, but could not find matching output!");
+                    return;
+                };
+
+                for output in state.outputs.iter_mut() {
+                    if !output.output.eq(&target) {
+                        continue;
+                    }
+
+                    log::debug!("requesting fullscreen state");
+                    output.fullscreen = FullscreenState::Requested(proxy.clone());
+                    return;
+                }
+            }
+            river::river_window_v1::Event::ExitFullscreenRequested => {
+                for output in state.outputs.iter_mut() {
+                    match &output.fullscreen {
+                        FullscreenState::Requested(win) | FullscreenState::Fullscreen(win)
+                            if win.eq(proxy) =>
+                        {
+                            log::debug!("fullscreen exit requested");
+                            output.fullscreen = FullscreenState::Exiting(win.clone());
+                            return;
+                        }
+                        _ => continue,
+                    };
                 }
             }
             _ => {}
