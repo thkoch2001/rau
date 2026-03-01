@@ -799,6 +799,10 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             }
             river::river_window_manager_v1::Event::SessionUnlocked => {
                 log::info!("RiverWindowManagerV1::Event::SessionUnlocked received");
+                // recover focus from screen locker
+                if let Some(seat) = &mut state.seat {
+                    seat.focus = None;
+                }
             }
             river::river_window_manager_v1::Event::Window { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Window received: id={:?}", id);
