@@ -173,6 +173,10 @@ The Rust side resolves the keysyms using xkbcommon."
     (let ((data (reka--key-to-xkb prefix)))
       (reka-register-xkb-prefix reka-handle (car data) (cadr data) (caddr data)))))
 
+(defun reka--suppress-focus-event (_orig-fn _event)
+  "No-op for suppressing certain focus events in advice."
+  (interactive "e"))
+
 (defun reka-enable ()
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
@@ -194,9 +198,11 @@ The Rust side resolves the keysyms using xkbcommon."
   (add-hook 'window-buffer-change-functions    #'reka--update-focus-request)
   (add-hook 'minibuffer-setup-hook             #'reka--update-focus-request)
   (add-hook 'minibuffer-exit-hook              #'reka--update-focus-request)
-  (add-hook 'post-command-hook                 #'reka--update-focus-request))
+  (add-hook 'post-command-hook                 #'reka--update-focus-request)
 
-(defun rtest ()
-  (async-shell-command "pavucontrol"))
+  ;; Suppress pgtk focus feedback loop (as does EXWM)
+  ;; TODO: figure out if/how this breaks multi-frame focus changes ...
+  (advice-add 'handle-focus-in  :around #'reka--suppress-focus-event)
+  (advice-add 'handle-focus-out :around #'reka--suppress-focus-event))
 
 (provide 'reka)
