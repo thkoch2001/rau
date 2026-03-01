@@ -53,6 +53,7 @@
            (kill-buffer buf)))
 
       (`(focused . ,window)
+       (setq reka--last-focused-buffer nil)
        (when-let* ((buf (reka--find-buffer-for-window window))
                  (win (get-buffer-window buf t)))
            (select-window win 'norecord)))
