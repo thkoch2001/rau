@@ -287,7 +287,6 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
     let qh = event_queue.handle();
     let mut wm = Reka {
         pid,
-        iteration: 0,
         rx,
         tx,
         emacs_fd,
@@ -496,7 +495,6 @@ enum BindingState {
 
 struct Reka {
     pid: i32,
-    iteration: u64,
 
     // Emacs-related state
     rx: Receiver<FromEmacs>,
@@ -709,14 +707,6 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 state.reconcile_windows();
                 state.reconcile_bindings();
 
-                state.iteration += 1;
-                if let Err(e) = signal::kill(Pid::this(), Some(signal::Signal::SIGUSR1)) {
-                    log::error!(
-                        "failed to notify Emacs (iteration {}): {}",
-                        state.iteration,
-                        e
-                    );
-                }
                 proxy.manage_finish();
             }
 
