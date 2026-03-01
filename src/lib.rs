@@ -1057,8 +1057,15 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                         continue;
                     }
 
-                    log::debug!("requesting fullscreen state");
-                    output.fullscreen = FullscreenState::Requested(proxy.clone());
+                    if matches!(output.fullscreen, FullscreenState::None) {
+                        log::debug!("requesting fullscreen state");
+                        output.fullscreen = FullscreenState::Requested(proxy.clone());
+                    } else {
+                        log::warn!(
+                            "ignoring fullscreen request - output already has a fullscreened window!"
+                        );
+                    }
+
                     return;
                 }
             }
