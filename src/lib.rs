@@ -991,6 +991,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
 
                 for (i, f) in state.frames.iter().enumerate() {
                     if f.window.eq(proxy) {
+                        if state.active_frame.as_ref().is_some_and(|af| af.eq(proxy)) {
+                            state.active_frame = None;
+                        }
                         state.frames.swap_remove(i);
                         return;
                     }
