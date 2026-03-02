@@ -61,7 +61,7 @@
       (`(title-change ,window ,title)
        (when-let* ((buf (reka--find-buffer-for-window window)))
          (with-current-buffer buf
-           (rename-buffer title))))
+           (rename-buffer title t))))
 
       ('frame-request (make-frame))
 
