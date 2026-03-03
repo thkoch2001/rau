@@ -523,6 +523,7 @@ struct Reka {
     rx: Receiver<FromEmacs>,
     tx: Sender<ToEmacs>,
     emacs_fd: Arc<EventFd>,
+    pending_frames: usize,
 
     // river-related state
     river_wm: Option<RiverWindowManagerV1>,
@@ -564,6 +565,8 @@ impl Reka {
 
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
+        let mut frame_requests: usize = 0;
+
         'outputs: for output in &self.outputs {
             if let Some(f) = self.frame_by_output(&output.output) {
                 f.window.propose_dimensions(output.width, output.height);
@@ -585,8 +588,18 @@ impl Reka {
                 continue 'outputs;
             }
 
-            // no frame found -> ask emacs for a new one
-            self.send(ToEmacs::RequestFrame).unwrap();
+            // no frame found -> might need a new frame
+            frame_requests += 1;
+        }
+
+        // Request new frames (if we haven't already fired a request). This
+        // accounting is necessary because there might be additional manage
+        // sequences before a frame shows up.
+        if frame_requests > self.pending_frames {
+            for _ in 0..(frame_requests - self.pending_frames) {
+                self.send(ToEmacs::RequestFrame).unwrap();
+                self.pending_frames += 1;
+            }
         }
     }
 
@@ -1064,6 +1077,13 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                             node: window.node,
                             window: window.window,
                         });
+
+                        if state.pending_frames > 0 {
+                            state.pending_frames -= 1;
+                        } else {
+                            // users might (accidentally?) create new frames
+                            log::warn!("new frame was not requested by WM");
+                        }
                     } else {
                         log::info!("discovered new window (PID: {}) ...", unreliable_pid);
                         if let Err(err) = state.send(ToEmacs::NewWindow(proxy.clone())) {
