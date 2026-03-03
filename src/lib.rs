@@ -44,12 +44,19 @@ mod river {
             use super::wm::*;
             wayland_scanner::generate_interfaces!("./protocol/river-xkb-bindings-v1.xml");
         }
+
+        pub(super) mod layer_shell {
+            use super::wm::*;
+            wayland_scanner::generate_interfaces!("./protocol/river-layer-shell-v1.xml");
+        }
     }
 
+    use self::interfaces::layer_shell::*;
     use self::interfaces::wm::*;
     use self::interfaces::xkb::*;
     wayland_scanner::generate_client_code!("./protocol/river-window-management-v1.xml");
     wayland_scanner::generate_client_code!("./protocol/river-xkb-bindings-v1.xml");
+    wayland_scanner::generate_client_code!("./protocol/river-layer-shell-v1.xml");
 }
 
 emacs::plugin_is_GPL_compatible!();
