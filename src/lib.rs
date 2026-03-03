@@ -470,6 +470,7 @@ struct Output {
     fullscreen: FullscreenState,
 }
 
+#[derive(Clone)]
 struct Frame {
     name: Option<String>,
     displayed_on: Option<RiverOutputV1>,
@@ -621,22 +622,22 @@ impl Reka {
                 seat.seat.focus_window(&window);
 
                 // TODO: the frame/window split is getting annoying ...
-                let is_frame = self.frames.iter().any(|f| f.window.eq(&window));
-                if is_frame {
-                    self.active_frame = Some(window);
+                let frame = self.frames.iter().find(|f| f.window.eq(&window));
+                if frame.is_some() {
+                    self.update_active_frame(frame.cloned());
                     return;
                 }
 
                 self.send(ToEmacs::Focused(window.clone()))
                     .expect("sending failed");
 
-                if let Some(frame_window) = self
+                let frame = self
                     .window_by_proxy(&window)
                     .and_then(|w| w.params.as_ref())
-                    .and_then(|p| self.frame_by_name(&p.frame_name))
-                    .map(|f| f.window.clone())
-                {
-                    self.active_frame = Some(frame_window);
+                    .and_then(|p| self.frame_by_name(&p.frame_name));
+
+                if frame.is_some() {
+                    self.update_active_frame(frame.cloned());
                 }
             }
         }
@@ -697,6 +698,17 @@ impl Reka {
                 _ => {}
             }
         }
+    }
+
+    fn update_active_frame(&mut self, frame: Option<Frame>) {
+        // mark output of active frame for layer-shell (surfaces pop up there by default)
+        frame
+            .as_ref()
+            .and_then(|f| f.displayed_on.as_ref())
+            .and_then(|fo| self.outputs.iter().find(|o| o.output.eq(fo)))
+            .map(|output| output.ls_output.set_default());
+
+        self.active_frame = frame.map(|f| f.window.clone());
     }
 }
 
@@ -1120,7 +1132,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 for (i, f) in state.frames.iter().enumerate() {
                     if f.window.eq(proxy) {
                         if state.active_frame.as_ref().is_some_and(|af| af.eq(proxy)) {
-                            state.active_frame = None;
+                            state.update_active_frame(None);
                         }
                         state.frames.swap_remove(i);
                         return;
