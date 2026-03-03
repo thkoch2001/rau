@@ -22,6 +22,9 @@ use wayland_client::{Connection, Dispatch, protocol::wl_registry};
 use xkbcommon::xkb;
 
 use crate::river::{
+    river_layer_shell_output_v1::RiverLayerShellOutputV1,
+    river_layer_shell_seat_v1::RiverLayerShellSeatV1,
+    river_layer_shell_v1::RiverLayerShellV1,
     river_output_v1::RiverOutputV1,
     river_seat_v1::Modifiers,
     river_window_manager_v1::RiverWindowManagerV1,
@@ -304,6 +307,7 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
         windows: vec![],
         river_wm: None,
         xkb_bindings: None,
+        layer_shell: None,
         prefixes: Default::default(),
         active_frame: None,
     };
@@ -458,6 +462,7 @@ enum FullscreenState {
 
 struct Output {
     output: RiverOutputV1,
+    ls_output: RiverLayerShellOutputV1,
     x: i32,
     y: i32,
     width: i32,
@@ -492,6 +497,8 @@ struct Window {
 
 struct Seat {
     seat: river::river_seat_v1::RiverSeatV1,
+    #[allow(dead_code)] // TODO(tazjin): do I *need* to store this?
+    ls_seat: RiverLayerShellSeatV1,
     focus: Option<RiverWindowV1>,
 }
 
@@ -519,6 +526,7 @@ struct Reka {
     // river-related state
     river_wm: Option<RiverWindowManagerV1>,
     xkb_bindings: Option<RiverXkbBindingsV1>,
+    layer_shell: Option<RiverLayerShellV1>,
 
     seat: Option<Seat>,
     pending_focus: Option<RiverWindowV1>,
@@ -708,11 +716,15 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Reka {
             if interface == "river_window_manager_v1" {
                 let wm = proxy.bind::<RiverWindowManagerV1, _, _>(name, 3, qhandle, ());
                 state.river_wm = Some(wm);
-                log::debug!("registering reka window manager ...");
+                log::debug!("registering river window manager ...");
             } else if interface == "river_xkb_bindings_v1" {
                 let xkb = proxy.bind::<RiverXkbBindingsV1, _, _>(name, 2, qhandle, ());
                 state.xkb_bindings = Some(xkb);
                 log::debug!("registering river xkb bindings ...");
+            } else if interface == "river_layer_shell_v1" {
+                let layer_shell = proxy.bind::<RiverLayerShellV1, _, _>(name, 1, qhandle, ());
+                state.layer_shell = Some(layer_shell);
+                log::debug!("registering river layer shell ... ");
             }
         }
     }
@@ -799,8 +811,15 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
 
             river::river_window_manager_v1::Event::Output { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Output received: id={:?}", id);
+                let ls_output = state
+                    .layer_shell
+                    .as_ref()
+                    .expect("layer shell not registered")
+                    .get_output(&id, &qhandle, ());
+
                 state.outputs.push(Output {
                     output: id,
+                    ls_output,
                     x: 0,
                     y: 0,
                     width: 0,
@@ -811,9 +830,15 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
 
             river::river_window_manager_v1::Event::Seat { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Seat received: id={:?}", id);
+                let ls_seat = state
+                    .layer_shell
+                    .as_ref()
+                    .expect("layer shell not bound")
+                    .get_seat(&id, qhandle, ());
                 if state.seat.is_none() {
                     state.seat = Some(Seat {
                         seat: id,
+                        ls_seat,
                         focus: None,
                     });
                 } else {
@@ -860,6 +885,22 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
         river::river_window_manager_v1::EVT_OUTPUT_OPCODE => (river::river_output_v1::RiverOutputV1, ()),
         river::river_window_manager_v1::EVT_SEAT_OPCODE => (river::river_seat_v1::RiverSeatV1, ()),
     ]);
+}
+
+impl Dispatch<RiverLayerShellV1, ()> for Reka {
+    fn event(
+        _: &mut Self,
+        _: &RiverLayerShellV1,
+        event: <RiverLayerShellV1 as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &wayland_client::QueueHandle<Self>,
+    ) {
+        log::warn!(
+            "received a layer shell event, but it has no events! Most peculiar?! {:?}",
+            event
+        );
+    }
 }
 
 impl Dispatch<RiverOutputV1, ()> for Reka {
@@ -912,6 +953,58 @@ impl Dispatch<RiverOutputV1, ()> for Reka {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+impl Dispatch<RiverLayerShellOutputV1, ()> for Reka {
+    fn event(
+        state: &mut Self,
+        proxy: &RiverLayerShellOutputV1,
+        event: <RiverLayerShellOutputV1 as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &wayland_client::QueueHandle<Self>,
+    ) {
+        match event {
+            river::river_layer_shell_output_v1::Event::NonExclusiveArea {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                for output in state.outputs.iter_mut() {
+                    if output.ls_output.eq(proxy) {
+                        output.x = x;
+                        output.y = y;
+                        output.width = width;
+                        output.height = height;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Dispatch<RiverLayerShellSeatV1, ()> for Reka {
+    fn event(
+        state: &mut Self,
+        _: &RiverLayerShellSeatV1,
+        event: <RiverLayerShellSeatV1 as wayland_client::Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &wayland_client::QueueHandle<Self>,
+    ) {
+        log::debug!("received layer shell seat event: {:?}", event);
+
+        match event {
+            river::river_layer_shell_seat_v1::Event::FocusNone => {
+                // try to recover focus here
+                state.seat.as_mut().and_then(|s| s.focus.take());
+            }
+
+            _ => { /* TODO(tazjin): what to do here? */ }
         }
     }
 }
