@@ -35,38 +35,47 @@
                 (reka-window-equal w window)))
             (reka--list-buffers)))
 
-(defun reka-handle-sigusr1 ()
+(defvar reka-processing-commands (make-mutex "reka-processor-lock")
+  "Internal lock to avoid double-processing of commands in signal handler.")
+
+(defun reka--handle-commands ()
   (interactive)
-  (let ((params (reka--all-window-parameters)))
-    (reka-update-window-parameters reka-handle params))
 
-  (while-let ((cmd (reka-get-next-command reka-handle)))
-    (pcase cmd
-      (`(key-event . ,key)
-       (push (cons t key) unread-command-events))
+  (with-mutex reka-processing-commands
+    (let ((params (reka--all-window-parameters)))
+      (reka-update-window-parameters reka-handle params))
 
-      (`(new-window . ,window)
-       (reka--create-buffer window)
-       (reka-notify-buffer-created reka-handle window))
+    (while-let ((cmd (reka-get-next-command reka-handle)))
+      (pcase cmd
+        (`(key-event . ,key)
+         (push (cons t key) unread-command-events))
 
-      (`(window-closed . ,window)
-       (when-let ((buf (reka--find-buffer-for-window window)))
+        (`(new-window . ,window)
+         (reka--create-buffer window)
+         (reka-notify-buffer-created reka-handle window))
+
+        (`(window-closed . ,window)
+         (when-let ((buf (reka--find-buffer-for-window window)))
            (kill-buffer buf)))
 
-      (`(focused . ,window)
-       (setq reka--last-focused-buffer nil)
-       (when-let* ((buf (reka--find-buffer-for-window window))
-                 (win (get-buffer-window buf t)))
+        (`(focused . ,window)
+         (setq reka--last-focused-buffer nil)
+         (when-let* ((buf (reka--find-buffer-for-window window))
+                     (win (get-buffer-window buf t)))
            (select-window win 'norecord)))
 
-      (`(title-change ,window ,title)
-       (when-let* ((buf (reka--find-buffer-for-window window)))
-         (with-current-buffer buf
-           (rename-buffer title t))))
+        (`(title-change ,window ,title)
+         (when-let* ((buf (reka--find-buffer-for-window window)))
+           (with-current-buffer buf
+             (rename-buffer title t))))
 
-      ('frame-request (make-frame))
+        ('frame-request (make-frame))
 
-      (_ (error "received unknown command from reka: %s" cmd)))))
+        (_ (error "received unknown command from reka: %s" cmd))))))
+
+(defun reka-handle-sigusr1 ()
+  (interactive)
+  (run-at-time 0 nil #'reka--handle-commands))
 
 (define-key special-event-map [sigusr1] #'reka-handle-sigusr1)
 
