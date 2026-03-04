@@ -73,6 +73,7 @@ use_symbols!(
     focused
     title_change
     frame_request
+    discard_frame
     reka_get_window => "reka--get-window"
     reka_create_buffer => "reka--create-buffer"
     reka_list_buffers => "reka--list-buffers"
@@ -101,6 +102,7 @@ enum ToEmacs {
     Focused(RiverWindowV1),
     TitleChange(RiverWindowV1, String),
     RequestFrame,
+    DiscardFrame(String),
 }
 
 impl<'e> IntoLisp<'e> for ToEmacs {
@@ -114,6 +116,7 @@ impl<'e> IntoLisp<'e> for ToEmacs {
                 env.call(list, (title_change, RefCell::new(win), title))
             }
             ToEmacs::RequestFrame => frame_request.into_lisp(env),
+            ToEmacs::DiscardFrame(frame_name) => env.call(cons, (discard_frame, frame_name)),
         }
     }
 }
@@ -310,6 +313,7 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
         layer_shell: None,
         prefixes: Default::default(),
         active_frame: None,
+        pending_frames: 0,
     };
     let _registry = display.get_registry(&qh, ());
 
@@ -942,12 +946,18 @@ impl Dispatch<RiverOutputV1, ()> for Reka {
         match event {
             river::river_output_v1::Event::Removed => {
                 log::debug!("output disconnected, removing");
+                let mut output_frame_name = None;
                 for frame in &mut state.frames {
                     if let Some(o) = frame.displayed_on.as_ref()
                         && o.eq(proxy)
                     {
-                        frame.displayed_on = None;
+                        output_frame_name = frame.name.take();
+                        break;
                     }
+                }
+
+                if let Some(name) = output_frame_name {
+                    state.send(ToEmacs::DiscardFrame(name)).ok();
                 }
 
                 for (idx, output) in state.outputs.iter().enumerate() {

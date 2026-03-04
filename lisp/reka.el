@@ -75,6 +75,11 @@
 
         ('frame-request (make-frame))
 
+        (`(discard-frame . ,frame-name)
+         (when-let* ((frame-names (make-frame-names-alist))
+                     (frame (alist-get frame-name frame-names)))
+           (delete-frame frame)))
+
         (_ (error "received unknown command from reka: %s" cmd))))))
 
 (defun reka-handle-sigusr1 ()
