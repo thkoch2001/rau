@@ -36,6 +36,10 @@
             (reka--list-buffers)))
 
 (defvar reka-processing-commands (make-mutex "reka-processor-lock")
+  ;; Honestly, I'm not sure if this lock is ever contended. In theory there
+  ;; should only ever be one linear thread doing stuff in Emacs. However, the
+  ;; signal handler and its effects are a bit odd, so I'm opting for a defensive
+  ;; approach here.
   "Internal lock to avoid double-processing of commands in signal handler.")
 
 (defun reka--handle-commands ()
