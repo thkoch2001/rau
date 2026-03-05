@@ -1114,7 +1114,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     }
                 }
 
-                if let Some(title) = title.as_ref() {
+                if let Some(title) = title.as_ref()
+                    && !title.is_empty()
+                {
                     state
                         .send(ToEmacs::TitleChange(proxy.clone(), title.clone()))
                         .unwrap();
