@@ -26,21 +26,32 @@ What else ... the name? Oh, it's obvious to Russian speakers.
 
 ## Status
 
-reka kind of works and I have successfully used it several times for most of the
-day. It definitely has bugs though, it doesn't support layer shells yet, it
-doesn't do any input management (use
-[channel](https://codeberg.org/Sivecano/channel) for that) and so on. If you
-just want working Wayland window management in Emacs, look in the direction of
-EWM instead.
+reka works, and I have been using it day-to-day for a few days at this point.
+
+It definitely has bugs and rough edges. It also doesn't do any input or output
+management (use [channel](https://codeberg.org/Sivecano/channel) and
+[kanshi](https://gitlab.freedesktop.org/emersion/kanshi) for that). If you just
+want working Wayland window management in Emacs, look in the direction of EWM
+instead.
 
 ## Using this
 
-I have not added any Nix files, session files or whatever else for launching
-this conveniently yet. That is on purpose! This is not a convenient project
-(yet), and you should be a sufficiently committed person to try and use it.
+I have not added anything for launching this conveniently yet. That is on
+purpose! This is not a convenient project (yet), and you should be a
+sufficiently committed person to try and use it.
 
-In short, build the Rust project (you need `pkg-config` and `libxkbcommon`), and
-make yourself a script that launches Emacs approximately like this:
+First, get the source either from TVL directly, or from the mirror:
+
+```
+# clone directly from TVL:
+git clone https://code.tvl.fyi/depot.git:/tools/emacs-pkgs/reka.git
+
+# or clone from mos.ru mirror:
+git clone https://hub.mos.ru/tazjin/reka.git
+```
+
+After that, build the Rust project (you need `pkg-config` and `libxkbcommon`),
+and make yourself a script that launches Emacs approximately like this:
 
 ```
 emacs --directory $reka_src/target/release --directory $reka_src/lisp ...
@@ -51,9 +62,4 @@ make sure to `(require 'reka)` and `(reka-enable)`.
 
 ## Contributing
 
-I do not accept any contributions to reka at this time, but you can ping me on
-IRC (tazjin in #river on libera) with issues.
-
-If I keep developing this (no guarantees, I might just use EWM instead!) then it
-will move into [TVL](https://tvl.fyi) and follow the standard contribution flow
-there.
+Reka follows the standard TVL [contribution guidelines](https://code.tvl.fyi/tree/docs/CONTRIBUTING.md).
