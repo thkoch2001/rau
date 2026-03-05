@@ -42,14 +42,13 @@
   ;; approach here.
   "Internal lock to avoid double-processing of commands in signal handler.")
 
-(defun reka--handle-layout-update (&rest _) ;; for hook compat
-  (let ((params (reka--all-window-parameters)))
-    (reka-update-window-parameters reka-handle params)))
-
 (defun reka--handle-commands ()
   (interactive)
 
   (with-mutex reka-processing-commands
+    (let ((params (reka--all-window-parameters)))
+      (reka-update-window-parameters reka-handle params))
+
     (while-let ((cmd (reka-get-next-command reka-handle)))
       (pcase cmd
         (`(key-event . ,key)
@@ -85,7 +84,6 @@
 
 (defun reka-handle-sigusr1 ()
   (interactive)
-  (run-at-time 0 nil #'reka--handle-layout-update)
   (run-at-time 0 nil #'reka--handle-commands))
 
 (define-key special-event-map [sigusr1] #'reka-handle-sigusr1)
@@ -150,6 +148,10 @@
       (setq-local reka-window window))
     (display-buffer buffer)))
 
+(defun reka--signal-wm-hook (&rest _)
+  (when reka-handle
+    (reka-handle-sigusr1)))
+
 (defvar reka--last-focused-buffer nil
   "Last buffer for which a focus request was sent.")
 
@@ -208,7 +210,7 @@ The Rust side resolves the keysyms using xkbcommon."
   (reka-push-intercept-prefixes)
 
   ;; Layout signals
-  (add-hook 'window-configuration-change-hook #'reka--handle-layout-update)
+  (add-hook 'window-configuration-change-hook #'reka--signal-wm-hook)
 
   ;; Focus signals
   (add-hook 'window-selection-change-functions #'reka--update-focus-request)
