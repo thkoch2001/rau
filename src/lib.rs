@@ -4,8 +4,10 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     os::fd::AsFd,
-    sync::Arc,
-    sync::mpsc::{Receiver, Sender, channel},
+    sync::{
+        Arc, Mutex,
+        mpsc::{Receiver, Sender, channel},
+    },
 };
 
 use anyhow::Context;
@@ -125,6 +127,7 @@ struct Handle {
     fd: Arc<EventFd>,
     tx: Sender<FromEmacs>,
     rx: Receiver<ToEmacs>,
+    signal_dedup: Arc<Mutex<bool>>,
 }
 
 impl Handle {
@@ -149,8 +152,11 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let emacs_fd = Arc::new(EventFd::from_value_and_flags(0, EfdFlags::EFD_NONBLOCK)?);
     let emacs_fd_wmside = emacs_fd.clone();
 
+    let signal_dedup = Arc::new(Mutex::new(false));
+    let signal_dedup_wmside = signal_dedup.clone();
+
     std::thread::spawn(move || {
-        let result = wm_loop(rx, tx_e, emacs_fd_wmside);
+        let result = wm_loop(rx, tx_e, emacs_fd_wmside, signal_dedup_wmside);
         if let Err(e) = result {
             log::error!("reka window manager thread crashed: {:?}", e);
         }
@@ -161,6 +167,7 @@ fn start_wm(env: &Env) -> Result<Handle> {
         fd: emacs_fd,
         tx,
         rx: rx_e,
+        signal_dedup,
     })
 }
 
@@ -278,15 +285,27 @@ fn register_xkb_prefix<'e>(
 
 #[defun]
 fn get_next_command<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
+    let mut sd = handle.signal_dedup.lock().unwrap();
+
+    if !*sd {
+        log::warn!("strange: reading next command, but did not signal");
+    }
+
     if let Ok(cmd) = handle.rx.try_recv() {
         log::debug!("emacs received command {:?}", cmd);
         return cmd.into_lisp(env);
     }
 
+    *sd = false; // read everything that was buffered
     ().into_lisp(env)
 }
 
-fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>) -> Result<()> {
+fn wm_loop(
+    rx: Receiver<FromEmacs>,
+    tx: Sender<ToEmacs>,
+    emacs_fd: Arc<EventFd>,
+    signal_dedup: Arc<Mutex<bool>>,
+) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)
         .init();
@@ -303,6 +322,7 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
         rx,
         tx,
         emacs_fd,
+        signal_dedup,
         seat: None,
         pending_focus: None,
         frames: vec![],
@@ -528,6 +548,7 @@ struct Reka {
     tx: Sender<ToEmacs>,
     emacs_fd: Arc<EventFd>,
     pending_frames: usize,
+    signal_dedup: Arc<Mutex<bool>>,
 
     // river-related state
     river_wm: Option<RiverWindowManagerV1>,
@@ -546,8 +567,16 @@ struct Reka {
 
 impl Reka {
     fn send(&self, cmd: ToEmacs) -> Result<()> {
+        let mut sd = self.signal_dedup.lock().unwrap();
         self.tx.send(cmd)?;
-        signal::kill(Pid::this(), Some(signal::Signal::SIGUSR1))?;
+
+        if !*sd {
+            signal::kill(Pid::this(), Some(signal::Signal::SIGUSR1))?;
+            *sd = true;
+        } else {
+            log::debug!("deduplicated signal");
+        }
+
         Ok(())
     }
 
