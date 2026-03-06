@@ -756,7 +756,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Reka {
         } = event
         {
             if interface == "river_window_manager_v1" {
-                let wm = proxy.bind::<RiverWindowManagerV1, _, _>(name, 3, qhandle, ());
+                let wm = proxy.bind::<RiverWindowManagerV1, _, _>(name, 4, qhandle, ());
                 state.river_wm = Some(wm);
                 log::debug!("registering river window manager ...");
             } else if interface == "river_xkb_bindings_v1" {

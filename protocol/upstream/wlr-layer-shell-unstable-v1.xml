@@ -1,7 +1,4 @@
-<!--
-SPDX-License-Identifier: GPL-3.0-or-later
-SPDX-License-Identifier: MIT
--->
+<!-- SPDX-License-Identifier: MIT -->
 <?xml version="1.0" encoding="UTF-8"?>
 <protocol name="wlr_layer_shell_unstable_v1">
   <copyright>
