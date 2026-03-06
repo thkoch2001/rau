@@ -1,0 +1,28 @@
+{ pkgs ? import <nixpkgs> { }, depot ? { }, ... }:
+
+let
+  emacsBuilder = depot.tools.emacs-pkgs.buildEmacsPackage or pkgs.emacs-pgtk.pkgs.trivialBuild;
+
+  module = pkgs.rustPlatform.buildRustPackage {
+    name = "libreka";
+    src = pkgs.nix-gitignore.gitignoreSource [ ] ./.;
+    nativeBuildInputs = [ pkgs.pkg-config ];
+    buildInputs = [ pkgs.emacs-pgtk pkgs.libxkbcommon ];
+
+    cargoLock.lockFile = ./Cargo.lock;
+    cargoLock.outputHashes = {
+      "emacs-0.20.0" = "sha256-BVO+gqNl8vasguSB16eyC+LqNM2wynwg/7LxIPmVGHo=";
+    };
+
+    postInstall = ''
+      mkdir -p $out/share/emacs/site-lisp
+      ln -s $out/lib/libreka.so $out/share/emacs/site-lisp/libreka.so
+    '';
+  };
+in
+emacsBuilder {
+  pname = "reka";
+  version = "0.1";
+  src = ./lisp/reka.el;
+  packageRequires = [ module ];
+}
