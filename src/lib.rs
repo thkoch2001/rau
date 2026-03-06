@@ -3,20 +3,20 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    os::fd::AsFd,
-    sync::Arc,
-    sync::mpsc::{Receiver, Sender, channel},
+    fs::File,
+    io::Write,
+    os::fd::{AsFd, FromRawFd},
+    sync::{
+        Arc,
+        mpsc::{Receiver, Sender, channel},
+    },
 };
 
 use anyhow::Context;
 use emacs::{Env, IntoLisp, Result, Value, Vector, defun, use_symbols};
 use nix::{
     poll::PollTimeout,
-    sys::{
-        eventfd::{EfdFlags, EventFd},
-        signal,
-    },
-    unistd::Pid,
+    sys::eventfd::{EfdFlags, EventFd},
 };
 use wayland_client::{Connection, Dispatch, protocol::wl_registry};
 use xkbcommon::xkb;
@@ -142,7 +142,13 @@ fn close_window<'e>(env: &'e Env, handle: &Handle, window: &RiverWindowV1) -> Re
 }
 
 #[defun(user_ptr)]
-fn start_wm(env: &Env) -> Result<Handle> {
+fn start_wm(env: &Env, pipe: Value<'_>) -> Result<Handle> {
+    let channel_fd_i32 = env.open_channel(pipe)?;
+    let channel_file = unsafe {
+        // SAFETY: I hope Emacs works correctly!
+        File::from_raw_fd(channel_fd_i32)
+    };
+
     let (tx, rx) = channel::<FromEmacs>();
     let (tx_e, rx_e) = channel::<ToEmacs>();
 
@@ -150,7 +156,7 @@ fn start_wm(env: &Env) -> Result<Handle> {
     let emacs_fd_wmside = emacs_fd.clone();
 
     std::thread::spawn(move || {
-        let result = wm_loop(rx, tx_e, emacs_fd_wmside);
+        let result = wm_loop(rx, tx_e, channel_file, emacs_fd_wmside);
         if let Err(e) = result {
             log::error!("reka window manager thread crashed: {:?}", e);
         }
@@ -286,7 +292,12 @@ fn get_next_command<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
     ().into_lisp(env)
 }
 
-fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>) -> Result<()> {
+fn wm_loop(
+    rx: Receiver<FromEmacs>,
+    tx: Sender<ToEmacs>,
+    to_emacs: File,
+    emacs_fd: Arc<EventFd>,
+) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Stderr)
         .init();
@@ -302,7 +313,8 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
         pid,
         rx,
         tx,
-        emacs_fd,
+        to_emacs,
+        from_emacs: emacs_fd,
         seat: None,
         pending_focus: None,
         frames: vec![],
@@ -332,7 +344,7 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
 
         let (emacs_ready, river_ready) = {
             let mut polls = [
-                nix::poll::PollFd::new(wm.emacs_fd.as_fd(), nix::poll::PollFlags::POLLIN),
+                nix::poll::PollFd::new(wm.from_emacs.as_fd(), nix::poll::PollFlags::POLLIN),
                 nix::poll::PollFd::new(river_fd, nix::poll::PollFlags::POLLIN),
             ];
 
@@ -367,7 +379,7 @@ fn wm_loop(rx: Receiver<FromEmacs>, tx: Sender<ToEmacs>, emacs_fd: Arc<EventFd>)
         if emacs_ready {
             log::debug!("emacs signalled available data");
             let mut buf = [0u8; 8];
-            let _ = nix::unistd::read(&wm.emacs_fd, &mut buf);
+            let _ = nix::unistd::read(&wm.from_emacs, &mut buf);
 
             let mut needs_manage = false;
             while let Ok(message) = wm.rx.try_recv() {
@@ -526,7 +538,8 @@ struct Reka {
     // Emacs-related state
     rx: Receiver<FromEmacs>,
     tx: Sender<ToEmacs>,
-    emacs_fd: Arc<EventFd>,
+    to_emacs: File,
+    from_emacs: Arc<EventFd>,
     pending_frames: usize,
 
     // river-related state
@@ -545,9 +558,9 @@ struct Reka {
 }
 
 impl Reka {
-    fn send(&self, cmd: ToEmacs) -> Result<()> {
+    fn send(&mut self, cmd: ToEmacs) -> Result<()> {
         self.tx.send(cmd)?;
-        signal::kill(Pid::this(), Some(signal::Signal::SIGUSR1))?;
+        self.to_emacs.write_all(&[1])?;
         Ok(())
     }
 

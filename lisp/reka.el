@@ -82,11 +82,9 @@
 
         (_ (error "received unknown command from reka: %s" cmd))))))
 
-(defun reka-handle-sigusr1 ()
-  (interactive)
-  (run-at-time 0 nil #'reka--handle-commands))
-
-(define-key special-event-map [sigusr1] #'reka-handle-sigusr1)
+(defun reka--handle-event (&rest _) ;; unused process filter args
+  (when reka-handle
+    (run-at-time 0 nil #'reka--handle-commands)))
 
 ;; Major mode for reka-managed buffers
 (defvar-local reka-window nil
@@ -148,10 +146,6 @@
       (setq-local reka-window window))
     (display-buffer buffer)))
 
-(defun reka--signal-wm-hook (&rest _)
-  (when reka-handle
-    (reka-handle-sigusr1)))
-
 (defvar reka--last-focused-buffer nil
   "Last buffer for which a focus request was sent.")
 
@@ -206,11 +200,13 @@ The Rust side resolves the keysyms using xkbcommon."
   (message "Launching native module ...")
   (reka--ensure-frame-names)
   (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
-  (setq reka-handle (reka-start-wm))
+  (let ((pipe (make-pipe-process :name "reka-events"
+                                 :filter #'reka--handle-event)))
+    (setq reka-handle (reka-start-wm pipe)))
   (reka-push-intercept-prefixes)
 
   ;; Layout signals
-  (add-hook 'window-configuration-change-hook #'reka--signal-wm-hook)
+  (add-hook 'window-configuration-change-hook #'reka--handle-event)
 
   ;; Focus signals
   (add-hook 'window-selection-change-functions #'reka--update-focus-request)
