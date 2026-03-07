@@ -190,12 +190,33 @@ The Rust side resolves the keysyms using xkbcommon."
   "No-op for suppressing certain focus events in advice."
   (interactive "e"))
 
+(defun reka--buffer-predicate (buffer)
+  "Buffer predicate to avoid accidentally showing the same reka buffer twice."
+  (or (not (with-current-buffer buffer (derived-mode-p 'reka-mode)))
+      (not (get-buffer-window buffer t))))
+
+(defun reka--split-window-advice (new-window)
+  "Advice window splits to always display another buffer, if a reka buffer
+was split."
+  (with-selected-window new-window
+    (with-current-buffer (window-buffer)
+      (when (derived-mode-p 'reka-mode)
+        (switch-to-buffer (other-buffer)))))
+  new-window)
+
 (defun reka-enable ()
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
   (tool-bar-mode 0)
-  (set-frame-parameter nil 'undecorated t)
-  (add-to-list 'default-frame-alist '(undecorated . t))
+
+  ;; configure this and all future frames ..
+  (let ((frame-params '((undecorated . t)
+                        (buffer-predicate . reka--buffer-predicate))))
+    (modify-all-frames-parameters frame-params)
+    (seq-each (lambda (p) (add-to-list 'default-frame-alist p)) frame-params))
+
+  (advice-add 'split-window-below :filter-return #'reka--split-window-advice)
+  (advice-add 'split-window-right :filter-return #'reka--split-window-advice)
 
   (message "Launching native module ...")
   (reka--ensure-frame-names)
