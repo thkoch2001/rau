@@ -42,6 +42,15 @@
   ;; approach here.
   "Internal lock to avoid double-processing of commands in signal handler.")
 
+(defvar-local reka-app-id nil)
+
+(defun reka--make-buffer-name (app-id title)
+  (let ((title-trunc (if (> (length title) 40)
+                         (format "%s…" (substring title 0 40))
+                       title)))
+    (if app-id (concat title-trunc " - " app-id)
+      title-trunc)))
+
 (defun reka--handle-commands ()
   (interactive)
 
@@ -68,10 +77,15 @@
                      (win (get-buffer-window buf t)))
            (select-window win 'norecord)))
 
+        (`(app-id-change ,window ,app-id)
+         (when-let* ((buf (reka--find-buffer-for-window window)))
+           (with-current-buffer buf
+             (setq reka-app-id app-id))))
+
         (`(title-change ,window ,title)
          (when-let* ((buf (reka--find-buffer-for-window window)))
            (with-current-buffer buf
-             (rename-buffer title t))))
+             (rename-buffer (reka--make-buffer-name reka-app-id title) t))))
 
         ('frame-request (make-frame))
 

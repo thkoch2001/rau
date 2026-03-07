@@ -72,6 +72,7 @@ use_symbols!(
     window_closed
     focused
     title_change
+    app_id_change
     frame_request
     discard_frame
     reka_get_window => "reka--get-window"
@@ -101,6 +102,7 @@ enum ToEmacs {
     WindowClosed(RiverWindowV1),
     Focused(RiverWindowV1),
     TitleChange(RiverWindowV1, String),
+    AppIDChange(RiverWindowV1, String),
     RequestFrame,
     DiscardFrame(String),
 }
@@ -112,6 +114,9 @@ impl<'e> IntoLisp<'e> for ToEmacs {
             ToEmacs::NewWindow(win) => env.call(cons, (new_window, RefCell::new(win))),
             ToEmacs::WindowClosed(win) => env.call(cons, (window_closed, RefCell::new(win))),
             ToEmacs::Focused(win) => env.call(cons, (focused, RefCell::new(win))),
+            ToEmacs::AppIDChange(win, app_id) => {
+                env.call(list, (app_id_change, RefCell::new(win), app_id))
+            }
             ToEmacs::TitleChange(win, title) => {
                 env.call(list, (title_change, RefCell::new(win), title))
             }
@@ -1115,29 +1120,38 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     }
                 }
             }
-            river::river_window_v1::Event::Title { title } => {
-                if let Some(s) = &title
-                    && s.starts_with("reka-frame-")
-                {
+            river::river_window_v1::Event::AppId {
+                app_id: Some(app_id),
+            } => {
+                if app_id.is_empty() {
+                    return;
+                }
+
+                state
+                    .send(ToEmacs::AppIDChange(proxy.clone(), app_id))
+                    .unwrap();
+            }
+            river::river_window_v1::Event::Title { title: Some(title) } => {
+                if title.is_empty() {
+                    return;
+                }
+
+                if title.starts_with("reka-frame-") {
                     for f in state.frames.iter_mut() {
                         if f.window.eq(proxy) {
-                            f.name = title;
+                            f.name = Some(title);
                             return;
                         }
                     }
                 }
 
-                if let Some(title) = title.as_ref()
-                    && !title.is_empty()
-                {
-                    state
-                        .send(ToEmacs::TitleChange(proxy.clone(), title.clone()))
-                        .unwrap();
-                }
+                state
+                    .send(ToEmacs::TitleChange(proxy.clone(), title.clone()))
+                    .unwrap();
 
                 for w in state.windows.iter_mut() {
                     if w.window.eq(proxy) {
-                        w.title = title;
+                        w.title = Some(title);
                         return;
                     }
                 }
