@@ -491,12 +491,26 @@ struct Output {
     fullscreen: FullscreenState,
 }
 
-#[derive(Clone)]
+impl Drop for Output {
+    fn drop(&mut self) {
+        self.output.destroy();
+        self.ls_output.destroy();
+    }
+}
+
 struct Frame {
     name: Option<String>,
     displayed_on: Option<RiverOutputV1>,
     node: river::river_node_v1::RiverNodeV1,
     window: RiverWindowV1,
+}
+
+impl Drop for Frame {
+    fn drop(&mut self) {
+        // do NOT destroy displayed_on, output drop handles this
+        self.window.destroy();
+        self.node.destroy();
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -511,10 +525,16 @@ struct Window {
     window: RiverWindowV1,
     node: river::river_node_v1::RiverNodeV1,
     title: Option<String>,
-    pid: Option<i32>,
     state: WindowState,
     params: Option<WindowParameters>,
     actual_width_height: Option<(i32, i32)>,
+}
+
+impl Drop for Window {
+    fn drop(&mut self) {
+        self.window.destroy();
+        self.node.destroy();
+    }
 }
 
 struct Seat {
@@ -522,6 +542,13 @@ struct Seat {
     #[allow(dead_code)] // TODO(tazjin): do I *need* to store this?
     ls_seat: RiverLayerShellSeatV1,
     focus: Option<RiverWindowV1>,
+}
+
+impl Drop for Seat {
+    fn drop(&mut self) {
+        self.seat.destroy();
+        self.ls_seat.destroy();
+    }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -535,6 +562,14 @@ enum BindingState {
     Requested,
     Registered(RiverXkbBindingV1),
     Enabled(RiverXkbBindingV1),
+}
+
+impl Drop for BindingState {
+    fn drop(&mut self) {
+        if let BindingState::Enabled(binding) = self {
+            binding.destroy();
+        }
+    }
 }
 
 struct Reka {
@@ -560,6 +595,29 @@ struct Reka {
     outputs: Vec<Output>,
     windows: Vec<Window>,
     prefixes: HashMap<XKBPrefix, BindingState>,
+}
+
+impl Drop for Reka {
+    fn drop(&mut self) {
+        // Destroy everything else before tearing down the WM objects.
+        self.prefixes.clear();
+        self.windows.clear();
+        self.frames.clear();
+        self.outputs.clear();
+        self.seat.take();
+
+        if let Some(bindings) = self.xkb_bindings.take() {
+            bindings.destroy();
+        }
+
+        if let Some(layer_shell) = self.layer_shell.take() {
+            layer_shell.destroy();
+        }
+
+        if let Some(wm) = self.river_wm.take() {
+            wm.destroy();
+        }
+    }
 }
 
 impl Reka {
@@ -659,7 +717,7 @@ impl Reka {
                 // TODO: the frame/window split is getting annoying ...
                 let frame = self.frames.iter().find(|f| f.window.eq(&window));
                 if frame.is_some() {
-                    self.update_active_frame(frame.cloned());
+                    self.active_frame = self.notify_active_frame(frame);
                     return;
                 }
 
@@ -672,7 +730,7 @@ impl Reka {
                     .and_then(|p| self.frame_by_name(&p.frame_name));
 
                 if frame.is_some() {
-                    self.update_active_frame(frame.cloned());
+                    self.active_frame = self.notify_active_frame(frame);
                 }
             }
         }
@@ -735,7 +793,10 @@ impl Reka {
         }
     }
 
-    fn update_active_frame(&mut self, frame: Option<Frame>) {
+    // notify_active_frame updates state information related to the new active
+    // frame (which output should layer shell surfaces show up on, and so on),
+    // but it does *not* set the active_frame field itself.
+    fn notify_active_frame(&self, frame: Option<&Frame>) -> Option<RiverWindowV1> {
         // mark output of active frame for layer-shell (surfaces pop up there by default)
         frame
             .as_ref()
@@ -743,7 +804,7 @@ impl Reka {
             .and_then(|fo| self.outputs.iter().find(|o| o.output.eq(fo)))
             .map(|output| output.ls_output.set_default());
 
-        self.active_frame = frame.map(|f| f.window.clone());
+        return frame.map(|f| f.window.clone());
     }
 }
 
@@ -913,16 +974,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             }
             river::river_window_manager_v1::Event::Window { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Window received: id={:?}", id);
-                let node = id.get_node(qhandle, ());
-                state.windows.push(Window {
-                    window: id,
-                    node,
-                    title: None,
-                    pid: None,
-                    state: WindowState::Starting,
-                    params: None,
-                    actual_width_height: None,
-                });
+                // *not* creating the window object here to avoid Drop complications
             }
         }
     }
@@ -1087,38 +1139,44 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
         event: <RiverWindowV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
-        _qh: &wayland_client::QueueHandle<Self>,
+        qhandle: &wayland_client::QueueHandle<Self>,
     ) {
         log::debug!("RiverWindowV1 event received: {:?}", event);
 
         match event {
             river::river_window_v1::Event::UnreliablePid { unreliable_pid } => {
-                if let Some(pos) = state.windows.iter().position(|w| &w.window == proxy) {
-                    state.windows[pos].pid = Some(unreliable_pid);
+                let node = proxy.get_node(qhandle, ());
 
-                    if unreliable_pid == state.pid {
-                        log::info!("discovered new Emacs frame ...");
-                        let window = state.windows.remove(pos);
-                        state.frames.push(Frame {
-                            name: None,
-                            displayed_on: None,
-                            node: window.node,
-                            window: window.window,
-                        });
+                if unreliable_pid == state.pid {
+                    log::info!("discovered new Emacs frame ...");
+                    state.frames.push(Frame {
+                        name: None,
+                        displayed_on: None,
+                        window: proxy.clone(),
+                        node,
+                    });
 
-                        if state.pending_frames > 0 {
-                            state.pending_frames -= 1;
-                        } else {
-                            // users might (accidentally?) create new frames
-                            log::warn!("new frame was not requested by WM");
-                        }
+                    if state.pending_frames > 0 {
+                        state.pending_frames -= 1;
                     } else {
-                        log::info!("discovered new window (PID: {}) ...", unreliable_pid);
-                        if let Err(err) = state.send(ToEmacs::NewWindow(proxy.clone())) {
-                            log::error!("failed to send new window command to Emacs: {}", err);
-                        }
+                        // users might (accidentally?) create new frames
+                        log::warn!("new frame was not requested by WM");
                     }
+                    return;
                 }
+
+                log::info!("discovered new window (PID: {}) ...", unreliable_pid);
+                if let Err(err) = state.send(ToEmacs::NewWindow(proxy.clone())) {
+                    log::error!("failed to send new window command to Emacs: {}", err);
+                }
+                state.windows.push(Window {
+                    window: proxy.clone(),
+                    node,
+                    title: None,
+                    state: WindowState::Starting,
+                    params: None,
+                    actual_width_height: None,
+                });
             }
             river::river_window_v1::Event::AppId {
                 app_id: Some(app_id),
@@ -1191,7 +1249,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 for (i, f) in state.frames.iter().enumerate() {
                     if f.window.eq(proxy) {
                         if state.active_frame.as_ref().is_some_and(|af| af.eq(proxy)) {
-                            state.update_active_frame(None);
+                            state.active_frame = state.notify_active_frame(None);
                         }
                         state.frames.swap_remove(i);
                         return;
