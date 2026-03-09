@@ -762,14 +762,15 @@ impl Reka {
     fn reconcile_bindings(&mut self) {
         let mut to_enable = vec![];
         {
-            for (_, v) in self.prefixes.iter_mut() {
+            for (prefix, v) in self.prefixes.iter_mut() {
                 if let BindingState::Registered(b) = v {
                     to_enable.push(b.clone());
                     *v = BindingState::Enabled(b.clone());
+                    log::info!("enabling new XKB binding (event={})", prefix.event);
                 }
             }
         };
-        log::info!("enabling {} bindings", to_enable.len());
+
         for binding in to_enable.into_iter() {
             binding.enable();
         }
