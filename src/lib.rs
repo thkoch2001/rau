@@ -1237,20 +1237,31 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     .send(ToEmacs::WindowClosed(proxy.clone()))
                     .expect("could not signal emacs"); // TODO: fix the error handling for all of these
                 if let Some(seat) = &mut state.seat {
-                    if let Some(focus) = &seat.focus {
-                        if focus.eq(proxy) {
-                            // manage sequence immediately after will recover focus
-                            seat.focus = None;
-                        }
+                    if let Some(focus) = &seat.focus
+                        && focus.eq(proxy)
+                    {
+                        // manage sequence immediately after will recover focus
+                        seat.focus = None;
                     }
                 }
 
-                {
-                    for (i, w) in state.windows.iter().enumerate() {
-                        if w.window.eq(proxy) {
-                            state.windows.swap_remove(i);
-                            return;
+                for output in state.outputs.iter_mut() {
+                    match &output.fullscreen {
+                        FullscreenState::Requested { new: win, .. }
+                        | FullscreenState::Fullscreen(win)
+                        | FullscreenState::Exiting(win)
+                            if proxy.eq(win) =>
+                        {
+                            output.fullscreen = FullscreenState::None;
                         }
+                        _ => {}
+                    }
+                }
+
+                for (i, w) in state.windows.iter().enumerate() {
+                    if w.window.eq(proxy) {
+                        state.windows.swap_remove(i);
+                        return;
                     }
                 }
 
