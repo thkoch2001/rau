@@ -204,7 +204,6 @@ fn make_window_parameters<'e>(
         h,
     };
 
-    log::debug!("created window params: {:?}", params);
     Ok(params)
 }
 
@@ -476,7 +475,10 @@ fn wm_loop(
 
 enum FullscreenState {
     None,
-    Requested(RiverWindowV1),
+    Requested {
+        new: RiverWindowV1,
+        previous: Option<RiverWindowV1>,
+    },
     Fullscreen(RiverWindowV1),
     Exiting(RiverWindowV1),
 }
@@ -779,10 +781,15 @@ impl Reka {
     fn reconcile_fullscreen(&mut self) {
         for output in self.outputs.iter_mut() {
             match &output.fullscreen {
-                FullscreenState::Requested(win) => {
-                    win.inform_fullscreen();
-                    win.fullscreen(&output.output);
-                    output.fullscreen = FullscreenState::Fullscreen(win.clone());
+                FullscreenState::Requested { new, previous } => {
+                    if let Some(previous) = previous {
+                        previous.inform_not_fullscreen();
+                        previous.exit_fullscreen();
+                    }
+
+                    new.inform_fullscreen();
+                    new.fullscreen(&output.output);
+                    output.fullscreen = FullscreenState::Fullscreen(new.clone());
                 }
                 FullscreenState::Exiting(win) => {
                     win.inform_not_fullscreen();
@@ -1016,7 +1023,7 @@ impl Dispatch<RiverOutputV1, ()> for Reka {
 
         match event {
             river::river_output_v1::Event::Removed => {
-                log::debug!("output disconnected, removing");
+                log::info!("an output was disconnected, removing");
                 let mut output_frame_name = None;
                 for frame in &mut state.frames {
                     if let Some(o) = frame.displayed_on.as_ref()
@@ -1287,29 +1294,35 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                         continue;
                     }
 
-                    if matches!(output.fullscreen, FullscreenState::None) {
-                        log::debug!("requesting fullscreen state");
-                        output.fullscreen = FullscreenState::Requested(proxy.clone());
-                    } else {
-                        log::warn!(
-                            "ignoring fullscreen request - output already has a fullscreened window!"
-                        );
-                    }
+                    let previous = match &output.fullscreen {
+                        FullscreenState::Fullscreen(window) | FullscreenState::Exiting(window) => {
+                            Some(window.clone())
+                        }
+                        _ => None,
+                    };
+
+                    log::debug!("requesting fullscreen state");
+                    output.fullscreen = FullscreenState::Requested {
+                        new: proxy.clone(),
+                        previous,
+                    };
 
                     return;
                 }
             }
+
             river::river_window_v1::Event::ExitFullscreenRequested => {
                 for output in state.outputs.iter_mut() {
                     match &output.fullscreen {
-                        FullscreenState::Requested(win) | FullscreenState::Fullscreen(win)
-                            if win.eq(proxy) =>
+                        FullscreenState::Requested { new: current, .. }
+                        | FullscreenState::Fullscreen(current)
+                            if current.eq(proxy) =>
                         {
-                            log::debug!("fullscreen exit requested");
-                            output.fullscreen = FullscreenState::Exiting(win.clone());
+                            log::debug!("exiting fullscreen as per request");
+                            output.fullscreen = FullscreenState::Exiting(current.clone());
                             return;
                         }
-                        _ => continue,
+                        _ => {}
                     };
                 }
             }
