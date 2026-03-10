@@ -226,8 +226,7 @@ was split."
   ;; configure this and all future frames ..
   (let ((frame-params '((undecorated . t)
                         (buffer-predicate . reka--buffer-predicate))))
-    (modify-all-frames-parameters frame-params)
-    (seq-each (lambda (p) (add-to-list 'default-frame-alist p)) frame-params))
+    (modify-all-frames-parameters frame-params))
 
   (advice-add 'split-window-below :filter-return #'reka--split-window-advice)
   (advice-add 'split-window-right :filter-return #'reka--split-window-advice)
