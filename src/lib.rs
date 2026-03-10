@@ -92,7 +92,7 @@ enum FromEmacs {
     FocusFrame,
     CloseWindow(RiverWindowV1),
     BufferCreated(RiverWindowV1),
-    UpdateParameters(Vec<WindowParameters>),
+    UpdateParameters(HashMap<RiverWindowV1, WindowParameters>),
 }
 
 #[derive(Debug)]
@@ -213,12 +213,13 @@ fn update_window_parameters<'e>(
     handle: &Handle,
     per_frame: Vector<'e>,
 ) -> Result<Value<'e>> {
-    let mut new_params: Vec<WindowParameters> = Vec::new();
+    let mut new_params = HashMap::new();
     for elem in per_frame.into_iter() {
         let params: Vector<'e> = elem.into_rust()?;
         for p in params.into_iter() {
             let wp: &RefCell<WindowParameters> = p.into_rust()?;
-            new_params.push(wp.borrow().clone());
+            let params = wp.borrow().clone();
+            new_params.insert(params.window.clone(), params);
         }
     }
 
@@ -321,9 +322,9 @@ fn wm_loop(
         from_emacs: emacs_fd,
         seat: None,
         pending_focus: None,
-        frames: vec![],
-        outputs: vec![],
-        windows: vec![],
+        frames: HashMap::new(),
+        outputs: HashMap::new(),
+        windows: HashMap::new(),
         river_wm: None,
         xkb_bindings: None,
         layer_shell: None,
@@ -404,26 +405,20 @@ fn wm_loop(
                         wm.pending_focus = wm.active_frame.clone();
                     }
                     FromEmacs::CloseWindow(window) => {
-                        for w in wm.windows.iter_mut() {
-                            if window.eq(&w.window) {
-                                w.state = WindowState::Killed;
-                                needs_manage = true;
-                                break;
-                            }
+                        if let Some(w) = wm.windows.get_mut(&window) {
+                            w.state = WindowState::Killed;
+                            needs_manage = true;
                         }
                     }
                     FromEmacs::BufferCreated(window) => {
-                        for w in wm.windows.iter_mut() {
-                            if window.eq(&w.window) {
-                                needs_manage = true;
-                                w.state = WindowState::Active;
-                            }
+                        if let Some(w) = wm.windows.get_mut(&window) {
+                            needs_manage = true;
+                            w.state = WindowState::Active;
                         }
                     }
-                    FromEmacs::UpdateParameters(new_params) => {
-                        for w in wm.windows.iter_mut() {
-                            let result =
-                                new_params.iter().find(|p| p.window.eq(&w.window)).cloned();
+                    FromEmacs::UpdateParameters(mut new_params) => {
+                        for (proxy, w) in wm.windows.iter_mut() {
+                            let result = new_params.remove(proxy);
                             if w.params != result {
                                 w.params = result;
                                 needs_manage = true;
@@ -451,7 +446,7 @@ fn wm_loop(
 
             if !register_prefixes.is_empty() && wm.xkb_bindings.is_some() && wm.seat.is_some() {
                 let xkb = wm.xkb_bindings.as_ref().unwrap();
-                let seat = wm.seat.as_ref().unwrap().seat.clone();
+                let seat = wm.seat.as_ref().unwrap().proxy.clone();
                 let mut bindings = vec![];
 
                 for p in &register_prefixes {
@@ -484,7 +479,7 @@ enum FullscreenState {
 }
 
 struct Output {
-    output: RiverOutputV1,
+    proxy: RiverOutputV1,
     ls_output: RiverLayerShellOutputV1,
     x: i32,
     y: i32,
@@ -495,7 +490,7 @@ struct Output {
 
 impl Drop for Output {
     fn drop(&mut self) {
-        self.output.destroy();
+        self.proxy.destroy();
         self.ls_output.destroy();
     }
 }
@@ -504,13 +499,13 @@ struct Frame {
     name: Option<String>,
     displayed_on: Option<RiverOutputV1>,
     node: river::river_node_v1::RiverNodeV1,
-    window: RiverWindowV1,
+    proxy: RiverWindowV1,
 }
 
 impl Drop for Frame {
     fn drop(&mut self) {
         // do NOT destroy displayed_on, output drop handles this
-        self.window.destroy();
+        self.proxy.destroy();
         self.node.destroy();
     }
 }
@@ -524,7 +519,7 @@ enum WindowState {
 
 #[derive(Debug)]
 struct Window {
-    window: RiverWindowV1,
+    proxy: RiverWindowV1,
     node: river::river_node_v1::RiverNodeV1,
     title: Option<String>,
     state: WindowState,
@@ -534,13 +529,13 @@ struct Window {
 
 impl Drop for Window {
     fn drop(&mut self) {
-        self.window.destroy();
+        self.proxy.destroy();
         self.node.destroy();
     }
 }
 
 struct Seat {
-    seat: river::river_seat_v1::RiverSeatV1,
+    proxy: river::river_seat_v1::RiverSeatV1,
     #[allow(dead_code)] // TODO(tazjin): do I *need* to store this?
     ls_seat: RiverLayerShellSeatV1,
     focus: Option<RiverWindowV1>,
@@ -548,7 +543,7 @@ struct Seat {
 
 impl Drop for Seat {
     fn drop(&mut self) {
-        self.seat.destroy();
+        self.proxy.destroy();
         self.ls_seat.destroy();
     }
 }
@@ -593,9 +588,9 @@ struct Reka {
     pending_focus: Option<RiverWindowV1>,
     active_frame: Option<RiverWindowV1>,
 
-    frames: Vec<Frame>,
-    outputs: Vec<Output>,
-    windows: Vec<Window>,
+    frames: HashMap<RiverWindowV1, Frame>,
+    outputs: HashMap<RiverOutputV1, Output>,
+    windows: HashMap<RiverWindowV1, Window>,
     prefixes: HashMap<XKBPrefix, BindingState>,
 }
 
@@ -632,41 +627,39 @@ impl Reka {
     fn frame_by_output(&self, output: &RiverOutputV1) -> Option<&Frame> {
         self.frames
             .iter()
-            .find(|f| f.displayed_on.is_some() && f.displayed_on.as_ref().unwrap().eq(output))
+            .find(|(_, f)| f.displayed_on.as_ref() == Some(output))
+            .map(|x| x.1)
     }
 
     fn frame_by_name(&self, name: &str) -> Option<&Frame> {
         self.frames
             .iter()
-            .find(|f| f.name.is_some() && f.name.as_ref().unwrap().eq(name))
-    }
-
-    fn window_by_proxy(&self, proxy: &RiverWindowV1) -> Option<&Window> {
-        self.windows.iter().find(|w| proxy.eq(&w.window))
+            .find(|(_, f)| f.name.as_deref() == Some(name))
+            .map(|x| x.1)
     }
 
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
         let mut frame_requests: usize = 0;
 
-        'outputs: for output in &self.outputs {
-            if let Some(f) = self.frame_by_output(&output.output) {
-                f.window.propose_dimensions(output.width, output.height);
+        'outputs: for (output_proxy, output) in &self.outputs {
+            if let Some(f) = self.frame_by_output(output_proxy) {
+                f.proxy.propose_dimensions(output.width, output.height);
                 continue;
             }
 
             // try to find an existing frame that is minimised and reuse it
-            'frames: for f in &mut self.frames {
+            for f in self.frames.values_mut() {
                 if f.displayed_on.is_some() {
-                    continue 'frames;
+                    continue;
                 }
 
-                f.displayed_on = Some(output.output.clone());
+                f.displayed_on = Some(output_proxy.clone());
 
                 // always propose dimensions to keep frame sized to output
-                f.window.propose_dimensions(output.width, output.height);
-                f.window.inform_maximized();
-                f.window.set_tiled(Edges::all());
+                f.proxy.propose_dimensions(output.width, output.height);
+                f.proxy.inform_maximized();
+                f.proxy.set_tiled(Edges::all());
                 continue 'outputs;
             }
 
@@ -706,20 +699,19 @@ impl Reka {
                 self.pending_focus = self
                     .frames
                     .iter()
-                    .find(|f| f.displayed_on.is_some())
-                    .map(|f| f.window.clone());
+                    .find(|(_, f)| f.displayed_on.is_some())
+                    .map(|(proxy, _)| proxy.clone());
             }
         }
 
         if let Some(window) = self.pending_focus.take() {
             if seat.focus.as_ref().map_or(true, |f| !f.eq(&window)) {
                 seat.focus = Some(window.clone());
-                seat.seat.focus_window(&window);
+                seat.proxy.focus_window(&window);
 
                 // TODO: the frame/window split is getting annoying ...
-                let frame = self.frames.iter().find(|f| f.window.eq(&window));
-                if frame.is_some() {
-                    self.active_frame = self.notify_active_frame(frame);
+                if let Some(frame) = self.frames.get(&window) {
+                    self.active_frame = self.notify_active_frame(Some(frame));
                     return;
                 }
 
@@ -727,7 +719,8 @@ impl Reka {
                     .expect("sending failed");
 
                 let frame = self
-                    .window_by_proxy(&window)
+                    .windows
+                    .get(&window)
                     .and_then(|w| w.params.as_ref())
                     .and_then(|p| self.frame_by_name(&p.frame_name));
 
@@ -740,19 +733,19 @@ impl Reka {
 
     // reconcile_windows closes killed windows and removes them from the list
     fn reconcile_windows(&mut self) {
-        for w in self.windows.iter() {
+        for (proxy, w) in self.windows.iter() {
             match &w.state {
                 WindowState::Killed => {
                     log::info!("requesting window closure");
-                    w.window.close();
+                    proxy.close();
                 }
                 WindowState::Starting => {
                     log::info!("ignoring starting window");
                 }
                 WindowState::Active => {
                     if let Some(params) = &w.params {
-                        w.window.set_tiled(Edges::all());
-                        w.window.propose_dimensions(params.w, params.h);
+                        proxy.set_tiled(Edges::all());
+                        proxy.propose_dimensions(params.w, params.h);
                     }
                 }
             }
@@ -779,7 +772,7 @@ impl Reka {
     }
 
     fn reconcile_fullscreen(&mut self) {
-        for output in self.outputs.iter_mut() {
+        for output in self.outputs.values_mut() {
             match &output.fullscreen {
                 FullscreenState::Requested { new, previous } => {
                     if let Some(previous) = previous {
@@ -788,7 +781,7 @@ impl Reka {
                     }
 
                     new.inform_fullscreen();
-                    new.fullscreen(&output.output);
+                    new.fullscreen(&output.proxy);
                     output.fullscreen = FullscreenState::Fullscreen(new.clone());
                 }
                 FullscreenState::Exiting(win) => {
@@ -807,12 +800,11 @@ impl Reka {
     fn notify_active_frame(&self, frame: Option<&Frame>) -> Option<RiverWindowV1> {
         // mark output of active frame for layer-shell (surfaces pop up there by default)
         frame
-            .as_ref()
             .and_then(|f| f.displayed_on.as_ref())
-            .and_then(|fo| self.outputs.iter().find(|o| o.output.eq(fo)))
+            .and_then(|fo| self.outputs.get(fo))
             .map(|output| output.ls_output.set_default());
 
-        return frame.map(|f| f.window.clone());
+        return frame.map(|f| f.proxy.clone());
     }
 }
 
@@ -873,24 +865,22 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             // render sequence: positions, z-order, borders, visibility (?), clipping
             river::river_window_manager_v1::Event::RenderStart => {
                 // reconcile frame display state
-                for frame in state.frames.iter() {
+                for (frame_proxy, frame) in state.frames.iter() {
                     match frame.displayed_on.as_ref() {
-                        None => frame.window.hide(),
+                        None => frame_proxy.hide(),
                         Some(output_proxy) => {
-                            frame.window.show();
+                            frame_proxy.show();
                             frame.node.place_bottom();
 
                             // position frame at its output's origin
-                            if let Some(output) =
-                                state.outputs.iter().find(|o| &o.output == output_proxy)
-                            {
+                            if let Some(output) = state.outputs.get(output_proxy) {
                                 frame.node.set_position(output.x, output.y);
                             }
                         }
                     }
                 }
 
-                for window in state.windows.iter() {
+                for (win_proxy, window) in state.windows.iter() {
                     if let WindowState::Active = window.state {
                         if let Some(params) = &window.params {
                             // look up frame-relative output coordinates, but
@@ -899,11 +889,11 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                             // on them have remaining alive window parameters)
                             let output = state
                                 .frame_by_name(&params.frame_name)
-                                .and_then(|f| f.displayed_on.clone())
-                                .and_then(|op| state.outputs.iter().find(|o| o.output == op));
+                                .and_then(|f| f.displayed_on.as_ref())
+                                .and_then(|op| state.outputs.get(op));
 
                             if let Some(output) = output {
-                                window.window.show();
+                                win_proxy.show();
                                 window
                                     .node
                                     .set_position(params.x + output.x, params.y + output.y);
@@ -912,12 +902,12 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                                 // clip to actual content size, to get rid of unwanted decorations
                                 let (clip_w, clip_h) =
                                     window.actual_width_height.unwrap_or((params.w, params.h));
-                                window.window.set_clip_box(0, 0, clip_w, clip_h);
+                                win_proxy.set_clip_box(0, 0, clip_w, clip_h);
                             } else {
-                                window.window.hide();
+                                win_proxy.hide();
                             }
                         } else {
-                            window.window.hide();
+                            win_proxy.hide();
                         }
                     }
                 }
@@ -933,15 +923,18 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     .expect("layer shell not registered")
                     .get_output(&id, &qhandle, ());
 
-                state.outputs.push(Output {
-                    output: id,
-                    ls_output,
-                    x: 0,
-                    y: 0,
-                    width: 0,
-                    height: 0,
-                    fullscreen: FullscreenState::None,
-                });
+                state.outputs.insert(
+                    id.clone(),
+                    Output {
+                        proxy: id,
+                        ls_output,
+                        x: 0,
+                        y: 0,
+                        width: 0,
+                        height: 0,
+                        fullscreen: FullscreenState::None,
+                    },
+                );
             }
 
             river::river_window_manager_v1::Event::Seat { id } => {
@@ -953,7 +946,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     .get_seat(&id, qhandle, ());
                 if state.seat.is_none() {
                     state.seat = Some(Seat {
-                        seat: id,
+                        proxy: id,
                         ls_seat,
                         focus: None,
                     });
@@ -1024,45 +1017,33 @@ impl Dispatch<RiverOutputV1, ()> for Reka {
         match event {
             river::river_output_v1::Event::Removed => {
                 log::info!("an output was disconnected, removing");
-                let mut output_frame_name = None;
-                for frame in &mut state.frames {
-                    if let Some(o) = frame.displayed_on.as_ref()
-                        && o.eq(proxy)
-                    {
-                        output_frame_name = frame.name.take();
-                        break;
-                    }
-                }
+                let Some(output) = state.outputs.remove(proxy) else {
+                    log::warn!("unknown output disconnected");
+                    return;
+                };
 
-                if let Some(name) = output_frame_name {
-                    state.send(ToEmacs::DiscardFrame(name)).ok();
-                }
+                let Some(frame_name) = state
+                    .frame_by_output(&output.proxy)
+                    .and_then(|f| f.name.clone())
+                else {
+                    log::warn!("disconnected output had no frame");
+                    return;
+                };
 
-                for (idx, output) in state.outputs.iter().enumerate() {
-                    if &output.output == proxy {
-                        state.outputs.remove(idx);
-                        break;
-                    }
-                }
+                state.send(ToEmacs::DiscardFrame(frame_name)).ok();
             }
             river::river_output_v1::Event::Position { x, y } => {
                 log::debug!("output position: x={}, y={}", x, y);
-                for output in state.outputs.iter_mut() {
-                    if &output.output == proxy {
-                        output.x = x;
-                        output.y = y;
-                        break;
-                    }
+                if let Some(output) = state.outputs.get_mut(proxy) {
+                    output.x = x;
+                    output.y = y;
                 }
             }
             river::river_output_v1::Event::Dimensions { width, height } => {
                 log::debug!("output dimensions: {}x{}", width, height);
-                for output in state.outputs.iter_mut() {
-                    if &output.output == proxy {
-                        output.width = width;
-                        output.height = height;
-                        break;
-                    }
+                if let Some(output) = state.outputs.get_mut(proxy) {
+                    output.width = width;
+                    output.height = height;
                 }
             }
             _ => {}
@@ -1086,14 +1067,21 @@ impl Dispatch<RiverLayerShellOutputV1, ()> for Reka {
                 width,
                 height,
             } => {
-                for output in state.outputs.iter_mut() {
-                    if output.ls_output.eq(proxy) {
-                        output.x = x;
-                        output.y = y;
-                        output.width = width;
-                        output.height = height;
-                        break;
-                    }
+                let Some(output_proxy) = state
+                    .outputs
+                    .iter()
+                    .find(|(_, o)| o.ls_output.eq(proxy))
+                    .map(|(p, _)| p.clone())
+                else {
+                    log::warn!("could not find matching output for layer-shell output");
+                    return;
+                };
+
+                if let Some(output) = state.outputs.get_mut(&output_proxy) {
+                    output.x = x;
+                    output.y = y;
+                    output.width = width;
+                    output.height = height;
                 }
             }
         }
@@ -1157,12 +1145,15 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
 
                 if unreliable_pid == state.pid {
                     log::info!("discovered new Emacs frame ...");
-                    state.frames.push(Frame {
-                        name: None,
-                        displayed_on: None,
-                        window: proxy.clone(),
-                        node,
-                    });
+                    state.frames.insert(
+                        proxy.clone(),
+                        Frame {
+                            name: None,
+                            displayed_on: None,
+                            proxy: proxy.clone(),
+                            node,
+                        },
+                    );
 
                     if state.pending_frames > 0 {
                         state.pending_frames -= 1;
@@ -1177,14 +1168,17 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 if let Err(err) = state.send(ToEmacs::NewWindow(proxy.clone())) {
                     log::error!("failed to send new window command to Emacs: {}", err);
                 }
-                state.windows.push(Window {
-                    window: proxy.clone(),
-                    node,
-                    title: None,
-                    state: WindowState::Starting,
-                    params: None,
-                    actual_width_height: None,
-                });
+                state.windows.insert(
+                    proxy.clone(),
+                    Window {
+                        proxy: proxy.clone(),
+                        node,
+                        title: None,
+                        state: WindowState::Starting,
+                        params: None,
+                        actual_width_height: None,
+                    },
+                );
             }
             river::river_window_v1::Event::AppId {
                 app_id: Some(app_id),
@@ -1203,11 +1197,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 }
 
                 if title.starts_with("reka-frame-") {
-                    for f in state.frames.iter_mut() {
-                        if f.window.eq(proxy) {
-                            f.name = Some(title);
-                            return;
-                        }
+                    if let Some(f) = state.frames.get_mut(proxy) {
+                        f.name = Some(title);
+                        return;
                     }
                 }
 
@@ -1215,21 +1207,16 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     .send(ToEmacs::TitleChange(proxy.clone(), title.clone()))
                     .unwrap();
 
-                for w in state.windows.iter_mut() {
-                    if w.window.eq(proxy) {
-                        w.title = Some(title);
-                        return;
-                    }
+                if let Some(w) = state.windows.get_mut(proxy) {
+                    w.title = Some(title);
+                    return;
                 }
 
                 log::warn!("received title for unknown window, orphan frame?");
             }
             river::river_window_v1::Event::Dimensions { width, height } => {
-                for w in state.windows.iter_mut() {
-                    if w.window.eq(proxy) {
-                        w.actual_width_height = Some((width, height));
-                        return;
-                    }
+                if let Some(w) = state.windows.get_mut(proxy) {
+                    w.actual_width_height = Some((width, height));
                 }
             }
             river::river_window_v1::Event::Closed => {
@@ -1245,7 +1232,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     }
                 }
 
-                for output in state.outputs.iter_mut() {
+                for output in state.outputs.values_mut() {
                     match &output.fullscreen {
                         FullscreenState::Requested { new: win, .. }
                         | FullscreenState::Fullscreen(win)
@@ -1258,21 +1245,15 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     }
                 }
 
-                for (i, w) in state.windows.iter().enumerate() {
-                    if w.window.eq(proxy) {
-                        state.windows.swap_remove(i);
-                        return;
-                    }
+                if state.windows.remove(proxy).is_some() {
+                    return;
                 }
 
-                for (i, f) in state.frames.iter().enumerate() {
-                    if f.window.eq(proxy) {
-                        if state.active_frame.as_ref().is_some_and(|af| af.eq(proxy)) {
-                            state.active_frame = state.notify_active_frame(None);
-                        }
-                        state.frames.swap_remove(i);
-                        return;
+                if state.frames.contains_key(proxy) {
+                    if state.active_frame.as_ref().is_some_and(|af| af.eq(proxy)) {
+                        state.active_frame = state.notify_active_frame(None);
                     }
+                    state.frames.remove(proxy);
                 }
             }
             river::river_window_v1::Event::FullscreenRequested { output: target } => {
@@ -1282,8 +1263,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 // 3. the active output
                 let potential_target = target
                     .or_else(|| {
-                        state // where is this window?
-                            .window_by_proxy(proxy)
+                        state
+                            .windows
+                            .get(proxy)
                             .and_then(|w| w.params.as_ref())
                             .and_then(|p| state.frame_by_name(&p.frame_name))
                             .and_then(|f| f.displayed_on.clone())
@@ -1292,7 +1274,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                         state
                             .active_frame
                             .as_ref()
-                            .and_then(|fw| state.frames.iter().find(|f| f.window.eq(fw)))
+                            .and_then(|fw| state.frames.get(fw))
                             .and_then(|f| f.displayed_on.clone())
                     });
                 let Some(target) = potential_target else {
@@ -1300,11 +1282,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     return;
                 };
 
-                for output in state.outputs.iter_mut() {
-                    if !output.output.eq(&target) {
-                        continue;
-                    }
-
+                if let Some(output) = state.outputs.get_mut(&target) {
                     let previous = match &output.fullscreen {
                         FullscreenState::Fullscreen(window) | FullscreenState::Exiting(window) => {
                             Some(window.clone())
@@ -1317,13 +1295,11 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                         new: proxy.clone(),
                         previous,
                     };
-
-                    return;
                 }
             }
 
             river::river_window_v1::Event::ExitFullscreenRequested => {
-                for output in state.outputs.iter_mut() {
+                for output in state.outputs.values_mut() {
                     match &output.fullscreen {
                         FullscreenState::Requested { new: current, .. }
                         | FullscreenState::Fullscreen(current)
@@ -1389,7 +1365,7 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
                     state.pending_focus = state
                         .active_frame
                         .clone()
-                        .or_else(|| state.frames.first().map(|f| f.window.clone()));
+                        .or_else(|| state.frames.keys().next().cloned());
                     break;
                 }
             }
