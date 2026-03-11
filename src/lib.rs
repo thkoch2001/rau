@@ -681,53 +681,41 @@ impl Reka {
     // reconcile_focus updates the seat's focus based on pending_focus (set by
     // events)
     fn reconcile_focus(&mut self) {
-        let seat = match &mut self.seat {
-            Some(s) => s,
-            None => {
-                log::warn!("no seat present, something might have gone wrong");
-                return;
-            }
+        let Some(seat) = &mut self.seat else {
+            log::warn!("no seat present, something might have gone wrong");
+            return;
         };
 
-        // There might be no focus if the session is new, or a window was closed
-        if seat.focus.is_none() && self.pending_focus.is_none() {
-            log::debug!("recovering focus");
-            if self.active_frame.is_some() {
-                self.pending_focus = self.active_frame.clone()
-            } else {
-                // pick any displayed frame, we don't know which one is active ...
-                self.pending_focus = self
-                    .frames
-                    .iter()
-                    .find(|(_, f)| f.displayed_on.is_some())
-                    .map(|(proxy, _)| proxy.clone());
-            }
+        // we have focus, and no update needed -> do nothing
+        if seat.focus.is_some()
+            && (self.pending_focus.is_none() || seat.focus.as_ref() == self.pending_focus.as_ref())
+        {
+            return;
         }
 
-        if let Some(window) = self.pending_focus.take() {
-            if seat.focus.as_ref().map_or(true, |f| !f.eq(&window)) {
-                seat.focus = Some(window.clone());
-                seat.proxy.focus_window(&window);
+        let Some(target) = self
+            .pending_focus
+            .take()
+            // avoid stale window references (e.g. on window close/output disconnect)
+            .filter(|w| self.windows.contains_key(w) || self.frames.contains_key(w))
+            .or_else(|| self.active_frame.clone())
+            .or_else(|| {
+                // pick any displayed frame, we don't know which one is active ...
+                self.frames
+                    .iter()
+                    .find(|(_, f)| f.displayed_on.is_some())
+                    .map(|(proxy, _)| proxy.clone())
+            })
+        else {
+            log::error!("no frames are being displayed! can not focus");
+            return;
+        };
 
-                // TODO: the frame/window split is getting annoying ...
-                if let Some(frame) = self.frames.get(&window) {
-                    self.active_frame = self.notify_active_frame(Some(frame));
-                    return;
-                }
+        seat.proxy.focus_window(&target);
+        seat.focus = Some(target.clone());
 
-                self.send(ToEmacs::Focused(window.clone()))
-                    .expect("sending failed");
-
-                let frame = self
-                    .windows
-                    .get(&window)
-                    .and_then(|w| w.params.as_ref())
-                    .and_then(|p| self.frame_by_name(&p.frame_name));
-
-                if frame.is_some() {
-                    self.active_frame = self.notify_active_frame(frame);
-                }
-            }
+        if !self.update_active_frame(&target) {
+            self.send(ToEmacs::Focused(target)).expect("sending failed");
         }
     }
 
@@ -794,17 +782,32 @@ impl Reka {
         }
     }
 
-    // notify_active_frame updates state information related to the new active
-    // frame (which output should layer shell surfaces show up on, and so on),
-    // but it does *not* set the active_frame field itself.
-    fn notify_active_frame(&self, frame: Option<&Frame>) -> Option<RiverWindowV1> {
+    // update_active_frame updates state information related to the new active
+    // frame (which output should layer shell surfaces show up on, and so on).
+    // Returns whether the frame itself is focused.
+    fn update_active_frame(&mut self, focus: &RiverWindowV1) -> bool {
+        let mut frame_focused = false;
+        if let Some(frame) = self.frames.get(focus) {
+            self.active_frame = Some(frame.proxy.clone());
+            frame_focused = true;
+        } else {
+            self.active_frame = self
+                .windows
+                .get(focus)
+                .and_then(|w| w.params.as_ref())
+                .and_then(|p| self.frame_by_name(&p.frame_name))
+                .map(|f| f.proxy.clone());
+        }
+
         // mark output of active frame for layer-shell (surfaces pop up there by default)
-        frame
+        self.active_frame
+            .as_ref()
+            .and_then(|f| self.frames.get(f))
             .and_then(|f| f.displayed_on.as_ref())
             .and_then(|fo| self.outputs.get(fo))
             .map(|output| output.ls_output.set_default());
 
-        return frame.map(|f| f.proxy.clone());
+        frame_focused
     }
 }
 
