@@ -5,8 +5,6 @@
 (require 'cl-lib)
 (require 'seq)
 
-(setq debug-on-error t) ;; TODO
-
 (defgroup reka nil
   "Reka - Emacs swimming in the river"
   :group 'environment
