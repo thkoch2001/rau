@@ -91,7 +91,7 @@
 
         (`(discard-frame . ,frame-name)
          (when-let* ((frame-names (make-frame-names-alist))
-                     (frame (alist-get frame-name frame-names)))
+                     (frame (alist-get frame-name frame-names nil nil #'equal)))
            (delete-frame frame)))
 
         (_ (error "received unknown command from reka: %s" cmd))))))
