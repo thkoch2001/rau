@@ -1249,12 +1249,15 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     return;
                 }
 
-                if state.frames.contains_key(proxy) {
+                if state.frames.remove(proxy).is_some() {
                     if state.active_frame.as_ref().is_some_and(|af| af.eq(proxy)) {
-                        state.active_frame = state.notify_active_frame(None);
+                        state.active_frame = None;
+                        state.seat.as_mut().and_then(|s| s.focus.take());
                     }
-                    state.frames.remove(proxy);
+                    return;
                 }
+
+                log::warn!("unknown window closed; reka bug?");
             }
             river::river_window_v1::Event::FullscreenRequested { output: target } => {
                 // one of the denser pieces of logic here ... figure out which output to fullscreen on:
