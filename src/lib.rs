@@ -1,23 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    fs::File,
-    io::Write,
-    os::fd::{AsFd, FromRawFd},
-    sync::{
-        Arc,
-        mpsc::{Receiver, Sender, channel},
-    },
-};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
+use std::os::fd::{AsFd, FromRawFd};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use anyhow::Context;
 use emacs::{Env, IntoLisp, Result, Value, Vector, defun, use_symbols};
-use nix::{
-    poll::PollTimeout,
-    sys::eventfd::{EfdFlags, EventFd},
-};
+use nix::poll::PollTimeout;
+use nix::sys::eventfd::{EfdFlags, EventFd};
 use wayland_client::{Connection, Dispatch, protocol::wl_registry};
 use xkbcommon::xkb;
 
@@ -401,87 +395,7 @@ fn wm_loop(
         };
 
         if emacs_ready {
-            log::debug!("emacs signalled available data");
-            let mut buf = [0u8; 8];
-            let _ = nix::unistd::read(&wm.from_emacs, &mut buf);
-
-            let mut needs_manage = false;
-            while let Ok(message) = wm.rx.try_recv() {
-                log::debug!("message from emacs: {:?}", message);
-                match message {
-                    FromEmacs::RegisterPrefix(prefix) => {
-                        needs_manage = true;
-                        if !wm.prefixes.contains_key(&prefix) {
-                            wm.prefixes.insert(prefix, BindingState::Requested);
-                        }
-                    }
-                    FromEmacs::FocusWindow(window) => {
-                        needs_manage = true;
-                        let Some(frame) = wm.displaying_frame(&window) else {
-                            log::error!("can not focus window that is not displayed!");
-                            continue;
-                        };
-                        wm.focus.focus_window(window, frame.proxy.clone());
-                    }
-                    FromEmacs::FocusFrame => {
-                        // TODO: explicit selection?
-                        needs_manage = true;
-                        wm.focus.switch_to_frame();
-                    }
-                    FromEmacs::CloseWindow(window) => {
-                        if let Some(w) = wm.windows.get_mut(&window) {
-                            w.state = WindowState::Killed;
-                            needs_manage = true;
-                        }
-                    }
-                    FromEmacs::BufferCreated(window) => {
-                        if let Some(w) = wm.windows.get_mut(&window) {
-                            needs_manage = true;
-                            w.state = WindowState::Active;
-                        }
-                    }
-                    FromEmacs::UpdateParameters(mut new_params) => {
-                        for (proxy, w) in wm.windows.iter_mut() {
-                            let result = new_params.remove(proxy);
-                            if w.params != result {
-                                w.params = result;
-                                needs_manage = true;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // All commands from Emacs need a manage sequence.
-            if let Some(river_wm) = &wm.river_wm
-                && needs_manage
-            {
-                river_wm.manage_dirty();
-            }
-
-            let register_prefixes = wm
-                .prefixes
-                .iter()
-                .filter_map(|(k, v)| match v {
-                    BindingState::Requested => Some(*k),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-
-            if !register_prefixes.is_empty() && wm.xkb_bindings.is_some() && wm.seat.is_some() {
-                let xkb = wm.xkb_bindings.as_ref().unwrap();
-                let seat = wm.seat.as_ref().unwrap().proxy.clone();
-                let mut bindings = vec![];
-
-                for p in &register_prefixes {
-                    let b = xkb.get_xkb_binding(&seat, p.keysym, p.modifiers, &qh, ());
-                    bindings.push(b);
-                }
-
-                for (p, b) in register_prefixes.into_iter().zip(bindings.into_iter()) {
-                    wm.prefixes.insert(p, BindingState::Registered(b));
-                }
-            }
+            wm.handle_emacs(&qh);
         }
 
         if river_ready {
@@ -607,10 +521,6 @@ struct Focus {
 }
 
 impl Focus {
-    fn transition(&mut self, new_state: FocusState) {
-        self.state = new_state;
-    }
-
     fn mark_dirty(&mut self) {
         self.dirty = true;
     }
@@ -635,21 +545,21 @@ impl Focus {
     fn invalidate(&mut self, target: &RiverWindowV1) {
         match &self.state {
             FocusState::Frame(w) | FocusState::Window { on_frame: w, .. } if w.eq(target) => {
-                self.transition(FocusState::Lost);
+                self.state = FocusState::Lost;
             }
             FocusState::Window { window, on_frame } if window.eq(target) => {
-                self.transition(FocusState::Frame(on_frame.clone()));
+                self.state = FocusState::Frame(on_frame.clone());
             }
             _ => {}
         }
     }
 
     fn focus_window(&mut self, window: RiverWindowV1, on_frame: RiverWindowV1) {
-        self.transition(FocusState::Window { window, on_frame });
+        self.state = FocusState::Window { window, on_frame };
     }
 
     fn focus_frame(&mut self, frame: RiverWindowV1) {
-        self.transition(FocusState::Frame(frame));
+        self.state = FocusState::Frame(frame);
     }
 
     fn switch_to_frame(&mut self) {
@@ -878,6 +788,90 @@ impl Reka {
                     output.fullscreen = FullscreenState::None;
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn handle_emacs(&mut self, qh: &wayland_client::QueueHandle<Self>) {
+        log::debug!("emacs signalled available data");
+        let mut buf = [0u8; 8];
+        let _ = nix::unistd::read(&self.from_emacs, &mut buf);
+
+        let mut needs_manage = false;
+        while let Ok(message) = self.rx.try_recv() {
+            log::debug!("message from emacs: {:?}", message);
+            match message {
+                FromEmacs::RegisterPrefix(prefix) => {
+                    needs_manage = true;
+                    if !self.prefixes.contains_key(&prefix) {
+                        self.prefixes.insert(prefix, BindingState::Requested);
+                    }
+                }
+                FromEmacs::FocusWindow(window) => {
+                    needs_manage = true;
+                    let Some(frame) = self.displaying_frame(&window) else {
+                        log::error!("can not focus window that is not displayed!");
+                        continue;
+                    };
+                    self.focus.focus_window(window, frame.proxy.clone());
+                }
+                FromEmacs::FocusFrame => {
+                    // TODO: explicit selection?
+                    needs_manage = true;
+                    self.focus.switch_to_frame();
+                }
+                FromEmacs::CloseWindow(window) => {
+                    if let Some(w) = self.windows.get_mut(&window) {
+                        w.state = WindowState::Killed;
+                        needs_manage = true;
+                    }
+                }
+                FromEmacs::BufferCreated(window) => {
+                    if let Some(w) = self.windows.get_mut(&window) {
+                        needs_manage = true;
+                        w.state = WindowState::Active;
+                    }
+                }
+                FromEmacs::UpdateParameters(mut new_params) => {
+                    for (proxy, w) in self.windows.iter_mut() {
+                        let result = new_params.remove(proxy);
+                        if w.params != result {
+                            w.params = result;
+                            needs_manage = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // All commands from Emacs need a manage sequence.
+        if let Some(river_wm) = &self.river_wm
+            && needs_manage
+        {
+            river_wm.manage_dirty();
+        }
+
+        let register_prefixes = self
+            .prefixes
+            .iter()
+            .filter_map(|(k, v)| match v {
+                BindingState::Requested => Some(*k),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        if !register_prefixes.is_empty() && self.xkb_bindings.is_some() && self.seat.is_some() {
+            let xkb = self.xkb_bindings.as_ref().unwrap();
+            let seat = self.seat.as_ref().unwrap().proxy.clone();
+            let mut bindings = vec![];
+
+            for p in &register_prefixes {
+                let b = xkb.get_xkb_binding(&seat, p.keysym, p.modifiers, &qh, ());
+                bindings.push(b);
+            }
+
+            for (p, b) in register_prefixes.into_iter().zip(bindings.into_iter()) {
+                self.prefixes.insert(p, BindingState::Registered(b));
             }
         }
     }
