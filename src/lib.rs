@@ -321,7 +321,10 @@ fn wm_loop(
         to_emacs,
         from_emacs: emacs_fd,
         seat: None,
-        pending_focus: None,
+        focus: Focus {
+            dirty: false,
+            state: FocusState::Lost,
+        },
         frames: HashMap::new(),
         outputs: HashMap::new(),
         windows: HashMap::new(),
@@ -329,7 +332,6 @@ fn wm_loop(
         xkb_bindings: None,
         layer_shell: None,
         prefixes: Default::default(),
-        active_frame: None,
         pending_frames: 0,
     };
     let _registry = display.get_registry(&qh, ());
@@ -398,11 +400,16 @@ fn wm_loop(
                     }
                     FromEmacs::FocusWindow(window) => {
                         needs_manage = true;
-                        wm.pending_focus = Some(window);
+                        let Some(frame) = wm.displaying_frame(&window) else {
+                            log::error!("can not focus window that is not displayed!");
+                            continue;
+                        };
+                        wm.focus.focus_window(window, frame.proxy.clone());
                     }
                     FromEmacs::FocusFrame => {
+                        // TODO: explicit selection?
                         needs_manage = true;
-                        wm.pending_focus = wm.active_frame.clone();
+                        wm.focus.switch_to_frame();
                     }
                     FromEmacs::CloseWindow(window) => {
                         if let Some(w) = wm.windows.get_mut(&window) {
@@ -538,7 +545,6 @@ struct Seat {
     proxy: river::river_seat_v1::RiverSeatV1,
     #[allow(dead_code)] // TODO(tazjin): do I *need* to store this?
     ls_seat: RiverLayerShellSeatV1,
-    focus: Option<RiverWindowV1>,
 }
 
 impl Drop for Seat {
@@ -569,6 +575,73 @@ impl Drop for BindingState {
     }
 }
 
+enum FocusState {
+    Lost,
+    Frame(RiverWindowV1),
+    Window {
+        window: RiverWindowV1,
+        on_frame: RiverWindowV1,
+    },
+}
+
+struct Focus {
+    dirty: bool,
+    state: FocusState,
+}
+
+impl Focus {
+    fn transition(&mut self, new_state: FocusState) {
+        self.state = new_state;
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    fn is_dirty(&mut self) -> bool {
+        std::mem::replace(&mut self.dirty, false)
+    }
+
+    fn lost_focus(&self) -> bool {
+        matches!(self.state, FocusState::Lost)
+    }
+
+    fn current_focus_and_frame(&self) -> Option<(&RiverWindowV1, &RiverWindowV1)> {
+        match &self.state {
+            FocusState::Lost => None,
+            FocusState::Frame(frame) => Some((frame, frame)),
+            FocusState::Window { window, on_frame } => Some((window, on_frame)),
+        }
+    }
+
+    /// invalidate a window, meaning it can not be focused anymore (e.g. was closed)
+    fn invalidate(&mut self, target: &RiverWindowV1) {
+        match &self.state {
+            FocusState::Frame(w) | FocusState::Window { on_frame: w, .. } if w.eq(target) => {
+                self.transition(FocusState::Lost);
+            }
+            FocusState::Window { window, on_frame } if window.eq(target) => {
+                self.transition(FocusState::Frame(on_frame.clone()));
+            }
+            _ => {}
+        }
+    }
+
+    fn focus_window(&mut self, window: RiverWindowV1, on_frame: RiverWindowV1) {
+        self.transition(FocusState::Window { window, on_frame });
+    }
+
+    fn focus_frame(&mut self, frame: RiverWindowV1) {
+        self.transition(FocusState::Frame(frame));
+    }
+
+    fn switch_to_frame(&mut self) {
+        if let FocusState::Window { on_frame, .. } = &self.state {
+            self.focus_frame(on_frame.clone());
+        }
+    }
+}
+
 struct Reka {
     pid: i32,
 
@@ -585,8 +658,7 @@ struct Reka {
     layer_shell: Option<RiverLayerShellV1>,
 
     seat: Option<Seat>,
-    pending_focus: Option<RiverWindowV1>,
-    active_frame: Option<RiverWindowV1>,
+    focus: Focus,
 
     frames: HashMap<RiverWindowV1, Frame>,
     outputs: HashMap<RiverOutputV1, Output>,
@@ -638,6 +710,13 @@ impl Reka {
             .map(|x| x.1)
     }
 
+    fn displaying_frame(&self, window: &RiverWindowV1) -> Option<&Frame> {
+        self.windows
+            .get(window)
+            .and_then(|w| w.params.as_ref())
+            .and_then(|p| self.frame_by_name(&p.frame_name))
+    }
+
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
         let mut frame_requests: usize = 0;
@@ -686,36 +765,38 @@ impl Reka {
             return;
         };
 
-        // we have focus, and no update needed -> do nothing
-        if seat.focus.is_some()
-            && (self.pending_focus.is_none() || seat.focus.as_ref() == self.pending_focus.as_ref())
-        {
-            return;
+        if self.focus.lost_focus() {
+            // recover focus by focusing *any* displayed frame
+            let Some(frame) = self
+                .frames
+                .iter()
+                .find(|(_, f)| f.displayed_on.is_some())
+                .map(|(proxy, _)| proxy.clone())
+            else {
+                log::error!("no displayed frames -> can not focus anything!");
+                return;
+            };
+
+            self.focus.focus_frame(frame);
         }
 
-        let Some(target) = self
-            .pending_focus
-            .take()
-            // avoid stale window references (e.g. on window close/output disconnect)
-            .filter(|w| self.windows.contains_key(w) || self.frames.contains_key(w))
-            .or_else(|| self.active_frame.clone())
-            .or_else(|| {
-                // pick any displayed frame, we don't know which one is active ...
-                self.frames
-                    .iter()
-                    .find(|(_, f)| f.displayed_on.is_some())
-                    .map(|(proxy, _)| proxy.clone())
-            })
-        else {
-            log::error!("no frames are being displayed! can not focus");
-            return;
-        };
+        let is_dirty = self.focus.is_dirty();
+        let (target, frame) = self.focus.current_focus_and_frame().unwrap();
 
-        seat.proxy.focus_window(&target);
-        seat.focus = Some(target.clone());
+        seat.proxy.focus_window(target);
 
-        if !self.update_active_frame(&target) {
-            self.send(ToEmacs::Focused(target)).expect("sending failed");
+        if is_dirty {
+            let output = self.frames[frame]
+                .displayed_on
+                .as_ref()
+                .expect("reka bug: inactive frame focused");
+            self.outputs[output].ls_output.set_default();
+
+            if target != frame {
+                // do not notify emacs about focused frames
+                self.send(ToEmacs::Focused(target.clone()))
+                    .expect("sending failed");
+            }
         }
     }
 
@@ -781,34 +862,6 @@ impl Reka {
             }
         }
     }
-
-    // update_active_frame updates state information related to the new active
-    // frame (which output should layer shell surfaces show up on, and so on).
-    // Returns whether the frame itself is focused.
-    fn update_active_frame(&mut self, focus: &RiverWindowV1) -> bool {
-        let mut frame_focused = false;
-        if let Some(frame) = self.frames.get(focus) {
-            self.active_frame = Some(frame.proxy.clone());
-            frame_focused = true;
-        } else {
-            self.active_frame = self
-                .windows
-                .get(focus)
-                .and_then(|w| w.params.as_ref())
-                .and_then(|p| self.frame_by_name(&p.frame_name))
-                .map(|f| f.proxy.clone());
-        }
-
-        // mark output of active frame for layer-shell (surfaces pop up there by default)
-        self.active_frame
-            .as_ref()
-            .and_then(|f| self.frames.get(f))
-            .and_then(|f| f.displayed_on.as_ref())
-            .and_then(|fo| self.outputs.get(fo))
-            .map(|output| output.ls_output.set_default());
-
-        frame_focused
-    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Reka {
@@ -857,10 +910,10 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                 log::debug!("manage sequence started");
 
                 state.reconcile_frames();
-                state.reconcile_focus();
                 state.reconcile_windows();
                 state.reconcile_bindings();
                 state.reconcile_fullscreen();
+                state.reconcile_focus();
 
                 proxy.manage_finish();
             }
@@ -948,11 +1001,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
                     .expect("layer shell not bound")
                     .get_seat(&id, qhandle, ());
                 if state.seat.is_none() {
-                    state.seat = Some(Seat {
-                        proxy: id,
-                        ls_seat,
-                        focus: None,
-                    });
+                    state.seat = Some(Seat { proxy: id, ls_seat });
                 } else {
                     log::error!(
                         "seat is already taken, reka does not support multi-seats at the moment"
@@ -971,10 +1020,7 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
             }
             river::river_window_manager_v1::Event::SessionUnlocked => {
                 log::info!("RiverWindowManagerV1::Event::SessionUnlocked received");
-                // recover focus from screen locker
-                if let Some(seat) = &mut state.seat {
-                    seat.focus = None;
-                }
+                // TODO: do we still need to recover focus here?
             }
             river::river_window_manager_v1::Event::Window { id } => {
                 log::debug!("RiverWindowManagerV1::Event::Window received: id={:?}", id);
@@ -1093,7 +1139,7 @@ impl Dispatch<RiverLayerShellOutputV1, ()> for Reka {
 
 impl Dispatch<RiverLayerShellSeatV1, ()> for Reka {
     fn event(
-        state: &mut Self,
+        _: &mut Self,
         _: &RiverLayerShellSeatV1,
         event: <RiverLayerShellSeatV1 as wayland_client::Proxy>::Event,
         _: &(),
@@ -1104,8 +1150,7 @@ impl Dispatch<RiverLayerShellSeatV1, ()> for Reka {
 
         match event {
             river::river_layer_shell_seat_v1::Event::FocusNone => {
-                // try to recover focus here
-                state.seat.as_mut().and_then(|s| s.focus.take());
+                // TODO: do we need to recover focus here?
             }
 
             _ => { /* TODO(tazjin): what to do here? */ }
@@ -1125,8 +1170,19 @@ impl Dispatch<river::river_seat_v1::RiverSeatV1, ()> for Reka {
         log::debug!("RiverSeatV1 event received: {:?}", event);
 
         if let river::river_seat_v1::Event::WindowInteraction { window } = event {
-            log::debug!("window interaction, setting pending focus: {:?}", window);
-            state.pending_focus = Some(window);
+            log::debug!("window interaction, setting focus: {:?}", window);
+            if state.frames.contains_key(&window) {
+                state.focus.focus_frame(window);
+                return;
+            }
+
+            let Some(frame) = state.displaying_frame(&window) else {
+                log::error!("received window interaction for window without a frame");
+                return;
+            };
+
+            state.focus.focus_window(window, frame.proxy.clone());
+            state.focus.mark_dirty();
         }
     }
 }
@@ -1226,14 +1282,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 state
                     .send(ToEmacs::WindowClosed(proxy.clone()))
                     .expect("could not signal emacs"); // TODO: fix the error handling for all of these
-                if let Some(seat) = &mut state.seat {
-                    if let Some(focus) = &seat.focus
-                        && focus.eq(proxy)
-                    {
-                        // manage sequence immediately after will recover focus
-                        seat.focus = None;
-                    }
-                }
+                state.focus.invalidate(proxy);
 
                 for output in state.outputs.values_mut() {
                     match &output.fullscreen {
@@ -1252,15 +1301,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     return;
                 }
 
-                if state.frames.remove(proxy).is_some() {
-                    if state.active_frame.as_ref().is_some_and(|af| af.eq(proxy)) {
-                        state.active_frame = None;
-                        state.seat.as_mut().and_then(|s| s.focus.take());
-                    }
-                    return;
+                if state.frames.remove(proxy).is_none() {
+                    log::warn!("unknown window closed; reka bug?");
                 }
-
-                log::warn!("unknown window closed; reka bug?");
             }
             river::river_window_v1::Event::FullscreenRequested { output: target } => {
                 // one of the denser pieces of logic here ... figure out which output to fullscreen on:
@@ -1278,9 +1321,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     })
                     .or_else(|| {
                         state
-                            .active_frame
-                            .as_ref()
-                            .and_then(|fw| state.frames.get(fw))
+                            .focus
+                            .current_focus_and_frame()
+                            .and_then(|(_, fw)| state.frames.get(fw))
                             .and_then(|f| f.displayed_on.clone())
                     });
                 let Some(target) = potential_target else {
@@ -1368,10 +1411,7 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
                     if let Err(err) = state.send(ToEmacs::KeyEvent(k.event)) {
                         log::error!("failed to send key event to Emacs: {}", err);
                     }
-                    state.pending_focus = state
-                        .active_frame
-                        .clone()
-                        .or_else(|| state.frames.keys().next().cloned());
+                    state.focus.switch_to_frame();
                     break;
                 }
             }

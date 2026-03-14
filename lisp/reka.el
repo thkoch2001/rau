@@ -92,7 +92,9 @@
                      (frame (alist-get frame-name frame-names nil nil #'equal)))
            (delete-frame frame)))
 
-        (_ (error "received unknown command from reka: %s" cmd))))))
+        (_ (error "received unknown command from reka: %s" cmd))))
+
+    (reka--update-focus-request)))
 
 (defun reka--handle-event (&rest _) ;; unused process filter args
   (when reka-handle
@@ -158,21 +160,18 @@
       (setq-local reka-window window))
     (display-buffer buffer)))
 
-(defvar reka--last-focused-buffer nil
-  "Last buffer for which a focus request was sent.")
-
 (defun reka--update-focus-request (&rest _) ;; TODO: take & forward frame for active output logic
   "Send a focus request to the WM reflecting the current selected-window."
   (when reka-handle
     (let* ((buf (window-buffer (selected-window)))
-           (is-reka (reka--is-reka-buffer buf))
-           (key (if is-reka buf nil)))
-      ;; avoid infinite loops of focus change <> focus update notification
-      (unless (eq key reka--last-focused-buffer)
-        (setq reka--last-focused-buffer key)
-        (reka-set-focus-request reka-handle
-                                (when is-reka
-                                  (buffer-local-value 'reka-window buf)))))))
+           (can-focus-window (and (reka--is-reka-buffer buf)
+                                  (= 0 (length unread-command-events))
+                                  (= 0 (length (this-single-command-keys)))
+                                  (= 0 (minibuffer-depth))
+                                  (= 0 (recursion-depth)))))
+      (reka-set-focus-request reka-handle
+                              (when can-focus-window
+                                (buffer-local-value 'reka-window buf))))))
 
 (defconst reka--modifier-bits
   ;; TODO: can we handle this with XKB on the rust side, too?
