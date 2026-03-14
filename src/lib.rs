@@ -707,10 +707,13 @@ impl Drop for Reka {
 }
 
 impl Reka {
-    fn send(&mut self, cmd: ToEmacs) -> Result<()> {
-        self.tx.send(cmd)?;
-        self.to_emacs.write_all(&[1])?;
-        Ok(())
+    fn send(&mut self, cmd: ToEmacs) {
+        if let Err(err) = self.tx.send(cmd) {
+            log::error!("could not send message to Emacs: {}", err);
+        }
+        if let Err(err) = self.to_emacs.write_all(&[1]) {
+            log::error!("could not notify Emacs: {}", err);
+        }
     }
 
     fn frame_by_output(&self, output: &RiverOutputV1) -> Option<&Frame> {
@@ -768,7 +771,7 @@ impl Reka {
         // sequences before a frame shows up.
         if frame_requests > self.pending_frames {
             for _ in 0..(frame_requests - self.pending_frames) {
-                self.send(ToEmacs::RequestFrame).unwrap();
+                self.send(ToEmacs::RequestFrame);
                 self.pending_frames += 1;
             }
         }
@@ -809,10 +812,9 @@ impl Reka {
                 .expect("reka bug: inactive frame focused");
             self.outputs[output].ls_output.set_default();
 
+            // don't notify emacs about focused frames
             if target != frame {
-                // do not notify emacs about focused frames
-                self.send(ToEmacs::Focused(target.clone()))
-                    .expect("sending failed");
+                self.send(ToEmacs::Focused(target.clone()));
             }
         }
     }
@@ -1080,7 +1082,7 @@ impl Dispatch<RiverOutputV1, ()> for Reka {
                     return;
                 };
 
-                state.send(ToEmacs::DiscardFrame(frame_name)).ok();
+                state.send(ToEmacs::DiscardFrame(frame_name));
             }
             river::river_output_v1::Event::Position { x, y } => {
                 log::debug!("output position: x={}, y={}", x, y);
@@ -1204,9 +1206,8 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 }
 
                 log::info!("discovered new window (PID: {}) ...", unreliable_pid);
-                if let Err(err) = state.send(ToEmacs::NewWindow(proxy.clone())) {
-                    log::error!("failed to send new window command to Emacs: {}", err);
-                }
+                state.send(ToEmacs::NewWindow(proxy.clone()));
+
                 state.windows.insert(
                     proxy.clone(),
                     Window {
@@ -1226,9 +1227,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     return;
                 }
 
-                state
-                    .send(ToEmacs::AppIDChange(proxy.clone(), app_id))
-                    .unwrap();
+                state.send(ToEmacs::AppIDChange(proxy.clone(), app_id));
             }
             river::river_window_v1::Event::Title { title: Some(title) } => {
                 if title.is_empty() {
@@ -1242,14 +1241,8 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     }
                 }
 
-                state
-                    .send(ToEmacs::TitleChange(proxy.clone(), title.clone()))
-                    .unwrap();
-
-                if let Some(w) = state.windows.get_mut(proxy) {
-                    w.title = Some(title);
-                    return;
-                }
+                state.send(ToEmacs::TitleChange(proxy.clone(), title.clone()));
+                state.windows.get_mut(proxy).map(|w| w.title = Some(title));
 
                 log::warn!("received title for unknown window, orphan frame?");
             }
@@ -1259,9 +1252,7 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 }
             }
             river::river_window_v1::Event::Closed => {
-                state
-                    .send(ToEmacs::WindowClosed(proxy.clone()))
-                    .expect("could not signal emacs"); // TODO: fix the error handling for all of these
+                state.send(ToEmacs::WindowClosed(proxy.clone()));
                 state.focus.invalidate(proxy);
 
                 for output in state.outputs.values_mut() {
@@ -1362,9 +1353,7 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
                 if let BindingState::Enabled(this) = v
                     && this.eq(proxy)
                 {
-                    if let Err(err) = state.send(ToEmacs::KeyEvent(k.event)) {
-                        log::error!("failed to send key event to Emacs: {}", err);
-                    }
+                    state.send(ToEmacs::KeyEvent(k.event));
                     state.focus.switch_to_frame();
                     break;
                 }
