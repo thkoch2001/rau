@@ -80,6 +80,23 @@ use_symbols!(
     reka_list_buffers => "reka--list-buffers"
 );
 
+macro_rules! dispatch_log_only {
+    ($proxy_ty:ty) => {
+        impl Dispatch<$proxy_ty, ()> for Reka {
+            fn event(
+                _: &mut Self,
+                _: &$proxy_ty,
+                event: <$proxy_ty as wayland_client::Proxy>::Event,
+                _: &(),
+                _: &Connection,
+                _: &wayland_client::QueueHandle<Self>,
+            ) {
+                log::debug!("{} event: {:?}", stringify!($proxy_ty), event);
+            }
+        }
+    };
+}
+
 #[emacs::module(name = "libreka", defun_prefix = "reka")]
 fn init(_: &Env) -> Result<()> {
     Ok(())
@@ -1036,22 +1053,6 @@ impl Dispatch<RiverWindowManagerV1, ()> for Reka {
     ]);
 }
 
-impl Dispatch<RiverLayerShellV1, ()> for Reka {
-    fn event(
-        _: &mut Self,
-        _: &RiverLayerShellV1,
-        event: <RiverLayerShellV1 as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &wayland_client::QueueHandle<Self>,
-    ) {
-        log::warn!(
-            "received a layer shell event, but it has no events! Most peculiar?! {:?}",
-            event
-        );
-    }
-}
-
 impl Dispatch<RiverOutputV1, ()> for Reka {
     fn event(
         state: &mut Self,
@@ -1133,27 +1134,6 @@ impl Dispatch<RiverLayerShellOutputV1, ()> for Reka {
                     output.height = height;
                 }
             }
-        }
-    }
-}
-
-impl Dispatch<RiverLayerShellSeatV1, ()> for Reka {
-    fn event(
-        _: &mut Self,
-        _: &RiverLayerShellSeatV1,
-        event: <RiverLayerShellSeatV1 as wayland_client::Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &wayland_client::QueueHandle<Self>,
-    ) {
-        log::debug!("received layer shell seat event: {:?}", event);
-
-        match event {
-            river::river_layer_shell_seat_v1::Event::FocusNone => {
-                // TODO: do we need to recover focus here?
-            }
-
-            _ => { /* TODO(tazjin): what to do here? */ }
         }
     }
 }
@@ -1367,32 +1347,6 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
     }
 }
 
-impl Dispatch<river::river_node_v1::RiverNodeV1, ()> for Reka {
-    fn event(
-        _state: &mut Self,
-        _proxy: &river::river_node_v1::RiverNodeV1,
-        event: <river::river_node_v1::RiverNodeV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &wayland_client::QueueHandle<Self>,
-    ) {
-        log::debug!("RiverNodeV1 event received: {:?}", event);
-    }
-}
-
-impl Dispatch<river::river_xkb_bindings_v1::RiverXkbBindingsV1, ()> for Reka {
-    fn event(
-        _state: &mut Self,
-        _proxy: &river::river_xkb_bindings_v1::RiverXkbBindingsV1,
-        event: <river::river_xkb_bindings_v1::RiverXkbBindingsV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &wayland_client::QueueHandle<Self>,
-    ) {
-        log::debug!("RiverXkbBindingsV1 event received: {:?}", event);
-    }
-}
-
 impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
     fn event(
         state: &mut Self,
@@ -1419,15 +1373,8 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
     }
 }
 
-impl Dispatch<river::river_xkb_bindings_seat_v1::RiverXkbBindingsSeatV1, ()> for Reka {
-    fn event(
-        _state: &mut Self,
-        _proxy: &river::river_xkb_bindings_seat_v1::RiverXkbBindingsSeatV1,
-        event: <river::river_xkb_bindings_seat_v1::RiverXkbBindingsSeatV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &wayland_client::QueueHandle<Self>,
-    ) {
-        log::debug!("RiverXkbBindingsSeatV1 event received: {:?}", event);
-    }
-}
+dispatch_log_only!(river::river_node_v1::RiverNodeV1);
+dispatch_log_only!(river::river_xkb_bindings_v1::RiverXkbBindingsV1);
+dispatch_log_only!(river::river_xkb_bindings_seat_v1::RiverXkbBindingsSeatV1);
+dispatch_log_only!(RiverLayerShellV1);
+dispatch_log_only!(RiverLayerShellSeatV1); // TODO: focus_none? hmm
