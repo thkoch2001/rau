@@ -53,6 +53,7 @@
   (interactive)
 
   (with-mutex reka-processing-commands
+    (setq reka--last-focused nil)
     (let ((params (reka--all-window-parameters)))
       (reka-update-window-parameters reka-handle params))
 
@@ -70,7 +71,6 @@
            (kill-buffer buf)))
 
         (`(focused . ,window)
-         (setq reka--last-focused-buffer nil)
          (when-let* ((buf (reka--find-buffer-for-window window))
                      (win (get-buffer-window buf t)))
            (select-window win 'norecord)))
@@ -160,18 +160,23 @@
       (setq-local reka-window window))
     (display-buffer buffer)))
 
+(defvar reka--last-focused nil)
+
 (defun reka--update-focus-request (&rest _) ;; TODO: take & forward frame for active output logic
   "Send a focus request to the WM reflecting the current selected-window."
   (when reka-handle
-    (let* ((buf (window-buffer (selected-window)))
+    (let* ((win (selected-window))
+           (buf (window-buffer win))
            (can-focus-window (and (reka--is-reka-buffer buf)
                                   (= 0 (length unread-command-events))
                                   (= 0 (length (this-single-command-keys)))
                                   (= 0 (minibuffer-depth))
                                   (= 0 (recursion-depth)))))
-      (reka-set-focus-request reka-handle
-                              (when can-focus-window
-                                (buffer-local-value 'reka-window buf))))))
+      (unless (equal win reka--last-focused)
+        (setq reka--last-focused buf)
+        (reka-set-focus-request reka-handle
+                                (when can-focus-window
+                                  (buffer-local-value 'reka-window buf)))))))
 
 (defconst reka--modifier-bits
   ;; TODO: can we handle this with XKB on the rust side, too?
@@ -199,7 +204,9 @@ The Rust side resolves the keysyms using xkbcommon."
 
 (defun reka--suppress-focus-event (_orig-fn _event)
   "No-op for suppressing certain focus events in advice."
-  (interactive "e"))
+  (interactive "e")
+  ;; okay, *almost* no-op ...
+  (setq reka--last-focused nil))
 
 (defun reka--buffer-predicate (buffer)
   "Buffer predicate to avoid accidentally showing the same reka buffer twice."
