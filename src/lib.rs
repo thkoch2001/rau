@@ -670,6 +670,16 @@ impl Reka {
             .and_then(|p| self.frame_by_name(&p.frame_name))
     }
 
+    fn binding_by_proxy(&self, proxy: &RiverXkbBindingV1) -> Option<(&XKBPrefix, &Binding)> {
+        self.prefixes.iter().find(|(_, v)| {
+            if let BindingState::Enabled(this) = &v.state {
+                return this.eq(proxy);
+            } else {
+                false
+            }
+        })
+    }
+
     // reconcile_frames ensures that each output gets one maximized Emacs frame.
     fn reconcile_frames(&mut self) {
         let mut frame_requests: usize = 0;
@@ -1365,24 +1375,26 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
     }
 }
 
-impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
+impl Dispatch<RiverXkbBindingV1, ()> for Reka {
     fn event(
         state: &mut Self,
-        proxy: &river::river_xkb_binding_v1::RiverXkbBindingV1,
-        event: <river::river_xkb_binding_v1::RiverXkbBindingV1 as wayland_client::Proxy>::Event,
+        proxy: &RiverXkbBindingV1,
+        event: <RiverXkbBindingV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &wayland_client::QueueHandle<Self>,
     ) {
         log::debug!("RiverXkbBindingV1 event received: {:?}", event);
         if matches!(event, river::river_xkb_binding_v1::Event::Pressed) {
-            for (k, v) in state.prefixes.iter() {
-                if let BindingState::Enabled(this) = &v.state
-                    && this.eq(proxy)
-                {
-                    state.send(ToEmacs::KeyEvent(k.event));
+            let Some((prefix, binding)) = state.binding_by_proxy(proxy) else {
+                log::warn!("received keypress event for unknown binding, reka bug?");
+                return;
+            };
+
+            match binding.command {
+                Command::Forward => {
+                    state.send(ToEmacs::KeyEvent(prefix.event));
                     state.focus.switch_to_frame();
-                    break;
                 }
             }
         }
