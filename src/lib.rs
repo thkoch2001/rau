@@ -69,6 +69,7 @@ use_symbols!(
     app_id_change
     frame_request
     discard_frame
+    toggle_fullscreen
     reka_get_window => "reka--get-window"
     reka_create_buffer => "reka--create-buffer"
     reka_list_buffers => "reka--list-buffers"
@@ -100,15 +101,22 @@ fn init(_: &Env) -> Result<()> {
 enum Command {
     /// Always forward the binding to Emacs
     Forward,
+
+    /// Toggle fullscreen for the selected window
+    ToggleFullscreen,
 }
 
 impl<'e> FromLisp<'e> for Command {
     fn from_lisp(value: Value<'e>) -> Result<Self> {
-        if !value.is_not_nil() {
-            return Ok(Command::Forward);
+        if value.is_not_nil() {
+            if toggle_fullscreen.eq(&value) {
+                return Ok(Command::ToggleFullscreen);
+            }
+
+            return Err(anyhow!("unknown builtin command"));
         }
 
-        Err(anyhow!("unknown builtin command"))
+        return Ok(Command::Forward);
     }
 }
 
@@ -509,6 +517,7 @@ struct XKBPrefix {
     modifiers: Modifiers,
 }
 
+#[derive(Debug)]
 enum BindingState {
     Requested,
     Registered(RiverXkbBindingV1),
@@ -523,6 +532,7 @@ impl Drop for BindingState {
     }
 }
 
+#[derive(Debug)]
 struct Binding {
     #[allow(dead_code)]
     command: Command,
@@ -836,6 +846,7 @@ impl Reka {
             match message {
                 FromEmacs::RegisterPrefix(prefix, command) => {
                     needs_manage = true;
+                    log::debug!("registering new prefix with command {:?}", command);
                     match self.prefixes.entry(prefix) {
                         std::collections::hash_map::Entry::Occupied(mut entry) => {
                             entry.get_mut().command = command;
@@ -1386,6 +1397,7 @@ impl Dispatch<RiverXkbBindingV1, ()> for Reka {
         _conn: &Connection,
         _qhandle: &wayland_client::QueueHandle<Self>,
     ) {
+        log::debug!("current known bindings: {:?}", state.prefixes);
         log::debug!("RiverXkbBindingV1 event received: {:?}", event);
         if matches!(event, river::river_xkb_binding_v1::Event::Pressed) {
             let Some((prefix, binding)) = state.binding_by_proxy(proxy) else {
@@ -1397,6 +1409,40 @@ impl Dispatch<RiverXkbBindingV1, ()> for Reka {
                 Command::Forward => {
                     state.send(ToEmacs::KeyEvent(prefix.event));
                     state.focus.switch_to_frame();
+                }
+                Command::ToggleFullscreen => {
+                    let Some((focus, frame)) = state.focus.current_focus_and_frame() else {
+                        log::warn!("fullscreen requested, but nothing is focused. reka bug?");
+                        return;
+                    };
+
+                    if focus == frame {
+                        // can't make the frame even more fullscreen! maybe the
+                        // user meant something else? let emacs handle it ..
+                        state.send(ToEmacs::KeyEvent(prefix.event));
+                        return;
+                    }
+
+                    let Some(output) = &state.frames[frame].displayed_on else {
+                        log::warn!("selected frame for fullscreen is not displayed. reka bug?");
+                        return;
+                    };
+
+                    let new_state = match &state.outputs[output].fullscreen {
+                        FullscreenState::None => FullscreenState::Requested {
+                            new: focus.clone(),
+                            previous: None,
+                        },
+                        FullscreenState::Fullscreen(current) => {
+                            FullscreenState::Exiting(current.clone())
+                        }
+                        _ => {
+                            log::warn!("invalid output state for fullscreen toggle");
+                            return;
+                        }
+                    };
+
+                    state.outputs.get_mut(output).unwrap().fullscreen = new_state;
                 }
             }
         }
