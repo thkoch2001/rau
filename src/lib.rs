@@ -8,8 +8,8 @@ use std::os::fd::{AsFd, FromRawFd};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use anyhow::Context;
-use emacs::{Env, IntoLisp, Result, Value, Vector, defun, use_symbols};
+use anyhow::{Context, anyhow};
+use emacs::{Env, FromLisp, IntoLisp, Result, Value, Vector, defun, use_symbols};
 use nix::poll::PollTimeout;
 use nix::sys::eventfd::{EfdFlags, EventFd};
 use wayland_client::{Connection, Dispatch, protocol::wl_registry};
@@ -94,6 +94,22 @@ macro_rules! dispatch_log_only {
 #[emacs::module(name = "libreka", defun_prefix = "reka")]
 fn init(_: &Env) -> Result<()> {
     Ok(())
+}
+
+#[derive(Debug)]
+enum Command {
+    /// Always forward the binding to Emacs
+    Forward,
+}
+
+impl<'e> FromLisp<'e> for Command {
+    fn from_lisp(value: Value<'e>) -> Result<Self> {
+        if !value.is_not_nil() {
+            return Ok(Command::Forward);
+        }
+
+        Err(anyhow!("unknown builtin command"))
+    }
 }
 
 #[derive(Debug)]
@@ -284,7 +300,7 @@ fn register_xkb_prefix<'e>(
     };
 
     if keysym == xkb::keysyms::KEY_NoSymbol.into() {
-        return Err(anyhow::anyhow!("could not resolve XKB keysym for key").into());
+        return Err(anyhow!("could not resolve XKB keysym for key").into());
     }
 
     let modifiers = Modifiers::from_bits(modifiers_bits).context("unknown modifier bits")?;
@@ -506,6 +522,12 @@ impl Drop for BindingState {
     }
 }
 
+struct Binding {
+    #[allow(dead_code)]
+    command: Command,
+    state: BindingState,
+}
+
 enum FocusState {
     Lost,
     Frame(RiverWindowV1),
@@ -590,7 +612,7 @@ struct Reka {
     frames: HashMap<RiverWindowV1, Frame>,
     outputs: HashMap<RiverOutputV1, Output>,
     windows: HashMap<RiverWindowV1, Window>,
-    prefixes: HashMap<XKBPrefix, BindingState>,
+    prefixes: HashMap<XKBPrefix, Binding>,
 }
 
 impl Drop for Reka {
@@ -756,9 +778,9 @@ impl Reka {
         let mut to_enable = vec![];
         {
             for (prefix, v) in self.prefixes.iter_mut() {
-                if let BindingState::Registered(b) = v {
+                if let BindingState::Registered(b) = &v.state {
                     to_enable.push(b.clone());
-                    *v = BindingState::Enabled(b.clone());
+                    v.state = BindingState::Enabled(b.clone());
                     log::info!("enabling new XKB binding (event={})", prefix.event);
                 }
             }
@@ -804,7 +826,13 @@ impl Reka {
                 FromEmacs::RegisterPrefix(prefix) => {
                     needs_manage = true;
                     if !self.prefixes.contains_key(&prefix) {
-                        self.prefixes.insert(prefix, BindingState::Requested);
+                        self.prefixes.insert(
+                            prefix,
+                            Binding {
+                                command: Command::Forward,
+                                state: BindingState::Requested,
+                            },
+                        );
                     }
                 }
                 FromEmacs::FocusWindow(window) => {
@@ -854,7 +882,7 @@ impl Reka {
         let register_prefixes = self
             .prefixes
             .iter()
-            .filter_map(|(k, v)| match v {
+            .filter_map(|(k, v)| match v.state {
                 BindingState::Requested => Some(*k),
                 _ => None,
             })
@@ -871,7 +899,11 @@ impl Reka {
             }
 
             for (p, b) in register_prefixes.into_iter().zip(bindings.into_iter()) {
-                self.prefixes.insert(p, BindingState::Registered(b));
+                let binding = self
+                    .prefixes
+                    .get_mut(&p)
+                    .expect("binding magically disappeared");
+                binding.state = BindingState::Registered(b);
             }
         }
     }
@@ -1344,7 +1376,7 @@ impl Dispatch<river::river_xkb_binding_v1::RiverXkbBindingV1, ()> for Reka {
         log::debug!("RiverXkbBindingV1 event received: {:?}", event);
         if matches!(event, river::river_xkb_binding_v1::Event::Pressed) {
             for (k, v) in state.prefixes.iter() {
-                if let BindingState::Enabled(this) = v
+                if let BindingState::Enabled(this) = &v.state
                     && this.eq(proxy)
                 {
                     state.send(ToEmacs::KeyEvent(k.event));
