@@ -484,7 +484,6 @@ enum WindowState {
 struct Window {
     proxy: RiverWindowV1,
     node: river::river_node_v1::RiverNodeV1,
-    title: Option<String>,
     state: WindowState,
     params: Option<WindowParameters>,
     actual_width_height: Option<(i32, i32)>,
@@ -1263,7 +1262,6 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                     Window {
                         proxy: proxy.clone(),
                         node,
-                        title: None,
                         state: WindowState::Starting,
                         params: None,
                         actual_width_height: None,
@@ -1292,7 +1290,6 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 }
 
                 state.send(ToEmacs::TitleChange(proxy.clone(), title.clone()));
-                state.windows.get_mut(proxy).map(|w| w.title = Some(title));
 
                 log::warn!("received title for unknown window, orphan frame?");
             }
