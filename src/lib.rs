@@ -836,14 +836,16 @@ impl Reka {
             match message {
                 FromEmacs::RegisterPrefix(prefix, command) => {
                     needs_manage = true;
-                    if !self.prefixes.contains_key(&prefix) {
-                        self.prefixes.insert(
-                            prefix,
-                            Binding {
+                    match self.prefixes.entry(prefix) {
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            entry.get_mut().command = command;
+                        }
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(Binding {
                                 command,
                                 state: BindingState::Requested,
-                            },
-                        );
+                            });
+                        }
                     }
                 }
                 FromEmacs::FocusWindow(window) => {
