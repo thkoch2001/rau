@@ -195,7 +195,7 @@ The Rust side resolves the keysyms using xkbcommon."
 (defun reka-push-intercept-prefixes ()
   (dolist (prefix reka-intercept-prefixes)
     (let ((data (reka--key-to-xkb prefix)))
-      (reka-register-xkb-prefix reka-handle (car data) (cadr data) (caddr data)))))
+      (reka-register-xkb-prefix reka-handle (car data) (cadr data) (caddr data) nil))))
 
 (defun reka--suppress-focus-event (_orig-fn _event)
   "No-op for suppressing certain focus events in advice."

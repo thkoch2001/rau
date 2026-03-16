@@ -114,7 +114,7 @@ impl<'e> FromLisp<'e> for Command {
 
 #[derive(Debug)]
 enum FromEmacs {
-    RegisterPrefix(XKBPrefix),
+    RegisterPrefix(XKBPrefix, Command),
     FocusWindow(RiverWindowV1),
     FocusFrame,
     CloseWindow(RiverWindowV1),
@@ -288,6 +288,7 @@ fn register_xkb_prefix<'e>(
     event: u32,
     key: Value<'e>,
     modifiers_bits: u32,
+    command: Command,
 ) -> Result<Value<'e>> {
     // Emacs hands us either an int (Unicode codepoint for the key), or a string
     // with a "key name". The later is stuff like "XF86AudioRaiseVolume",
@@ -309,7 +310,7 @@ fn register_xkb_prefix<'e>(
         keysym: u32::from(keysym),
         modifiers,
     };
-    handle.send(FromEmacs::RegisterPrefix(prefix))?;
+    handle.send(FromEmacs::RegisterPrefix(prefix, command))?;
 
     ().into_lisp(env)
 }
@@ -823,13 +824,13 @@ impl Reka {
         while let Ok(message) = self.rx.try_recv() {
             log::debug!("message from emacs: {:?}", message);
             match message {
-                FromEmacs::RegisterPrefix(prefix) => {
+                FromEmacs::RegisterPrefix(prefix, command) => {
                     needs_manage = true;
                     if !self.prefixes.contains_key(&prefix) {
                         self.prefixes.insert(
                             prefix,
                             Binding {
-                                command: Command::Forward,
+                                command,
                                 state: BindingState::Requested,
                             },
                         );
