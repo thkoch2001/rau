@@ -47,7 +47,7 @@ First, get the source either from TVL directly, or from the mirror:
 git clone https://code.tvl.fyi/depot.git:/tools/emacs-pkgs/reka.git
 
 # or clone from mos.ru mirror:
-git clone https://hub.mos.ru/tazjin/reka.git
+git clone https://codeberg.org/tazjin/reka.git
 ```
 
 After that, build the Rust project (you need `pkg-config` and `libxkbcommon`),

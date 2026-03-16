@@ -25,4 +25,10 @@ emacsBuilder {
   version = "0.1";
   src = ./lisp/reka.el;
   packageRequires = [ module ];
+
+  passthru.meta.ci.extraSteps.codeberg = depot.tools.releases.filteredGitPush {
+    filter = ":/tools/emacs-pkgs/reka";
+    remote = "ssh://git@codeberg.org/tazjin/reka.git";
+    ref = "refs/heads/canon";
+  };
 }
