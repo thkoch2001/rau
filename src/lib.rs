@@ -2,9 +2,8 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::Write;
-use std::os::fd::{AsFd, FromRawFd};
+use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
@@ -181,13 +180,11 @@ fn close_window<'e>(env: &'e Env, handle: &Handle, window: &RiverWindowV1) -> Re
     ().into_lisp(env)
 }
 
+type EmacsChannel = Box<dyn std::io::Write>;
+
 #[defun(user_ptr)]
 fn start_wm(env: &Env, pipe: Value<'_>) -> Result<Handle> {
-    let channel_fd_i32 = env.open_channel(pipe)?;
-    let channel_file = unsafe {
-        // SAFETY: I hope Emacs works correctly!
-        File::from_raw_fd(channel_fd_i32)
-    };
+    let channel_file = Box::new(env.open_channel(pipe)?);
 
     let (tx, rx) = channel::<FromEmacs>();
     let (tx_e, rx_e) = channel::<ToEmacs>();
@@ -336,7 +333,7 @@ fn get_next_command<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
 fn wm_loop(
     rx: Receiver<FromEmacs>,
     tx: Sender<ToEmacs>,
-    to_emacs: File,
+    to_emacs: EmacsChannel,
     emacs_fd: Arc<EventFd>,
 ) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -607,7 +604,7 @@ struct Reka {
     // Emacs-related state
     rx: Receiver<FromEmacs>,
     tx: Sender<ToEmacs>,
-    to_emacs: File,
+    to_emacs: EmacsChannel,
     from_emacs: Arc<EventFd>,
     pending_frames: usize,
 

@@ -11,7 +11,7 @@ let
 
     cargoLock.lockFile = ./Cargo.lock;
     cargoLock.outputHashes = {
-      "emacs-0.20.0" = "sha256-BVO+gqNl8vasguSB16eyC+LqNM2wynwg/7LxIPmVGHo=";
+      "emacs-0.20.0" = "sha256-o0kv5QGED6CCEkIVUXI2WLmqjD+u1Cr1trj5EFKvObk=";
     };
 
     postInstall = ''

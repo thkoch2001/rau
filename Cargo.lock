@@ -155,7 +155,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "emacs"
 version = "0.20.0"
-source = "git+https://github.com/ezemtsov/emacs-module-rs.git?rev=8d05e3489644481c4ba0f2db78e054c9ebd62938#8d05e3489644481c4ba0f2db78e054c9ebd62938"
+source = "git+https://github.com/ubolonton/emacs-module-rs.git?rev=34aaff90d22d8f5f876023ab779fe12dfffdd518#34aaff90d22d8f5f876023ab779fe12dfffdd518"
 dependencies = [
  "anyhow",
  "ctor",
@@ -169,7 +169,7 @@ dependencies = [
 [[package]]
 name = "emacs-macros"
 version = "0.17.0"
-source = "git+https://github.com/ezemtsov/emacs-module-rs.git?rev=8d05e3489644481c4ba0f2db78e054c9ebd62938#8d05e3489644481c4ba0f2db78e054c9ebd62938"
+source = "git+https://github.com/ubolonton/emacs-module-rs.git?rev=34aaff90d22d8f5f876023ab779fe12dfffdd518#34aaff90d22d8f5f876023ab779fe12dfffdd518"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -180,7 +180,7 @@ dependencies = [
 [[package]]
 name = "emacs_module"
 version = "0.20.0"
-source = "git+https://github.com/ezemtsov/emacs-module-rs.git?rev=8d05e3489644481c4ba0f2db78e054c9ebd62938#8d05e3489644481c4ba0f2db78e054c9ebd62938"
+source = "git+https://github.com/ubolonton/emacs-module-rs.git?rev=34aaff90d22d8f5f876023ab779fe12dfffdd518#34aaff90d22d8f5f876023ab779fe12dfffdd518"
 
 [[package]]
 name = "env_filter"
