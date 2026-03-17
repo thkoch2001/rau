@@ -97,7 +97,7 @@
 
         (_ (error "received unknown command from reka: %s" cmd))))
 
-    (reka--update-focus-request)))
+    (run-at-time nil nil #'reka--update-focus-request)))
 
 (defun reka--handle-event (&rest _) ;; unused process filter args
   (when reka-handle
