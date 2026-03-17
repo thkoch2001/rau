@@ -69,6 +69,7 @@ use_symbols!(
     frame_request
     discard_frame
     toggle_fullscreen
+    message
     reka_get_window => "reka--get-window"
     reka_create_buffer => "reka--create-buffer"
     reka_list_buffers => "reka--list-buffers"
@@ -139,6 +140,7 @@ enum ToEmacs {
     AppIDChange(RiverWindowV1, String),
     RequestFrame,
     DiscardFrame(String),
+    Message(String),
 }
 
 impl<'e> IntoLisp<'e> for ToEmacs {
@@ -156,6 +158,7 @@ impl<'e> IntoLisp<'e> for ToEmacs {
             }
             ToEmacs::RequestFrame => frame_request.into_lisp(env),
             ToEmacs::DiscardFrame(frame_name) => env.call(cons, (discard_frame, frame_name)),
+            ToEmacs::Message(text) => env.cons(message, text),
         }
     }
 }
@@ -837,9 +840,9 @@ impl Reka {
         let _ = nix::unistd::read(&self.from_emacs, &mut buf);
 
         let mut needs_manage = false;
-        while let Ok(message) = self.rx.try_recv() {
-            log::debug!("message from emacs: {:?}", message);
-            match message {
+        while let Ok(msg) = self.rx.try_recv() {
+            log::debug!("message from emacs: {:?}", msg);
+            match msg {
                 FromEmacs::RegisterPrefix(prefix, command) => {
                     needs_manage = true;
                     log::debug!("registering new prefix with command {:?}", command);

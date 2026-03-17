@@ -92,6 +92,9 @@
                      (frame (alist-get frame-name frame-names nil nil #'equal)))
            (delete-frame frame)))
 
+        (`(message . ,msg)
+         (message "reka: %s" msg))
+
         (_ (error "received unknown command from reka: %s" cmd))))
 
     (reka--update-focus-request)))
