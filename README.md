@@ -26,19 +26,25 @@ What else ... the name? Oh, it's obvious to Russian speakers.
 
 ## Status
 
-reka works, and I have been using it day-to-day for a few days at this point.
+Most things work, and I use reka as my daily driver. The main feature that is
+still missing is floating windows. There are likely still some bugs and rough
+edges outside of my particular configuration, though, so be ready for that.
 
-It definitely has bugs and rough edges. It also doesn't do any input or output
-management (use [channel](https://codeberg.org/Sivecano/channel) and
-[kanshi](https://gitlab.freedesktop.org/emersion/kanshi) for that). If you just
-want working Wayland window management in Emacs, look in the direction of EWM
-instead.
+There is **no** simulation key support, this will need a [new
+protocol](https://codeberg.org/river/river/pulls/1412) on the river side.
+
+Reka does not expose any input or output management to Emacs Lisp right now, and
+I'm not sure that it will. River has external tools
+([channel](https://codeberg.org/Sivecano/channel) for input management, and
+[kanshi](https://gitlab.freedesktop.org/emersion/kanshi) for output management)
+that are sufficient for me.
+
+If you want something more fully featured, look in the direction of EWM instead!
 
 ## Using this
 
-I have not added anything for launching this conveniently yet. That is on
-purpose! This is not a convenient project (yet), and you should be a
-sufficiently committed person to try and use it.
+You should be a sufficiently committed person to use this. There is no
+hand-holding!
 
 First, get the source either from TVL directly, or from the mirror:
 
@@ -46,7 +52,7 @@ First, get the source either from TVL directly, or from the mirror:
 # clone directly from TVL:
 git clone https://code.tvl.fyi/depot.git:/tools/emacs-pkgs/reka.git
 
-# or clone from mos.ru mirror:
+# or clone from Codeberg mirror:
 git clone https://codeberg.org/tazjin/reka.git
 ```
 
@@ -58,8 +64,15 @@ emacs --directory $reka_src/target/release --directory $reka_src/lisp ...
 ```
 
 and then pass that script to river's `-c` flag on launch. In your Emacs config,
-make sure to `(require 'reka)` and `(reka-enable)`.
+make sure to `(require 'reka)` and then `(reka-enable)`.
 
 ## Contributing
 
-Reka follows the standard TVL [contribution guidelines](https://code.tvl.fyi/tree/docs/CONTRIBUTING.md).
+The upstream code location is in [the TVL
+monorepo](https://code.tvl.fyi/about/tools/emacs-pkgs/reka). Issues can be
+reported to the TVL bug tracker for those that have an account here, or on the
+[Codeberg mirror](https://codeberg.org/tazjin/reka).
+
+Reka follows the standard TVL [contribution
+guidelines](https://code.tvl.fyi/tree/docs/CONTRIBUTING.md). Patches must be
+written by real humans using fleshy brains.
