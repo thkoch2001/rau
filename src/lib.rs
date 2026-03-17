@@ -7,7 +7,7 @@ use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use emacs::{Env, FromLisp, IntoLisp, Result, Value, Vector, defun, use_symbols};
 use nix::poll::PollTimeout;
 use nix::sys::eventfd::{EfdFlags, EventFd};
@@ -97,27 +97,54 @@ fn init(_: &Env) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+enum KeyEvent {
+    KeyCode(u32),
+    Symbol(String),
+}
+
+impl<'e> FromLisp<'e> for KeyEvent {
+    fn from_lisp(value: Value<'e>) -> Result<Self> {
+        if let Ok(key_code) = u32::from_lisp(value) {
+            return Ok(KeyEvent::KeyCode(key_code));
+        }
+
+        if let Ok(symbol_name) = String::from_lisp(value) {
+            return Ok(KeyEvent::Symbol(symbol_name));
+        }
+
+        bail!("could not decode key event, reka bug?");
+    }
+}
+
+impl<'e> IntoLisp<'e> for KeyEvent {
+    fn into_lisp(self, env: &'e Env) -> Result<Value<'e>> {
+        match self {
+            KeyEvent::KeyCode(c) => c.into_lisp(env),
+            KeyEvent::Symbol(name) => env.intern(&name),
+        }
+    }
+}
+
 #[derive(Debug)]
 enum Command {
     /// Always forward the binding to Emacs
-    Forward,
+    Forward(KeyEvent),
 
     /// Toggle fullscreen for the selected window
     ToggleFullscreen,
 }
 
-impl<'e> FromLisp<'e> for Command {
-    fn from_lisp(value: Value<'e>) -> Result<Self> {
-        if value.is_not_nil() {
-            if toggle_fullscreen.eq(&value) {
-                return Ok(Command::ToggleFullscreen);
-            }
-
-            return Err(anyhow!("unknown builtin command"));
+fn command_from_lisp<'e>(command: Value<'e>, event: KeyEvent) -> Result<Command> {
+    if command.is_not_nil() {
+        if toggle_fullscreen.eq(&command) {
+            return Ok(Command::ToggleFullscreen);
         }
 
-        return Ok(Command::Forward);
+        return Err(anyhow!("unknown builtin command"));
     }
+
+    return Ok(Command::Forward(event));
 }
 
 #[derive(Debug)]
@@ -132,7 +159,7 @@ enum FromEmacs {
 
 #[derive(Debug)]
 enum ToEmacs {
-    KeyEvent(u32),
+    KeyEvent(KeyEvent),
     NewWindow(RiverWindowV1),
     WindowClosed(RiverWindowV1),
     Focused(RiverWindowV1),
@@ -146,7 +173,7 @@ enum ToEmacs {
 impl<'e> IntoLisp<'e> for ToEmacs {
     fn into_lisp(self, env: &'e Env) -> Result<Value<'e>> {
         match self {
-            ToEmacs::KeyEvent(event) => env.call(cons, (key_event, event)),
+            ToEmacs::KeyEvent(event) => env.cons(key_event, event),
             ToEmacs::NewWindow(win) => env.call(cons, (new_window, RefCell::new(win))),
             ToEmacs::WindowClosed(win) => env.call(cons, (window_closed, RefCell::new(win))),
             ToEmacs::Focused(win) => env.call(cons, (focused, RefCell::new(win))),
@@ -293,10 +320,10 @@ fn window_equal<'e>(env: &'e Env, a: &RiverWindowV1, b: &RiverWindowV1) -> Resul
 fn register_xkb_prefix<'e>(
     env: &'e Env,
     handle: &Handle,
-    event: u32,
+    event: KeyEvent,
     key: Value<'e>,
     modifiers_bits: u32,
-    command: Command,
+    command: Value<'e>,
 ) -> Result<Value<'e>> {
     // Emacs hands us either an int (Unicode codepoint for the key), or a string
     // with a "key name". The later is stuff like "XF86AudioRaiseVolume",
@@ -313,11 +340,13 @@ fn register_xkb_prefix<'e>(
     }
 
     let modifiers = Modifiers::from_bits(modifiers_bits).context("unknown modifier bits")?;
+
     let prefix = XKBPrefix {
-        event,
         keysym: u32::from(keysym),
         modifiers,
     };
+
+    let command = command_from_lisp(command, event)?;
     handle.send(FromEmacs::RegisterPrefix(prefix, command))?;
 
     ().into_lisp(env)
@@ -511,7 +540,6 @@ impl Drop for Seat {
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 struct XKBPrefix {
-    event: u32,
     keysym: u32,
     modifiers: Modifiers,
 }
@@ -797,11 +825,11 @@ impl Reka {
     fn reconcile_bindings(&mut self) {
         let mut to_enable = vec![];
         {
-            for (prefix, v) in self.prefixes.iter_mut() {
+            for (_, v) in self.prefixes.iter_mut() {
                 if let BindingState::Registered(b) = &v.state {
                     to_enable.push(b.clone());
                     v.state = BindingState::Enabled(b.clone());
-                    log::info!("enabling new XKB binding (event={})", prefix.event);
+                    log::info!("enabling new XKB binding");
                 }
             }
         };
@@ -1397,14 +1425,14 @@ impl Dispatch<RiverXkbBindingV1, ()> for Reka {
         log::debug!("current known bindings: {:?}", state.prefixes);
         log::debug!("RiverXkbBindingV1 event received: {:?}", event);
         if matches!(event, river::river_xkb_binding_v1::Event::Pressed) {
-            let Some((prefix, binding)) = state.binding_by_proxy(proxy) else {
+            let Some((_, binding)) = state.binding_by_proxy(proxy) else {
                 log::warn!("received keypress event for unknown binding, reka bug?");
                 return;
             };
 
-            match binding.command {
-                Command::Forward => {
-                    state.send(ToEmacs::KeyEvent(prefix.event));
+            match &binding.command {
+                Command::Forward(event) => {
+                    state.send(ToEmacs::KeyEvent(event.clone()));
                     state.focus.switch_to_frame();
                 }
                 Command::ToggleFullscreen => {
@@ -1414,9 +1442,9 @@ impl Dispatch<RiverXkbBindingV1, ()> for Reka {
                     };
 
                     if focus == frame {
-                        // can't make the frame even more fullscreen! maybe the
-                        // user meant something else? let emacs handle it ..
-                        state.send(ToEmacs::KeyEvent(prefix.event));
+                        state.send(ToEmacs::Message(
+                            "can not fullscreen Emacs even more!".into(),
+                        ));
                         return;
                     }
 

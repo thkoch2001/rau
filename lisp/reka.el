@@ -202,7 +202,10 @@ The Rust side resolves the keysyms using xkbcommon."
 
 (defun reka-push-intercept-prefix (prefix &optional command)
   (let ((data (reka--key-to-xkb prefix)))
-    (reka-register-xkb-prefix reka-handle (car data) (cadr data) (caddr data) command)))
+    (reka-register-xkb-prefix reka-handle (if (integerp (car data))
+                                              (car data)
+                                            (symbol-name (car data)))
+                              (cadr data) (caddr data) command)))
 
 (defun reka-push-intercept-prefixes ()
   (dolist (prefix reka-intercept-prefixes)
