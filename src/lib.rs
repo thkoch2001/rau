@@ -63,6 +63,7 @@ use_symbols!(
     key_event
     new_window
     window_closed
+    minimize_requested
     focused
     title_change
     app_id_change
@@ -165,6 +166,7 @@ enum ToEmacs {
     Focused(RiverWindowV1),
     TitleChange(RiverWindowV1, String),
     AppIDChange(RiverWindowV1, String),
+    MinimizeRequested(RiverWindowV1),
     RequestFrame,
     DiscardFrame(String),
     Message(String),
@@ -176,6 +178,7 @@ impl<'e> IntoLisp<'e> for ToEmacs {
             ToEmacs::KeyEvent(event) => env.cons(key_event, event),
             ToEmacs::NewWindow(win) => env.call(cons, (new_window, RefCell::new(win))),
             ToEmacs::WindowClosed(win) => env.call(cons, (window_closed, RefCell::new(win))),
+            ToEmacs::MinimizeRequested(win) => env.cons(minimize_requested, RefCell::new(win)),
             ToEmacs::Focused(win) => env.call(cons, (focused, RefCell::new(win))),
             ToEmacs::AppIDChange(win, app_id) => {
                 env.call(list, (app_id_change, RefCell::new(win), app_id))
@@ -1350,6 +1353,9 @@ impl Dispatch<RiverWindowV1, ()> for Reka {
                 if state.frames.remove(proxy).is_none() {
                     log::warn!("unknown window closed; reka bug?");
                 }
+            }
+            river::river_window_v1::Event::MinimizeRequested {} => {
+                state.send(ToEmacs::MinimizeRequested(proxy.clone()));
             }
             river::river_window_v1::Event::FullscreenRequested { output: target } => {
                 // one of the denser pieces of logic here ... figure out which output to fullscreen on:

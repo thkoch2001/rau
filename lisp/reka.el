@@ -70,6 +70,11 @@
          (when-let ((buf (reka--find-buffer-for-window window)))
            (kill-buffer buf)))
 
+        (`(minimize-requested . ,window)
+         (when-let ((buf (reka--find-buffer-for-window window)))
+           (with-current-buffer buf
+             (bury-buffer))))
+
         (`(focused . ,window)
          (when-let* ((buf (reka--find-buffer-for-window window))
                      (win (get-buffer-window buf t)))
