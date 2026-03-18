@@ -8,11 +8,7 @@ let
     src = pkgs.nix-gitignore.gitignoreSource [ ] ./.;
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [ pkgs.emacs-pgtk pkgs.libxkbcommon ];
-
     cargoLock.lockFile = ./Cargo.lock;
-    cargoLock.outputHashes = {
-      "emacs-0.20.0" = "sha256-o0kv5QGED6CCEkIVUXI2WLmqjD+u1Cr1trj5EFKvObk=";
-    };
 
     postInstall = ''
       mkdir -p $out/share/emacs/site-lisp

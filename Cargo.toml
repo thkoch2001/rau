@@ -13,7 +13,7 @@ crate-type = [ "cdylib" ]
 [dependencies]
 anyhow = "1.0.102"
 bitflags = "2.11"
-emacs = { git = "https://github.com/ubolonton/emacs-module-rs.git", rev = "34aaff90d22d8f5f876023ab779fe12dfffdd518", version = "0.20.0", features = ["emacs-28"] }
+emacs = { version = "0.21.0", features = ["emacs-28"] }
 env_logger = "0.11.9"
 log = "0.4.29"
 nix = { version = "0.31.1", features = ["event", "signal"] }
