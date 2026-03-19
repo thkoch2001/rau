@@ -13,10 +13,6 @@
 (defvar reka-handle nil
   "Opaque handle for interacting with the WM")
 
-(defcustom reka-intercept-prefixes
-  '("C-x" "C-u" "C-h" "M-x")
-  "Prefix keys that should always go to Emacs.")
-
 (defun reka--set-frame-name (frame)
   (unless (string-prefix-p "reka-frame-"
                            (frame-parameter frame 'name))
@@ -215,6 +211,14 @@ The Rust side resolves the keysyms using xkbcommon."
 (defun reka-push-intercept-prefixes ()
   (dolist (prefix reka-intercept-prefixes)
     (reka-push-intercept-prefix prefix)))
+
+(defcustom reka-intercept-prefixes
+  '("C-x" "C-u" "C-h" "M-x")
+  "Prefix keys that should always go to Emacs."
+  :type '(repeat key)
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when reka-handle (reka-push-intercept-prefixes))))
 
 (defun reka--suppress-focus-event (_orig-fn _event)
   "No-op for suppressing certain focus events in advice."
