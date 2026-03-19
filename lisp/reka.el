@@ -29,7 +29,7 @@
 
 (defun reka--find-buffer-for-window (window)
   (seq-find (lambda (buf)
-              (when-let ((w (buffer-local-value 'reka-window buf)))
+              (when-let* ((w (buffer-local-value 'reka-window buf)))
                 (reka-window-equal w window)))
             (reka--list-buffers)))
 
@@ -67,7 +67,7 @@
          (reka-notify-buffer-created reka-handle window))
 
         (`(window-closed . ,window)
-         (when-let ((buf (reka--find-buffer-for-window window)))
+         (when-let* ((buf (reka--find-buffer-for-window window)))
            (kill-buffer buf)))
 
         (`(minimize-requested . ,window)
