@@ -13,6 +13,10 @@
 (defvar reka-handle nil
   "Opaque handle for interacting with the WM")
 
+(defcustom reka-enable-hook nil
+  "Hook run at the end of `reka-enable'."
+  :type 'hook)
+
 (defun reka--set-frame-name (frame)
   (unless (string-prefix-p "reka-frame-"
                            (frame-parameter frame 'name))
@@ -274,6 +278,8 @@ was split."
   ;; Suppress pgtk focus feedback loop (as does EXWM)
   ;; TODO: figure out if/how this breaks multi-frame focus changes ...
   (advice-add 'handle-focus-in  :around #'reka--suppress-focus-event)
-  (advice-add 'handle-focus-out :around #'reka--suppress-focus-event))
+  (advice-add 'handle-focus-out :around #'reka--suppress-focus-event)
+
+  (run-hooks 'reka-enable-hook))
 
 (provide 'reka)
