@@ -71,7 +71,7 @@
            (kill-buffer buf)))
 
         (`(minimize-requested . ,window)
-         (when-let ((buf (reka--find-buffer-for-window window)))
+         (when-let* ((buf (reka--find-buffer-for-window window)))
            (with-current-buffer buf
              (bury-buffer))))
 
