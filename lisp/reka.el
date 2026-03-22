@@ -175,11 +175,14 @@
   (when reka-handle
     (let* ((win (selected-window))
            (buf (window-buffer win))
-           (can-focus-window (and (reka--is-reka-buffer buf)
-                                  (= 0 (length unread-command-events))
-                                  (= 0 (length (this-single-command-keys)))
-                                  (= 0 (minibuffer-depth))
-                                  (= 0 (recursion-depth)))))
+           ;; collection of conditions for "no interactive command in progress"
+           ;; this is based on what which-key does + whacking moles as bugs show up
+           (can-focus-window (and (reka--is-reka-buffer buf) ;; only focus wayland surfaces
+                                  (not this-command) ;; not in an interactive command
+                                  (= 0 (length unread-command-events)) ;; no pending key injections
+                                  (= 0 (length (this-single-command-keys))) ;; no unfinished command sequence
+                                  (= 0 (minibuffer-depth)) ;; no minibuffer editing active
+                                  (= 0 (recursion-depth))))) ;; no recursive edit ongoing
       (unless (equal win reka--last-focused)
         (setq reka--last-focused buf)
         (reka-set-focus-request reka-handle
