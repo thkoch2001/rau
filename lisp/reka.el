@@ -262,7 +262,8 @@ was split."
   (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
   (let ((pipe (make-pipe-process :name "reka-events"
                                  :buffer " *reka-events*"
-                                 :filter #'reka--handle-event)))
+                                 :filter #'reka--handle-event
+                                 :noquery t)))
     (setq reka-handle (reka-start-wm pipe)))
   (reka-push-intercept-prefixes)
 
