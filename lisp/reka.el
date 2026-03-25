@@ -247,6 +247,19 @@ was split."
         (switch-to-buffer (other-buffer)))))
   new-window)
 
+(defun reka--set-window-buffer-advice (orig win buf &rest r)
+  "Avoid double-display of reka buffers, by stealing them if they are
+visible elsewhere. Note that displaying the same buffer in two different
+tabs, for example, is completely valid."
+  (with-current-buffer buf
+    (when (derived-mode-p 'reka-mode)
+      (dolist (other (get-buffer-window-list buf nil 'visible))
+        (unless (equal (or win (selected-window)) other)
+          (with-selected-window other
+            (switch-to-buffer (other-buffer)))))))
+
+  (apply orig win buf r))
+
 (defun reka-enable ()
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
@@ -259,6 +272,7 @@ was split."
 
   (advice-add 'split-window-below :filter-return #'reka--split-window-advice)
   (advice-add 'split-window-right :filter-return #'reka--split-window-advice)
+  (advice-add 'set-window-buffer :around #'reka--set-window-buffer-advice)
 
   (message "Launching native module ...")
   (reka--ensure-frame-names)
