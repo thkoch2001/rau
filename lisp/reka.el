@@ -209,13 +209,20 @@ The Rust side resolves the keysyms using xkbcommon."
     (list event key (apply #'logior mods))))
 
 (defun reka-push-intercept-prefix (prefix &optional command)
+  "Register PREFIX (in the format as expected by `kbd') as an intercept key
+binding, meaning that it is always forwarded to Emacs. Use this in
+combination with `global-set-key' to define global key bindings that are
+always sent to Emacs.
+
+Can optionally set COMMAND to one of: `toggle-fullscreen'" ;; sic, only one
   (let ((data (reka--key-to-xkb prefix)))
     (reka-register-xkb-prefix reka-handle (if (integerp (car data))
                                               (car data)
                                             (symbol-name (car data)))
                               (cadr data) (caddr data) command)))
 
-(defun reka-push-intercept-prefixes ()
+(defun reka-push-intercept-prefixes () ;; TODO: remove, leave only one way?
+  "Update the intercept prefixes defined in `reka-intercept-prefixes'."
   (dolist (prefix reka-intercept-prefixes)
     (reka-push-intercept-prefix prefix)))
 
@@ -261,6 +268,8 @@ tabs, for example, is completely valid."
   (apply orig win buf r))
 
 (defun reka-enable ()
+  "Enable the reka window manager for river. Call this function once when
+starting Emacs inside of river."
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
   (tool-bar-mode 0)

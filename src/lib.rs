@@ -207,6 +207,10 @@ impl Handle {
     }
 }
 
+/// Request closing of the Wayland surface WINDOW through HANDLE. Note that
+/// window refers to the Wayland side, not to an Emacs window.
+///
+/// This function should not need to be called manually.
 #[defun]
 fn close_window<'e>(env: &'e Env, handle: &Handle, window: &RiverWindowV1) -> Result<Value<'e>> {
     handle.send(FromEmacs::CloseWindow(window.clone()))?;
@@ -215,6 +219,8 @@ fn close_window<'e>(env: &'e Env, handle: &Handle, window: &RiverWindowV1) -> Re
 
 type EmacsChannel = Box<dyn std::io::Write>;
 
+/// Start the reka window manager process. This should not be called manually,
+/// instead see `reka-enable` for the user-facing function.
 #[defun(user_ptr)]
 fn start_wm(env: &Env, pipe: Value<'_>) -> Result<Handle> {
     let channel_file = Box::new(env.open_channel(pipe)?);
@@ -250,6 +256,9 @@ struct WindowParameters {
     w: i32,
 }
 
+/// Construct an opaque window parameters object describing the display position
+/// and dimensions for a given Wayland surface. This is an internal reka
+/// function.
 #[defun(user_ptr)]
 fn make_window_parameters<'e>(
     _env: &'e Env,
@@ -272,6 +281,11 @@ fn make_window_parameters<'e>(
     Ok(params)
 }
 
+/// Update the window parameters for all currently visible surfaces. This is
+/// called regularly by various Emacs hooks, e.g. when reacting to layout
+/// changes.
+///
+/// If you end up having to call this manually, please file a reka issue.
 #[defun]
 fn update_window_parameters<'e>(
     env: &'e Env,
@@ -292,6 +306,10 @@ fn update_window_parameters<'e>(
     ().into_lisp(env)
 }
 
+/// Requests that focus be given to the Wayland surface WINDOW on the compositor
+/// side.
+///
+/// This is an internal function.
 #[defun]
 fn set_focus_request<'e>(env: &'e Env, handle: &Handle, window: Value<'e>) -> Result<Value<'e>> {
     if window.is_not_nil() {
@@ -304,6 +322,9 @@ fn set_focus_request<'e>(env: &'e Env, handle: &Handle, window: Value<'e>) -> Re
     ().into_lisp(env)
 }
 
+/// Confirm that the Emacs-side buffer for a given window was created.
+///
+/// This is an internal function.
 #[defun]
 fn notify_buffer_created<'e>(
     env: &'e Env,
@@ -314,11 +335,15 @@ fn notify_buffer_created<'e>(
     ().into_lisp(env)
 }
 
+/// Compare two Wayland surface objects (i.e. River windows) for equality.
 #[defun]
 fn window_equal<'e>(env: &'e Env, a: &RiverWindowV1, b: &RiverWindowV1) -> Result<Value<'e>> {
     a.eq(b).into_lisp(env)
 }
 
+/// Register the given key prefix for global use in reka. This function is
+/// internal and difficult to call correctly, please see
+/// `reka-push-intercept-prefix` for the user-facing version.
 #[defun]
 fn register_xkb_prefix<'e>(
     env: &'e Env,
@@ -355,6 +380,8 @@ fn register_xkb_prefix<'e>(
     ().into_lisp(env)
 }
 
+/// Receive the next reka->emacs command that should be handled. This is an
+/// internal function.
 #[defun]
 fn get_next_command<'e>(env: &'e Env, handle: &Handle) -> Result<Value<'e>> {
     if let Ok(cmd) = handle.rx.try_recv() {
