@@ -1431,51 +1431,39 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
     (ewc-set-listener registry 'global
           (pcase-lambda (object (map name interface version))
-            (let* ((ifsym (intern (string-replace "_" "-" interface)))
-                   (protocol (ewc-find-protocol (reka--read-protocols) ifsym)))
+            (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
+                        (protocol (ewc-find-protocol (reka--read-protocols) ifsym))
+                        ((member interface reka--global-binds))
+                        (new-id (cl-incf (ewc-objects-new-id objects)))
+                        (xml-version (reka--interface-version objects protocol ifsym))
+                        (bind-version
+                         (if xml-version (min version xml-version) version))
+                        (bound-object (ewc-object-add :objects objects
+                                                      :protocol protocol
+                                                      :interface ifsym
+                                                      :id new-id)))
+              (reka-log "reka: binding global %s version %s" interface bind-version)
+              (reka--request registry 'bind
+                             `((name . ,name)
+                               (interface-len . ,(1+ (string-bytes interface)))
+                               (interface . ,interface)
+                               (version . ,bind-version)
+                               (id . ,new-id)))
+              (push (cons ifsym new-id) (reka-state-globals state))
 
-              (when (and protocol
-                         (member interface reka--global-binds))
-                (let* ((new-id (cl-incf (ewc-objects-new-id objects)))
-                       (xml-version
-                        (reka--interface-version objects protocol ifsym))
-                       (bind-version
-                        (if xml-version
-                            (min version xml-version)
-                          version))
-                       (bound-object
-                        (ewc-object-add :objects objects
-                                        :protocol protocol
-                                        :interface ifsym
-                                        :id new-id)))
+              (pcase ifsym
+                ('river-window-manager-v1
+                 (reka--setup-wm-listeners state bound-object))
 
-                  (message "reka: binding global %s version %s"
-                           interface bind-version)
+                ('river-layer-shell-v1
+                 ;; Attach layer-shell objects to existing outputs/seats in STATE."
+                 (reka--do outputs (id _out state)
+                           (reka--ensure-ls-output state id))
+                 (reka--ensure-ls-seat state))
 
-                  (reka--request registry 'bind
-                               `((name . ,name)
-                                 (interface-len . ,(1+ (string-bytes interface)))
-                                 (interface . ,interface)
-                                 (version . ,bind-version)
-                                 (id . ,new-id)))
+                (_ (reka-log "reka: bound %s" ifsym))))))
 
-                  (push (cons ifsym new-id)
-                        (reka-state-globals state))
-
-                  (pcase ifsym
-                    ('river-window-manager-v1
-                     (reka--setup-wm-listeners state bound-object))
-
-                    ('river-layer-shell-v1
-                     ;; Attach layer-shell objects to existing outputs/seats in STATE."
-                     (reka--do outputs (id _out state)
-                               (reka--ensure-ls-output state id))
-                     (reka--ensure-ls-seat state))
-
-                    (_
-                     (reka-log "reka: bound %s" ifsym))))))))
-
-      (reka--request display 'get-registry
+    (reka--request display 'get-registry
                    `((registry . ,(ewc-object-id registry))))))
 
 ;; NOTE: No need for reka-disable since this Emacs process is serving as a
