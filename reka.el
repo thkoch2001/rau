@@ -160,7 +160,7 @@ Example:
     (if app-id (concat title-trunc " - " app-id)
       title-trunc)))
 
-(defun reka--handle-commands (state)
+(defun reka--handle-commands (state &optional no-focus-update)
   (unless reka--handling-commands
     (let ((reka--handling-commands t))
       ;; Update WM window parameters from the current Emacs window layout.
@@ -209,8 +209,8 @@ Example:
                 (reka-state-command-queue state))
         (setq reka--pending-handler nil)
         (reka--schedule-command-handler))
-
-      (run-at-time nil nil #'reka--update-focus-request))))
+      (unless no-focus-update
+        (run-at-time nil nil #'reka--update-focus-request)))))
 
 ;; Major mode for reka-managed buffers
 (defvar-local reka--window nil
@@ -416,15 +416,29 @@ tabs, for example, is completely valid."
     "Wayland protocols used by reka.")
 
   (defun reka--protocol-dir ()
-    "Return the protocol directory next to the current reka.el file.
-This is used at macro-expansion/compile time."
-    (let* ((this-file (or load-file-name
-                          (bound-and-true-p byte-compile-current-file)
-                          buffer-file-name))
-           (this-dir (if this-file
-                         (file-name-directory (expand-file-name this-file))
-                       default-directory)))
-      (expand-file-name "protocol" this-dir)))
+    "Return the protocol directory next to the reka.el source.
+The location is resolved relative to reka.el itself, not the file that
+happens to be loading, so `reka--read-protocols' expands correctly even
+when used from other files (e.g. tests)."
+    (let* ((reka-file
+            (cond
+             ;; reka.el is currently being loaded.
+             ((and load-file-name
+                   (member (file-name-nondirectory load-file-name)
+                           '("reka.el" "reka.elc")))
+              load-file-name)
+             ;; reka.el is currently being byte-compiled.
+             ((and (bound-and-true-p byte-compile-current-file)
+                   (member (file-name-nondirectory byte-compile-current-file)
+                           '("reka.el" "reka.elc")))
+              byte-compile-current-file)
+             ;; Expansion originates from some other file: find reka.el
+             ;; on the load path.
+             (t
+              (or (locate-file "reka" load-path '(".el" ".elc"))
+                  (error "reka: cannot locate reka.el; add its directory to `load-path'")))))
+           (reka-dir (file-name-directory (expand-file-name reka-file))))
+      (expand-file-name "protocol" reka-dir)))
 
   (defun reka--protocol-file (basename)
     "Return the absolute XML file path for protocol BASENAME."
