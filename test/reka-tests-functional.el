@@ -3,14 +3,24 @@
 (require 'cl-lib)
 (require 'reka)
 
+;;; Test debug helpers
+
+(defun reka-test--print-captured ()
+  (mapc (pcase-lambda ((seq id if rq args))
+          (message "%d %s %s %S" id if rq args))
+        reka-test-captured))
+
 ;;; Capture state (dynamically bound fresh in each test)
 
+;; TODO define and use aliases reka-test-captured-id, -if, -rq, -args
 (defvar reka-test-captured nil
-  "List of captured outgoing requests: (INTERFACE REQUEST ARGS).")
+  "List of captured outgoing requests: (OBJECT-ID INTERFACE REQUEST ARGS).")
 (defvar reka-test-dirty-count 0
   "How many times `reka--mark-manage-dirty' was called.")
 (defvar reka-test-handler-count 0
   "How many times the command handler was scheduled.")
+(defvar reka-test-server-object-id nil
+  "new_id for objects created by mocked river server.")
 (defvar reka-test--protocols-cache nil)
 
 (defun reka-test--protocols ()
@@ -23,6 +33,10 @@
    :connection nil
    :objects (ewc-objects-make :protocols (reka-test--protocols))))
 
+(defun reka-test-server-object-id ()
+  "Return and increment a server new_id."
+  (cl-incf reka-test-server-object-id))
+
 ;;; Advice
 
 (defun reka-test--adv-connect (_orig _objects &optional _socket)
@@ -31,7 +45,7 @@
 
 (defun reka-test--adv-request (_orig object request &optional arguments)
   "Capture outgoing requests instead of sending them."
-  (push (list (ewc-object-interface object) request arguments)
+  (push (list (ewc-object-id object) (ewc-object-interface object) request arguments)
         reka-test-captured))
 
 (defun reka-test--adv-schedule-command-handler (_orig)
@@ -63,38 +77,74 @@
          (reka--command-timer nil)
          (reka--handling-commands nil)
          (reka--pending-handler nil)
-         (reka--last-focused nil))
+         (reka--last-focused nil)
+         (reka-test-server-object-id (- #xFF000000 1)))
      (unwind-protect
          (progn
            (reka-test-install-advice)
            ,@body)
        (reka-test-remove-advice))))
 
-(defun reka-test-find-request (request &optional interface)
-  "Return first captured request named REQUEST, optionally on INTERFACE."
-  (cl-find-if (lambda (r)
-                (and (eq (nth 1 r) request)
-                     (or (null interface) (eq (nth 0 r) interface))))
-              reka-test-captured))
-
-
 ;;; Inbound-event simulation helpers
 
-(defun reka-test-simulate-global (state interface-name &optional version)
-  "Fake a wl_registry.global event advertising INTERFACE-NAME."
-  (let* ((reg (cl-find-if
-               (lambda (o) (eq (ewc-object-interface o) 'wl-registry))
+(defun reka-test-find-object (state interface)
+  "Find first object of INTERFACE in STATE."
+  (or (cl-find-if
+               (lambda (o) (eq (ewc-object-interface o) interface))
                (hash-table-values (ewc-objects-table
-                                   (reka-state-objects state)))))
-         (listener (ewc-listener reg 'global)))
-    (funcall listener reg `((name . 1)
-                            (interface . ,interface-name)
-                            (version . ,(or version 1))))))
+                                   (reka-state-objects state))))
+      (ert-fail (format "Did not find object of %s in state" interface))))
 
+(defun reka-test-find-listener (state interface event)
+  "Return cons (OBJECT . LISTENER) for listener of EVENT for first object
+of interface INTERFACE in STATE."
+  (if-let* ((object (reka-test-find-object state interface))
+            (listener (ewc-listener object event)))
+      (cons object listener)
+    (ert-fail (format "Did not find listener for event %s in first object of interface %s." event interface))))
+
+(defun reka-test-find-call-listener (state interface event &optional args)
+  "Find EVENT listener of first object of INTERFACE in STATE and call
+it with optional ARGS."
+  (let* ((listener-cons (reka-test-find-listener state interface event))
+         (object (car listener-cons))
+         (listener (cdr listener-cons)))
+    (funcall listener object args)))
+
+(defun reka-test-call-listener (proxy event &optional args)
+  "Call EVENT on PROXY with optional ARGS. PROXY can be an ewc-object or
+its id in reka--state objects table."
+  (let ((proxy-obj (if (integerp proxy)
+                       (ewc-object-get proxy (reka-state-objects reka--state))
+                     proxy)))
+    (funcall (should (ewc-listener proxy-obj event)) proxy-obj args)))
+
+;;; Request helpers
+
+(defun reka-test-request-equal (captured interface request &optional args)
+  (and (eq (cl-second captured) interface)
+       (eq (cl-third captured) request)
+       (if-let* ((args)
+                 (captured-args (cl-fourth captured)))
+           (seq-every-p
+            (pcase-lambda (`(,k . ,v))
+              (equal (cdr (assoc k captured-args)) v))
+         args)
+       t)
+  ))
+
+(defun reka-test-last-request-should (interface request &optional args)
+  "Pop last request and compare with should."
+  (let ((last (pop reka-test-captured)))
+    (unless (reka-test-request-equal last interface request args)
+      (ert-fail (format "Last request %S not equal %s %s (%S)." last interface request args)))))
+
+(defun reka-test-some-request (interface request &optional args)
+  (seq-some (lambda (captured) (reka-test-request-equal captured interface request args)) reka-test-captured))
 
 ;;; Tests
 
-;; ---- The interception machinery itself ----------------------------
+;; ---- The interception machinery itself
 (ert-deftest reka-request-is-captured ()
   (reka-test-with-mock
     (let ((reka--state (reka-test-make-state)))
@@ -103,8 +153,8 @@
                   :protocol 'river-window-management-v1
                   :interface 'river-window-v1)))
         (reka--request obj 'close)
-        (should (= (length reka-test-captured) 1))
-        (should (reka-test-find-request 'close 'river-window-v1))
+        (should (length= reka-test-captured 1))
+        (reka-test-last-request-should 'river-window-v1 'close)
         ;; No real connection was ever made.
         (should (null (reka-state-connection reka--state)))))))
 
@@ -131,28 +181,70 @@
       (should ran)
       (should (null (reka-state-command-queue reka--state))))))
 
-;; ---- Startup ------------------------------------------------------
+;; ---- Startup
 (ert-deftest reka-start-wm-requests-registry ()
   (reka-test-with-mock
     (reka--start-wm)
     (should reka--state)
-    (should (reka-test-find-request 'get-registry 'wl-display))))
+    (reka-test-last-request-should 'wl-display 'get-registry)))
 
 ;; ---- A small end-to-end flow: bind WM global, then an output event
 (ert-deftest reka-output-event-marks-manage-dirty ()
   (reka-test-with-mock
     (reka--start-wm)
     ;; Compositor advertises the window-manager global.
-    (reka-test-simulate-global reka--state "river_window_manager_v1")
+    (reka-test-find-call-listener reka--state
+                             'wl-registry 'global
+                             '((name . 1)
+                               (interface . "river_window_manager_v1")
+                               (version . 1)))
+
     (let ((wm (reka-global reka--state 'river-window-manager-v1)))
       (should wm)
       (should (= reka-test-dirty-count 0))
       ;; Compositor announces an output.
       (funcall (ewc-listener wm 'output) wm '((id . 1)))
-      (should (= reka-test-dirty-count 1))
+      (should (= reka-test-dirty-count 0))
       (should (reka--output-by-id reka--state 1)))))
 
-;; ---- Reconciliation ------------------------------------------------
+;; ---- Output
+(ert-deftest reka-setup-one-output ()
+  (reka-test-with-mock
+   (reka--start-wm)
+   (reka-test-find-call-listener reka--state
+                             'wl-registry 'global
+                             '((name . 1)
+                               (interface . "river_window_manager_v1")
+                               (version . 1)))
+   (let* ((wm (reka-global reka--state 'river-window-manager-v1))
+          (_ (reka-test-last-request-should 'wl-registry 'bind))
+          (output-id (reka-test-server-object-id))
+          (_ (reka-test-call-listener wm 'output `((id . ,output-id))))
+          (output-struct (should (reka--output-by-id reka--state output-id)))
+          (output-proxy (should (reka-output-proxy output-struct)))
+          (_ (should (= reka-test-dirty-count 0)))
+          (_ (should (length= (frame-list) 1)))
+          (_ (reka-test-call-listener output-proxy 'position '((x . 42) (y . 43))))
+          (_ (reka-test-call-listener output-proxy 'dimensions '((width . 44) (height . 45))))
+          (_ (reka-test-call-listener wm 'manage-start))
+          (_ (reka-test-last-request-should 'river-window-manager-v1 'manage-finish))
+          (_ (reka-test-call-listener wm 'render-start))
+          (_ (reka-test-last-request-should 'river-window-manager-v1 'render-finish))
+          ;; emacs frame
+          (win-id (reka-test-server-object-id))
+          (_ (reka-test-call-listener wm 'window `((id . ,win-id))))
+          (_ (reka-test-call-listener win-id 'unreliable-pid `((unreliable-pid . ,(emacs-pid)))))
+          (_ (reka-test-last-request-should 'river-window-v1 'get-node))
+          (_ (should (= (hash-table-count (reka-state-frames reka--state)) 1)))
+          (frame-struct (should (gethash win-id (reka-state-frames reka--state))))
+          (_ (reka-test-call-listener wm 'manage-start))
+          (_ (reka-test-last-request-should 'river-window-manager-v1 'manage-finish))
+          (_ (should (reka-test-some-request 'river-window-v1 'set-tiled)))
+          (_ (should (reka-test-some-request 'river-window-v1 'inform-maximized)))
+          (_ (should (reka-test-some-request 'river-window-v1 'propose-dimensions '((width . 44) (height . 45)))))
+          (_ (reka-test-call-listener wm 'render-start))))))
+
+;; ---- Reconciliation
 (ert-deftest reka-reconcile-closes-killed-window ()
   (reka-test-with-mock
     (let* ((reka--state (reka-test-make-state))
@@ -163,7 +255,7 @@
            (win (reka-window-make :proxy proxy :state 'killed)))
       (puthash (ewc-object-id proxy) win (reka-state-windows reka--state))
       (reka--reconcile-windows reka--state)
-      (should (reka-test-find-request 'close 'river-window-v1)))))
+      (reka-test-last-request-should 'river-window-v1 'close))))
 
 (ert-deftest reka-reconcile-proposes-dimensions ()
   (reka-test-with-mock
@@ -176,10 +268,7 @@
            (win (reka-window-make :proxy proxy :state 'active :params params)))
       (puthash (ewc-object-id proxy) win (reka-state-windows reka--state))
       (reka--reconcile-windows reka--state)
-      (let ((req (reka-test-find-request 'propose-dimensions)))
-        (should req)
-        (should (= (alist-get 'width  (nth 2 req)) 800))
-        (should (= (alist-get 'height (nth 2 req)) 600))))))
+      (reka-test-last-request-should 'river-window-v1 'propose-dimensions '((width . 800) (height . 600))))))
 
 (provide 'reka-tests-functional.el)
 
