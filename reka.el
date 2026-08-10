@@ -905,9 +905,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
                         (if (> (reka-state-pending-frames state) 0)
                             (cl-decf (reka-state-pending-frames state))
-                          (reka-log "New frame was not requested by WM"))
-
-                        (reka--mark-manage-dirty state))
+                          (reka-log "New frame was not requested by WM")))
 
                     (reka-log "Discovered new regular external window")
 
@@ -947,8 +945,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                     (when-let* ((frame
                                 (gethash win-id
                                          (reka-state-frames state))))
-                      (setf (reka-frame-name frame) title)
-                      (reka--mark-manage-dirty state))
+                      (setf (reka-frame-name frame) title))
 
                   (when-let* ((win
                               (gethash win-id
@@ -989,9 +986,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                           (setf (reka-output-fullscreen out) 'none)))
 
               (remhash win-id (reka-state-windows state))
-              (remhash win-id (reka-state-frames state))
-
-              (reka--mark-manage-dirty state))))
+              (remhash win-id (reka-state-frames state)))))
 
     (ewc-set-listener win-obj 'minimize-requested
           (lambda (object _)
@@ -1006,7 +1001,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (ewc-set-listener win-obj 'fullscreen-requested
           (pcase-lambda (object (map output))
             (let ((target
-                   (or (and (integerp output)
+                   (or (and (integerp output) ;; TODO unneeded check
                             (not (zerop output))
                             output)
 
