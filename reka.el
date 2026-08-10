@@ -831,17 +831,13 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (pcase-lambda (_object (map x y))
           (when-let* ((out (reka--output-by-id state output-id)))
             (setf (reka-output-x out) x
-                  (reka-output-y out) y))
-
-          (reka--mark-manage-dirty state)))
+                  (reka-output-y out) y))))
 
   (ewc-set-listener output-obj 'dimensions
         (pcase-lambda (_object (map width height))
           (when-let* ((out (reka--output-by-id state output-id)))
             (setf (reka-output-width out) width
-                  (reka-output-height out) height))
-
-          (reka--mark-manage-dirty state))))
+                  (reka-output-height out) height)))))
 
 (defun reka--setup-seat-listeners (state seat-obj seat-id)
   "Setup listeners for a River seat object."
@@ -1067,8 +1063,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                        (reka-state-outputs state))
 
               (reka--setup-output-listeners state output-obj id)
-              (reka--ensure-ls-output state id)
-              (reka--mark-manage-dirty state))))
+              (reka--ensure-ls-output state id))))
 
     (ewc-set-listener wm-obj 'seat
           (pcase-lambda (_object (map id))
