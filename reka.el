@@ -278,7 +278,8 @@ Example:
            (zerop (recursion-depth))) ;; no recursive edit ongoing
       (if-let* ((wm-window (buffer-local-value 'reka--window buf))
                 (win-state (reka--window-by-proxy state wm-window))
-                (frame (reka--displaying-frame state win-state)))
+                (frame-found (reka--displaying-frame state win-state))
+                (frame (cdr frame-found)))
           (reka--focus-window state
                               wm-window
                               (reka-frame-proxy frame))
@@ -532,12 +533,14 @@ Return nil if S is nil or empty."
   (gethash id (reka-state-outputs state)))
 
 (defun reka--frame-by-cond (state predicate)
-  "Return the first frame in STATE for which PREDICATE returns non-nil."
-  (cl-loop for f being the hash-values of (reka-state-frames state)
-           thereis (and (funcall predicate f) f)))
+  "Return (ID . FRAME) for the first frame in STATE matching PREDICATE."
+  (cl-loop for id being the hash-keys
+           of (reka-state-frames state)
+           using (hash-value f)
+           thereis (and (funcall predicate f) (cons id f))))
 
 (defun reka--displaying-frame (state win)
-  "Return the frame displaying window WIN in STATE, if any."
+  "Return (ID . FRAME) frame displaying window WIN in STATE, if any."
   (when-let* ((p (reka-window-params win))
               (name (reka-window-parameters-frame-name p)))
     (reka--frame-by-cond state
@@ -853,7 +856,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                             (reka--mark-manage-dirty state)))
                          ((gethash window (reka-state-windows state))
                           (if-let* ((w (gethash window (reka-state-windows state)))
-                                    (f (reka--displaying-frame state w)))
+                                    (found (reka--displaying-frame state w))
+                                    (f (cdr found)))
                               (when (and win-obj
                                          (reka--focus-window state
                                                              win-obj
@@ -1006,7 +1010,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                             output)
 
                        (when-let* ((w (reka--window-by-proxy state object))
-                                   (f (reka--displaying-frame state w)))
+                                   (found (reka--displaying-frame state w))
+                                   (f (cdr found)))
                          (reka-frame-displayed-on f))
 
                        (when-let* ((cur (reka--focus-current state))
@@ -1117,10 +1122,11 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   "Ensure each output gets one maximized Emacs frame."
   (let ((frame-requests 0))
     (reka--do outputs (output-id out state)
-              (if-let* ((f (reka--frame-by-cond
+              (if-let* ((found (reka--frame-by-cond
                             state
                             (lambda (f)
-                              (eql (reka-frame-displayed-on f) output-id)))))
+                              (eql (reka-frame-displayed-on f) output-id))))
+                        (f (cdr found)))
                   ;; Frame already assigned: only re-propose if size changed.
                   (unless (and (eq (reka-frame-proposed-width f) (reka-output-width out))
                                (eq (reka-frame-proposed-height f) (reka-output-height out)))
@@ -1131,9 +1137,10 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                    `((width . ,(reka-output-width out))
                                      (height . ,(reka-output-height out)))))
 
-                (if-let* ((f (reka--frame-by-cond
+                (if-let* ((found (reka--frame-by-cond
                               state
                               (lambda (f) (null (reka-frame-displayed-on f)))))
+                          (f (cdr found))
                           (frame-proxy (reka-frame-proxy f)))
                     (progn
                       (setf (reka-frame-displayed-on f) output-id
@@ -1247,7 +1254,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (setf (reka-state-focus-state state) 'lost))
 
   (when (eq (reka-state-focus-state state) 'lost)
-    (if-let* ((f (reka--frame-by-cond state #'reka-frame-displayed-on)))
+    (if-let* ((found (reka--frame-by-cond state #'reka-frame-displayed-on))
+              (f (cdr found)))
         (reka--focus-frame state (reka-frame-proxy f))))
 
   (when-let* ((seat (reka-state-seat state))
@@ -1322,12 +1330,13 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
         (if-let* ((params (reka-window-params win))
                   (frame-name (reka-window-parameters-frame-name params))
-                  (frame (reka--frame-by-cond
+                  (frame-found (reka--frame-by-cond
                           state
                           (lambda
                             (f)
                             (equal (reka-frame-name f)
                                    frame-name))))
+                  (frame (cdr frame-found))
                   (out-id (reka-frame-displayed-on frame))
                   (out (reka--output-by-id state out-id)))
             (progn
