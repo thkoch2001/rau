@@ -529,6 +529,11 @@ Return nil if S is nil or empty."
     (gethash (ewc-object-id proxy)
              (reka-state-frames state))))
 
+(defun reka--surface-by-id (state id)
+  "Return either a window or a frame struct from STATE by ID."
+  (or (gethash id (reka-state-frames state))
+      (gethash id (reka-state-windows state))))
+
 (defun reka--output-by-id (state id)
   "Return output state in STATE for output ID."
   (gethash id (reka-state-outputs state)))
@@ -952,28 +957,18 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
     (ewc-set-listener win-obj 'title
           (pcase-lambda (object (map title))
-            (when-let* ((title (reka--decode-string title)))
-              (let ((win-id (ewc-object-id object)))
-                (if (string-prefix-p "reka-frame-" title)
-                    (when-let* ((frame
-                                (gethash win-id
-                                         (reka-state-frames state))))
-                      (setf (reka-surface-title frame) title))
-
-                  (when-let* ((win
-                              (gethash win-id
-                                       (reka-state-windows state))))
-                    (setf (reka-surface-title win) title)
-
-                    (reka--enqueue
-                     state 'title-change
-                     (lambda ()
-                       (when-let* ((buf
-                                   (reka--find-buffer-for-window object)))
-                         (with-current-buffer buf
-                           (rename-buffer
-                            (reka--make-buffer-name reka--app-id title)
-                            t)))))))))))
+            (when-let* ((title (reka--decode-string title))
+                        (win-id (ewc-object-id object))
+                        (surface (reka--surface-by-id state win-id)))
+              (setf (reka-surface-title surface) title)
+              (when (reka-window-p surface)
+                (reka--enqueue state 'title-change
+                  (lambda ()
+                    (when-let* ((buf (reka--find-buffer-for-window object)))
+                      (with-current-buffer buf
+                        (rename-buffer
+                         (reka--make-buffer-name reka--app-id title)
+                         t)))))))))
 
     (ewc-set-listener win-obj 'dimensions
           (pcase-lambda (object (map width height))
@@ -998,8 +993,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                         (when (eq (reka--fs-window (reka-output-fullscreen out)) object)
                           (setf (reka-output-fullscreen out) 'none)))
 
-              (let* ((surface (or (gethash win-id (reka-state-windows state))
-                                 (gethash win-id (reka-state-frames state))))
+              (let* ((surface (reka--surface-by-id state win-id))
                      (node (reka-surface-node surface))
                      (table (ewc-objects-table (reka-state-objects state))))
                 (reka--request node 'destroy)
