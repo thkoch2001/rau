@@ -827,7 +827,10 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                    (lambda ()
                                      (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
                                        (delete-frame frame))))))
+                      ;; TODO: also remove ls-output
+                      ;; TODO: also destroy objects
                       (remhash output-id (reka-state-outputs state))
+                      (remhash output-id (ewc-objects-table (reka-state-objects state)))
                       (reka--mark-manage-dirty state)))
 
   (ewc-set-listener output-obj 'position
@@ -989,8 +992,11 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                         (when (eq (reka--fs-window (reka-output-fullscreen out)) object)
                           (setf (reka-output-fullscreen out) 'none)))
 
+              ;; Todo: also remove node
+              ;; TODO: also destroy objects
               (remhash win-id (reka-state-windows state))
-              (remhash win-id (reka-state-frames state)))))
+              (remhash win-id (reka-state-frames state))
+              (remhash win-id (ewc-objects-table (reka-state-objects state))))))
 
     (ewc-set-listener win-obj 'minimize-requested
           (lambda (object _)
