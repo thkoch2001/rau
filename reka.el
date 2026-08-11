@@ -1129,7 +1129,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (lambda (object _)
             (unwind-protect
                 (condition-case err
-                    (reka--render state)
+                    (progn
+                      (reka--render-frames state)
+                      (reka--render-windows state))
                   (error
                    (message "reka render error: %S" err)))
                 (reka--request object 'render-finish))))
@@ -1313,9 +1315,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (reka--reconcile-fullscreen state)
   (reka--reconcile-focus state))
 
-(defun reka--render (state)
-  "Run the render-sequence reconciliation for STATE."
-  ;; Frames.
+(defun reka--render-frames (state)
+  "Run the render-sequence reconciliation for frames on STATE."
   (reka--do frames (_id frame state)
             (let ((proxy (reka-surface-proxy frame))
                   (node (reka-surface-node frame))
@@ -1337,9 +1338,10 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                         (reka-frame-last-y frame) (reka-output-y out))
                   (reka--request node 'set-position
                                  `((x . ,(reka-output-x out))
-                                   (y . ,(reka-output-y out))))))))
+                                   (y . ,(reka-output-y out)))))))))
 
-  ;; Windows.
+(defun reka--render-windows (state)
+  "Run the render-sequence reconciliation for windows on STATE."
   (reka--do windows (_id win state)
     (let ((proxy (reka-surface-proxy win))
           (node (reka-surface-node win)))
