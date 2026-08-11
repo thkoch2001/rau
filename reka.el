@@ -484,7 +484,7 @@ when used from other files (e.g. tests)."
     ;; interface-def is: (version events requests)
     (car interface-def)))
 
-(defun reka-global (state interface)
+(defun reka--global (state interface)
   "Fetch the ewc-object for INTERFACE from STATE's globals."
   (when-let* ((id (alist-get interface (reka-state-globals state))))
     (ewc-object-get id (reka-state-objects state))))
@@ -589,7 +589,7 @@ Return nil if S is nil or empty."
            (lambda (state)
              (setq reka--manage-timer nil)
              (condition-case err
-                 (when-let* ((wm (reka-global state
+                 (when-let* ((wm (reka--global state
                                               'river-window-manager-v1)))
                    (reka--request wm 'manage-dirty))
                (error
@@ -787,7 +787,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   "Create a layer-shell output object for OUTPUT-ID if possible."
   (when-let* ((out (reka--output-by-id state output-id))
               ((null (reka-output-ls-output out)))
-              (ls-obj (reka-global state 'river-layer-shell-v1))
+              (ls-obj (reka--global state 'river-layer-shell-v1))
               (objects (reka-state-objects state))
               (ls-output-id (cl-incf (ewc-objects-new-id objects)))
               (ls-output-obj
@@ -806,7 +806,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   "Create a layer-shell seat object for the current seat if possible."
   (when-let* ((seat (reka-state-seat state))
               ((null (reka-seat-ls-seat seat)))
-              (ls-obj (reka-global state 'river-layer-shell-v1))
+              (ls-obj (reka--global state 'river-layer-shell-v1))
               (objects (reka-state-objects state))
               (ls-seat-id (cl-incf (ewc-objects-new-id objects)))
               (ls-seat-obj
@@ -1195,7 +1195,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--reconcile-bindings (state)
   "Create and enable XKB bindings."
-  (when-let* ((xkb (reka-global state 'river-xkb-bindings-v1))
+  (when-let* ((xkb (reka--global state 'river-xkb-bindings-v1))
               (seat (reka-state-seat state))
               (seat-proxy (reka-seat-proxy seat)))
 

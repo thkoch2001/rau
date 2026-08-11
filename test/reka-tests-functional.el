@@ -199,7 +199,7 @@ its id in reka--state objects table."
                                (interface . "river_window_manager_v1")
                                (version . 1)))
 
-    (let ((wm (reka-global reka--state 'river-window-manager-v1)))
+    (let ((wm (reka--global reka--state 'river-window-manager-v1)))
       (should wm)
       (should (= reka-test-dirty-count 0))
       ;; Compositor announces an output.
@@ -216,7 +216,7 @@ its id in reka--state objects table."
                              '((name . 1)
                                (interface . "river_window_manager_v1")
                                (version . 1)))
-   (let* ((wm (reka-global reka--state 'river-window-manager-v1))
+   (let* ((wm (reka--global reka--state 'river-window-manager-v1))
           (_ (reka-test-last-request-should 'wl-registry 'bind))
           (output-id (reka-test-server-object-id))
           (_ (reka-test-call-listener wm 'output `((id . ,output-id))))
