@@ -1016,7 +1016,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (ewc-set-listener win-obj 'fullscreen-requested
           (pcase-lambda (object (map output))
             (let ((target
-                   (or (and (integerp output) ;; TODO unneeded check
+                   (or (and (integerp output)
                             (not (zerop output))
                             output)
 
@@ -1321,16 +1321,15 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                   (reka--request proxy 'show))
                 (when node
                   (reka--request node 'place-bottom))
-                ;; TODO: simplify
-                (when-let* ((out (reka--output-by-id state out-id)))
-                  (when (and node
-                             (not (and (eq (reka-frame-last-x frame) (reka-output-x out))
-                                       (eq (reka-frame-last-y frame) (reka-output-y out)))))
-                    (setf (reka-frame-last-x frame) (reka-output-x out)
-                          (reka-frame-last-y frame) (reka-output-y out))
-                    (reka--request node 'set-position
-                                   `((x . ,(reka-output-x out))
-                                     (y . ,(reka-output-y out)))))))))
+                (when-let* ((out (reka--output-by-id state out-id))
+                            (node)
+                            ((not (and (eq (reka-frame-last-x frame) (reka-output-x out))
+                                       (eq (reka-frame-last-y frame) (reka-output-y out))))))
+                  (setf (reka-frame-last-x frame) (reka-output-x out)
+                        (reka-frame-last-y frame) (reka-output-y out))
+                  (reka--request node 'set-position
+                                 `((x . ,(reka-output-x out))
+                                   (y . ,(reka-output-y out))))))))
 
   ;; Windows.
   (reka--do windows (_id win state)
