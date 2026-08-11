@@ -39,12 +39,15 @@
   (height 0)
   (fullscreen 'none))
 
-;; TODO: consider rename to reka-surface to avoid confusion with buffer-local
-;; var.
-(cl-defstruct (reka-window (:constructor reka-window-make))
-  "State for a regular external window."
+(cl-defstruct (reka-surface (:constructor nil))
+  "Common state shared by windows and frames.
+Not instantiated directly; windows and frames include it."
   proxy
-  node
+  node)
+
+(cl-defstruct (reka-window (:constructor reka-window-make)
+                           (:include reka-surface))
+  "State for a regular external window."
   (state 'starting) ;; 'active 'killed
   params
   actual-width
@@ -52,10 +55,9 @@
   title
   app-id)
 
-(cl-defstruct (reka-frame (:constructor reka-frame-make))
+(cl-defstruct (reka-frame (:constructor reka-frame-make)
+                          (:include reka-surface))
   "State for an Emacs frame managed by reka."
-  proxy
-  node
   name
   displayed-on
   proposed-width
@@ -282,7 +284,7 @@ Example:
                 (frame (cdr frame-found)))
           (reka--focus-window state
                               wm-window
-                              (reka-frame-proxy frame))
+                              (reka-surface-proxy frame))
         (reka-log "reka: cannot focus window that is not displayed")
         nil))
      ;; Otherwise: return focus to the Emacs frame.
@@ -864,7 +866,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                               (when (and win-obj
                                          (reka--focus-window state
                                                              win-obj
-                                                             (reka-frame-proxy f)))
+                                                             (reka-surface-proxy f)))
                                 (setf (reka-state-focus-dirty state) t)
                                 (reka--mark-manage-dirty state))
                             (message "Window interaction for window without frame"))))))))
@@ -1138,7 +1140,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                (eq (reka-frame-proposed-height f) (reka-output-height out)))
                     (setf (reka-frame-proposed-width f) (reka-output-width out)
                           (reka-frame-proposed-height f) (reka-output-height out))
-                    (reka--request (reka-frame-proxy f)
+                    (reka--request (reka-surface-proxy f)
                                    'propose-dimensions
                                    `((width . ,(reka-output-width out))
                                      (height . ,(reka-output-height out)))))
@@ -1147,7 +1149,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                               state
                               (lambda (f) (null (reka-frame-displayed-on f)))))
                           (f (cdr found))
-                          (frame-proxy (reka-frame-proxy f)))
+                          (frame-proxy (reka-surface-proxy f)))
                     (progn
                       (setf (reka-frame-displayed-on f) output-id
                             (reka-frame-proposed-width f) (reka-output-width out)
@@ -1177,16 +1179,16 @@ KEY may be an integer codepoint, a symbol, or a string key name."
               ('active
                (when-let* ((params (reka-window-params win)))
                  ;; TODO: This gets sent on every loop for all windows?
-                 (reka--request (reka-window-proxy win)
+                 (reka--request (reka-surface-proxy win)
                                 'set-tiled
                                 `((edges . ,reka--edges-all)))
 
-                 (reka--request (reka-window-proxy win)
+                 (reka--request (reka-surface-proxy win)
                                 'propose-dimensions
                                 `((width . ,(reka-window-parameters-w params))
                                   (height . ,(reka-window-parameters-h params))))))
               ('killed
-               (reka--request (reka-window-proxy win) 'close)))))
+               (reka--request (reka-surface-proxy win) 'close)))))
 
 (defun reka--reconcile-bindings (state)
   "Create and enable XKB bindings."
@@ -1262,7 +1264,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (when (eq (reka-state-focus-state state) 'lost)
     (if-let* ((found (reka--frame-by-cond state #'reka-frame-displayed-on))
               (f (cdr found)))
-        (reka--focus-frame state (reka-frame-proxy f))))
+        (reka--focus-frame state (reka-surface-proxy f))))
 
   (when-let* ((seat (reka-state-seat state))
               (seat-proxy (reka-seat-proxy seat))
@@ -1304,8 +1306,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   "Run the render-sequence reconciliation for STATE."
   ;; Frames.
   (reka--do frames (_id frame state)
-            (let ((proxy (reka-frame-proxy frame))
-                  (node (reka-frame-node frame))
+            (let ((proxy (reka-surface-proxy frame))
+                  (node (reka-surface-node frame))
                   (out-id (reka-frame-displayed-on frame)))
               (if (not out-id)
                   (when (reka-frame-visible frame)
@@ -1329,8 +1331,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
   ;; Windows.
   (reka--do windows (_id win state)
-    (let ((proxy (reka-window-proxy win))
-          (node (reka-window-node win)))
+    (let ((proxy (reka-surface-proxy win))
+          (node (reka-surface-node win)))
       (if (not (eq (reka-window-state win) 'active))
           (reka--request proxy 'hide)
 
