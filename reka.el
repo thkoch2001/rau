@@ -1340,13 +1340,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (reka--request proxy 'hide)
 
         (if-let* ((params (reka-window-params win))
-                  (frame-name (reka-window-parameters-frame-name params))
-                  (frame-found (reka--frame-by-cond
-                          state
-                          (lambda
-                            (f)
-                            (equal (reka-surface-title f)
-                                   frame-name))))
+                  (frame-found (reka--displaying-frame state win))
                   (frame (cdr frame-found))
                   (out-id (reka-frame-displayed-on frame))
                   (out (reka--output-by-id state out-id)))
