@@ -24,7 +24,7 @@ If WITH-DISPLAY, the window has params pointing at that frame.
 Return (STATE FRAME-OBJ WIN-OBJ WIN)."
   (let* ((state (reka-state-make))
          (frame-obj (ewc-object-make :id 100 :interface 'river-window-v1))
-         (frame (reka-frame-make :proxy frame-obj :name "reka-frame-test"))
+         (frame (reka-frame-make :proxy frame-obj :title "reka-frame-test"))
          (win-obj (ewc-object-make :id 200 :interface 'river-window-v1))
          (win (reka-window-make
                :proxy win-obj

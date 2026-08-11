@@ -43,7 +43,8 @@
   "Common state shared by windows and frames.
 Not instantiated directly; windows and frames include it."
   proxy
-  node)
+  node
+  title)
 
 (cl-defstruct (reka-window (:constructor reka-window-make)
                            (:include reka-surface))
@@ -52,13 +53,11 @@ Not instantiated directly; windows and frames include it."
   params
   actual-width
   actual-height
-  title
   app-id)
 
 (cl-defstruct (reka-frame (:constructor reka-frame-make)
                           (:include reka-surface))
   "State for an Emacs frame managed by reka."
-  name
   displayed-on
   proposed-width
   proposed-height
@@ -546,7 +545,7 @@ Return nil if S is nil or empty."
   (when-let* ((p (reka-window-params win))
               (name (reka-window-parameters-frame-name p)))
     (reka--frame-by-cond state
-      (lambda (f) (equal (reka-frame-name f) name)))))
+      (lambda (f) (equal (reka-surface-title f) name)))))
 ;;; Command queue
 
 (defun reka--schedule-command-handler ()
@@ -823,7 +822,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                     (lambda (_object _)
                       (reka--do frames (_fid f state)
                                 (when-let* (((eql (reka-frame-displayed-on f) output-id))
-                                            (name (reka-frame-name f)))
+                                            (name (reka-surface-title f)))
                                   (reka--enqueue
                                    state 'discard-frame
                                    (lambda ()
@@ -959,12 +958,12 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                     (when-let* ((frame
                                 (gethash win-id
                                          (reka-state-frames state))))
-                      (setf (reka-frame-name frame) title))
+                      (setf (reka-surface-title frame) title))
 
                   (when-let* ((win
                               (gethash win-id
                                        (reka-state-windows state))))
-                    (setf (reka-window-title win) title)
+                    (setf (reka-surface-title win) title)
 
                     (reka--enqueue
                      state 'title-change
@@ -1352,7 +1351,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                           state
                           (lambda
                             (f)
-                            (equal (reka-frame-name f)
+                            (equal (reka-surface-title f)
                                    frame-name))))
                   (frame (cdr frame-found))
                   (out-id (reka-frame-displayed-on frame))
