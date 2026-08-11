@@ -829,10 +829,15 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                    (lambda ()
                                      (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
                                        (delete-frame frame))))))
-                      ;; TODO: also remove ls-output
-                      ;; TODO: also destroy objects
-                      (remhash output-id (reka-state-outputs state))
-                      (remhash output-id (ewc-objects-table (reka-state-objects state)))
+                      (let* ((out (gethash output-id (reka-state-outputs state)))
+                                 (ls-output (reka-output-ls-output out))
+                                 (table (ewc-objects-table (reka-state-objects state))))
+                        (when ls-output
+                          (reka--request ls-output 'destroy)
+                          (remhash (ewc-object-id ls-output) table))
+                        (reka--request output-obj 'destroy)
+                        (remhash output-id (reka-state-outputs state))
+                        (remhash output-id table))
                       (reka--mark-manage-dirty state)))
 
   (ewc-set-listener output-obj 'position
@@ -994,11 +999,16 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                         (when (eq (reka--fs-window (reka-output-fullscreen out)) object)
                           (setf (reka-output-fullscreen out) 'none)))
 
-              ;; Todo: also remove node
-              ;; TODO: also destroy objects
+              (let* ((surface (or (gethash win-id (reka-state-windows state))
+                                 (gethash win-id (reka-state-frames state))))
+                     (node (reka-surface-node surface))
+                     (table (ewc-objects-table (reka-state-objects state))))
+                (reka--request node 'destroy)
+                (reka--request object 'destroy)
+                (remhash win-id table)
+                (remhash (ewc-object-id node) table))
               (remhash win-id (reka-state-windows state))
-              (remhash win-id (reka-state-frames state))
-              (remhash win-id (ewc-objects-table (reka-state-objects state))))))
+              (remhash win-id (reka-state-frames state)))))
 
     (ewc-set-listener win-obj 'minimize-requested
           (lambda (object _)
@@ -1434,7 +1444,10 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
     (ewc-set-listener display 'delete-id
           (pcase-lambda (_object (map id))
-            (remhash id (ewc-objects-table objects))))
+            (when-let* ((table (ewc-objects-table objects))
+                        (obj (gethash id table)))
+              (message "delete-id for obj %d, interface=%s" id (ewc-object-interface obj))
+              (remhash id table))))
 
     (ewc-set-listener registry 'global
           (pcase-lambda (object (map name interface version))
