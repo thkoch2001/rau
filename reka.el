@@ -778,19 +778,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;; Layer shell attachment helpers
 
-(defun reka--setup-ls-output-listeners (ls-output-obj)
-  "Setup listeners for a River layer-shell output object."
-  (ewc-set-listener ls-output-obj 'non-exclusive-area
-        (pcase-lambda (object (map x y width height))
-          (when-let* ((out (cl-loop for out being the hash-values
-                                    of (reka-state-outputs reka--state)
-                                    thereis (and (eq (reka-output-ls-output out) object)
-                                                 out))))
-            (setf (reka-output-x out) x
-                  (reka-output-y out) y
-                  (reka-output-width out) width
-                  (reka-output-height out) height)))))
-
 (defun reka--ensure-ls-output (state output-id)
   "Create a layer-shell output object for OUTPUT-ID if possible."
   (when-let* ((out (reka--output-by-id state output-id))
@@ -804,7 +791,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                :interface 'river-layer-shell-output-v1
                                :id ls-output-id)))
     (setf (reka-output-ls-output out) ls-output-obj)
-    (reka--setup-ls-output-listeners ls-output-obj)
+    (ewc-set-listener ls-output-obj 'non-exclusive-area 'reka-on-river-layer-shell-output-v1-non-exclusive-area)
     (reka--request ls-obj 'get-output
                    `((id . ,ls-output-id)
                      (output . ,output-id)))))
@@ -969,19 +956,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                               :proxy seat-obj))
         (ewc-set-listener seat-obj 'window-interaction 'reka-on-river-seat-v1-window-interaction)
         (reka--ensure-ls-seat reka--state)))))
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ;;;; river-window-v1 listeners
 (defun reka-on-river-window-v1-closed (object _)
@@ -1196,6 +1170,19 @@ KEY may be an integer codepoint, a symbol, or a string key name."
        (lambda ()
          (push (cons t command) unread-command-events)))
       (reka--focus-switch-to-frame reka--state))))
+
+;;;; river-layer-shell-v1 protocol
+;;;; river-layer-shell-output-v1 listeners
+(defun reka-on-river-layer-shell-output-v1-non-exclusive-area (object args)
+  (pcase-let (((map x y width height) args))
+    (when-let* ((out (cl-loop for out being the hash-values
+                              of (reka-state-outputs reka--state)
+                              thereis (and (eq (reka-output-ls-output out) object)
+                                           out))))
+      (setf (reka-output-x out) x
+            (reka-output-y out) y
+            (reka-output-width out) width
+            (reka-output-height out) height))))
 
 ;;; Reconciliation
 
