@@ -826,36 +826,39 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;; Listeners
 
-(defun reka--setup-output-listeners (output-obj output-id)
+(defun reka--setup-output-listeners (output-obj)
   "Setup listeners for a River output object."
   (ewc-set-listener output-obj 'removed
-                    (lambda (_object _)
-                      (reka--do frames (_fid f reka--state)
-                                (when-let* (((eql (reka-frame-displayed-on f) output-id))
-                                            (name (reka-surface-title f)))
-                                  (reka--enqueue
-                                   (lambda ()
-                                     (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
-                                       (delete-frame frame))))))
-                      (let* ((out (gethash output-id (reka-state-outputs reka--state)))
-                                 (ls-output (reka-output-ls-output out))
-                                 (table (ewc-objects-table (reka-state-objects reka--state))))
-                        (when ls-output
-                          (reka--request ls-output 'destroy)
-                          (remhash (ewc-object-id ls-output) table))
-                        (reka--request output-obj 'destroy)
-                        (remhash output-id (reka-state-outputs reka--state))
-                        (remhash output-id table))))
+        (lambda (object _)
+          (let ((output-id (ewc-object-id object)))
+            (reka--do frames (_fid f reka--state)
+                      (when-let* (((eql (reka-frame-displayed-on f) output-id))
+                                  (name (reka-surface-title f)))
+                        (reka--enqueue
+                         (lambda ()
+                           (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
+                             (delete-frame frame))))))
+            (let* ((out (gethash output-id (reka-state-outputs reka--state)))
+                   (ls-output (reka-output-ls-output out))
+                   (table (ewc-objects-table (reka-state-objects reka--state))))
+              (when ls-output
+                (reka--request ls-output 'destroy)
+                (remhash (ewc-object-id ls-output) table))
+              (reka--request object 'destroy)
+              (remhash output-id (reka-state-outputs reka--state))
+              (remhash output-id table)))))
 
   (ewc-set-listener output-obj 'position
-        (pcase-lambda (_object (map x y))
-          (when-let* ((out (reka--output-by-id reka--state output-id)))
+        (pcase-lambda (object (map x y))
+          (when-let* ((output-id (ewc-object-id object))
+                      (out (reka--output-by-id reka--state output-id)))
             (setf (reka-output-x out) x
                   (reka-output-y out) y))))
 
   (ewc-set-listener output-obj 'dimensions
-        (pcase-lambda (_object (map width height))
-          (when-let* ((out (reka--output-by-id reka--state output-id)))
+        (pcase-lambda (object (map width height))
+          (when-let* ((output-id (ewc-object-id object))
+                      (out (reka--output-by-id reka--state output-id)))
             (setf (reka-output-width out) width
                   (reka-output-height out) height)))))
 
@@ -1061,7 +1064,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                        (reka-output-make :proxy output-obj)
                        (reka-state-outputs reka--state))
 
-              (reka--setup-output-listeners output-obj id)
+              (reka--setup-output-listeners output-obj)
               (reka--ensure-ls-output reka--state id))))
 
     (ewc-set-listener wm-obj 'seat
