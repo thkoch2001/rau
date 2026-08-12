@@ -869,7 +869,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
             (setf (reka-output-width out) width
                   (reka-output-height out) height)))))
 
-(defun reka--setup-seat-listeners (state seat-obj seat-id)
+(defun reka--setup-seat-listeners (state seat-obj)
   "Setup listeners for a River seat object."
   (ewc-set-listener seat-obj 'window-interaction
                     (pcase-lambda (_object (map window))
@@ -1103,7 +1103,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                       (reka-seat-make :id id
                                       :proxy seat-obj))
 
-                (reka--setup-seat-listeners state seat-obj id)
+                (reka--setup-seat-listeners state seat-obj)
                 (reka--ensure-ls-seat state)
                 (reka--mark-manage-dirty state)))))
 
@@ -1444,7 +1444,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
               (remhash id table))))
 
     (ewc-set-listener registry 'global
-          (pcase-lambda (object (map name interface version))
+          (pcase-lambda (_object (map name interface version))
             (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
                         (protocol (ewc-find-protocol (reka--read-protocols) ifsym))
                         ((member interface reka--global-binds))

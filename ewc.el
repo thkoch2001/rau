@@ -319,7 +319,7 @@ complete ones."
               (setq progress nil)
             (pcase-let* ((bindat-raw buf)
                          (bindat-idx 0)
-                         ((map id opcode len)
+                         ((map _id _opcode len)
                           (funcall (bindat--type-ue ewc-msg-head))))
               (cond
                ((< len 8)
