@@ -831,6 +831,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;; Order event listeners by their order in the protocol definitions!
 
+;;;; wayland protocol
 ;;;; wl-display listeners
 
 ;; TODO handle individual args and decode the message string with
@@ -883,42 +884,44 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
         (_ (reka-log "reka: bound %s" ifsym))))))
 
+;;;; river-window-management-v1 Protocol
 
-(defun reka--setup-output-listeners (output-obj)
-  "Setup listeners for a River output object."
-  (ewc-set-listener output-obj 'removed
-        (lambda (object _)
-          (let ((output-id (ewc-object-id object)))
-            (reka--do frames (_fid f reka--state)
-                      (when-let* (((eql (reka-frame-displayed-on f) output-id))
-                                  (name (reka-surface-title f)))
-                        (reka--enqueue
-                         (lambda ()
-                           (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
-                             (delete-frame frame))))))
-            (let* ((out (gethash output-id (reka-state-outputs reka--state)))
-                   (ls-output (reka-output-ls-output out))
-                   (table (ewc-objects-table (reka-state-objects reka--state))))
-              (when ls-output
-                (reka--request ls-output 'destroy)
-                (remhash (ewc-object-id ls-output) table))
-              (reka--request object 'destroy)
-              (remhash output-id (reka-state-outputs reka--state))
-              (remhash output-id table)))))
+;;;; river-output-v1 listeners
 
-  (ewc-set-listener output-obj 'position
-        (pcase-lambda (object (map x y))
-          (when-let* ((output-id (ewc-object-id object))
-                      (out (reka--output-by-id reka--state output-id)))
-            (setf (reka-output-x out) x
-                  (reka-output-y out) y))))
+(defun reka-on-river-output-v1-removed (object _)
+  (let ((output-id (ewc-object-id object)))
+    (reka--do frames (_fid f reka--state)
+              (when-let* (((eql (reka-frame-displayed-on f) output-id))
+                          (name (reka-surface-title f)))
+                (reka--enqueue
+                 (lambda ()
+                   (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
+                     (delete-frame frame))))))
+    (let* ((out (gethash output-id (reka-state-outputs reka--state)))
+           (ls-output (reka-output-ls-output out))
+           (table (ewc-objects-table (reka-state-objects reka--state))))
+      (when ls-output
+        (reka--request ls-output 'destroy)
+        (remhash (ewc-object-id ls-output) table))
+      (reka--request object 'destroy)
+      (remhash output-id (reka-state-outputs reka--state))
+      (remhash output-id table))))
 
-  (ewc-set-listener output-obj 'dimensions
-        (pcase-lambda (object (map width height))
-          (when-let* ((output-id (ewc-object-id object))
-                      (out (reka--output-by-id reka--state output-id)))
-            (setf (reka-output-width out) width
-                  (reka-output-height out) height)))))
+;; TODO: listener for wl_output, e.g. to get monitor names
+
+(defun reka-on-river-output-v1-position (object args)
+  (pcase-let (((map x y) args))
+    (when-let* ((output-id (ewc-object-id object))
+                (out (reka--output-by-id reka--state output-id)))
+      (setf (reka-output-x out) x
+            (reka-output-y out) y))))
+
+(defun reka-on-river-output-v1-dimensions (object args)
+  (pcase-let (((map width height) args))
+    (when-let* ((output-id (ewc-object-id object))
+                (out (reka--output-by-id reka--state output-id)))
+      (setf (reka-output-width out) width
+            (reka-output-height out) height)))))
 
 (defun reka--setup-seat-listeners (seat-obj)
   "Setup listeners for a River seat object."
@@ -1125,7 +1128,10 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                        (reka-output-make :proxy output-obj)
                        (reka-state-outputs reka--state))
 
-              (reka--setup-output-listeners output-obj)
+              (ewc-set-listener output-obj 'removed 'reka-on-river-output-v1-removed)
+              (ewc-set-listener output-obj 'position 'reka-on-river-output-v1-position)
+              (ewc-set-listener output-obj 'dimensions 'reka-on-river-output-v1-dimensions)
+
               (reka--ensure-ls-output reka--state id))))
 
     (ewc-set-listener wm-obj 'seat
