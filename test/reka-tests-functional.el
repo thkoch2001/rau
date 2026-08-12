@@ -172,7 +172,7 @@ its id in reka--state objects table."
   (reka-test-with-mock
     (let ((reka--state (reka-test-make-state))
           (ran nil))
-      (reka--enqueue reka--state 'test-cmd (lambda () (setq ran t)))
+      (reka--enqueue (lambda () (setq ran t)))
       ;; Enqueue asked for a handler, but it was intercepted.
       (should (= reka-test-handler-count 1))
       (should (null ran))

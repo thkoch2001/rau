@@ -111,7 +111,7 @@ Not instantiated directly; windows and frames include it."
   ;; Frame request accounting.
   (pending-frames 0)
 
-  ;; Lambda command queue: list of (NAME . LAMBDA).
+  ;; Lambda command queue: list of LAMBDA.
   (command-queue nil))
 
 (cl-defmacro reka--do (with (key val state) &body body)
@@ -198,13 +198,10 @@ Example:
         (error
          (message "reka update window parameters error: %S" err)))
       ;; Drain the command queue.
-      (while-let ((queue (reka-state-command-queue state))
-                  (cmd (car queue)))
-        (setf (reka-state-command-queue state) (cdr queue))
+      (while-let ((cmd (pop (reka-state-command-queue state))))
         (condition-case err
-            (funcall (cdr cmd))
-          (error (message
-                  "reka command %s failed: %S" (car cmd) err))))
+            (funcall cmd)
+          (error (message "reka command failed: %S" err))))
 
       (when (or reka--pending-handler
                 (reka-state-command-queue state))
@@ -583,13 +580,12 @@ Return nil if S is nil or empty."
              reka--state
              )))))
 
-(defun reka--enqueue (state name fn)
-  "Queue FN under NAME in STATE."
-  (when state
-    (setf (reka-state-command-queue state)
-          (append (reka-state-command-queue state)
-                  (list (cons name fn))))
-    (reka--schedule-command-handler)))
+(defun reka--enqueue (fn)
+  "Queue FN for execution by reka--command-handler and schedule the command
+handler timer. Only to be used in event listeners."
+  (setf (reka-state-command-queue reka--state)
+        (append (reka-state-command-queue reka--state) (list fn)))
+  (reka--schedule-command-handler))
 
 ;;; manage-dirty coalescing
 
@@ -842,7 +838,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                 (when-let* (((eql (reka-frame-displayed-on f) output-id))
                                             (name (reka-surface-title f)))
                                   (reka--enqueue
-                                   state 'discard-frame
                                    (lambda ()
                                      (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
                                        (delete-frame frame))))))
@@ -902,7 +897,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
               (if (eq command 'toggle-fullscreen)
                   (reka--toggle-fullscreen state)
                 (reka--enqueue
-                 state 'key-event
                  (lambda ()
                    (push (cons t command) unread-command-events)))
                 (reka--focus-switch-to-frame state)))))))
@@ -947,7 +941,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                              (reka-state-windows state))
 
                     (reka--enqueue
-                     state 'new-window
                      (lambda ()
                        ;; Confirm that the Emacs-side buffer for the window was created.
                        (when-let* ((win (reka--window-by-proxy state object)))
@@ -962,7 +955,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
               (setf (reka-window-app-id win) app-id)
 
               (reka--enqueue
-               state 'app-id-change
                (lambda ()
                  (when-let* ((buf (reka--find-buffer-for-window object)))
                    (with-current-buffer buf
@@ -975,7 +967,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                         (surface (reka--surface-by-id state win-id)))
               (setf (reka-surface-title surface) title)
               (when (reka-window-p surface)
-                (reka--enqueue state 'title-change
+                (reka--enqueue
                   (lambda ()
                     (when-let* ((buf (reka--find-buffer-for-window object)))
                       (with-current-buffer buf
@@ -994,7 +986,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
             (let ((win-id (ewc-object-id object)))
               (when (gethash win-id (reka-state-windows state))
                 (reka--enqueue
-                 state 'window-closed
                  (lambda ()
                    (when-let* ((buf (reka--find-buffer-for-window object)))
                      (kill-buffer buf)))))
@@ -1020,7 +1011,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (lambda (object _)
             (when (reka--window-by-proxy state object)
               (reka--enqueue
-               state 'minimize-requested
                (lambda ()
                  (when-let* ((buf (reka--find-buffer-for-window object)))
                    (with-current-buffer buf
@@ -1179,7 +1169,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                   ;; No frame on this output yet: request one.
                   (cl-incf frame-requests))))
     (dotimes (_ (- frame-requests (reka-state-pending-frames state)))
-      (reka--enqueue state 'frame-request (lambda () (make-frame)))
+      (reka--enqueue (lambda () (make-frame)))
       (cl-incf (reka-state-pending-frames state)))))
 
 (defun reka--reconcile-windows (state)
@@ -1299,7 +1289,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
         (unless (and frame target (eq target frame))
           (reka--enqueue
-           state 'focused
            (lambda ()
              (reka--select-buffer-for-window target))))
 
@@ -1384,7 +1373,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
             (frame (cdr cur)))
       (if (eq focus frame)
           (reka--enqueue
-           state 'message
            (lambda ()
              (message "reka: can not fullscreen Emacs even more!")))
 
