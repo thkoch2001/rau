@@ -152,8 +152,6 @@ Example:
               (eq (buffer-local-value 'reka--window buf) window))
             (buffer-list)))
 
-(defvar-local reka--app-id nil)
-
 (defun reka--make-buffer-name (app-id title)
   (let ((title-trunc (if (> (length title) 40)
                          (format "%s…" (substring title 0 40))
@@ -952,13 +950,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (pcase-lambda (object (map app-id))
             (when-let* ((app-id (reka--decode-string app-id))
                         (win (reka--window-by-proxy state object)))
-              (setf (reka-window-app-id win) app-id)
-
-              (reka--enqueue
-               (lambda ()
-                 (when-let* ((buf (reka--find-buffer-for-window object)))
-                   (with-current-buffer buf
-                     (setq reka--app-id app-id))))))))
+              (setf (reka-window-app-id win) app-id))))
 
     (ewc-set-listener win-obj 'title
           (pcase-lambda (object (map title))
@@ -972,7 +964,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                     (when-let* ((buf (reka--find-buffer-for-window object)))
                       (with-current-buffer buf
                         (rename-buffer
-                         (reka--make-buffer-name reka--app-id title)
+                         (reka--make-buffer-name
+                          (reka-window-app-id surface)
+                          title)
                          t)))))))))
 
     (ewc-set-listener win-obj 'dimensions
