@@ -829,6 +829,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;; Listeners
 
+;; Order event listeners by their order in the protocol definitions!
+
 ;;;; wl-display listeners
 
 ;; TODO handle individual args and decode the message string with
@@ -843,6 +845,44 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                 (obj (gethash id table)))
       (message "delete-id for obj %d, interface=%s" id (ewc-object-interface obj))
       (remhash id table))))
+
+;;;; wl-registry listeners
+
+(defun reka-on-wl-registry-global (registry args)
+  (pcase-let (((map name interface version) args))
+    (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
+                (protocol (ewc-find-protocol (reka--read-protocols) ifsym))
+                ((member interface reka--global-binds))
+                (objects (reka-state-objects reka--state))
+                (new-id (cl-incf (ewc-objects-new-id objects)))
+                (xml-version (reka--interface-version objects protocol ifsym))
+                (bind-version
+                 (if xml-version (min version xml-version) version))
+                (bound-object (ewc-object-add :objects objects
+                                              :protocol protocol
+                                              :interface ifsym
+                                              :id new-id)))
+      (reka-log "reka: binding global %s version %s" interface bind-version)
+      (reka--request registry 'bind
+                     `((name . ,name)
+                       (interface-len . ,(1+ (string-bytes interface)))
+                       (interface . ,interface)
+                       (version . ,bind-version)
+                       (id . ,new-id)))
+      (push (cons ifsym new-id) (reka-state-globals reka--state))
+
+      (pcase ifsym
+        ('river-window-manager-v1
+         (reka--setup-wm-listeners bound-object))
+
+        ('river-layer-shell-v1
+         ;; Attach layer-shell objects to existing outputs/seats in STATE."
+         (reka--do outputs (id _out reka--state)
+                   (reka--ensure-ls-output reka--state id))
+         (reka--ensure-ls-seat reka--state))
+
+        (_ (reka-log "reka: bound %s" ifsym))))))
+
 
 (defun reka--setup-output-listeners (output-obj)
   "Setup listeners for a River output object."
@@ -1429,40 +1469,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
     (ewc-set-listener display 'error 'reka-on-wl-display-error)
     (ewc-set-listener display 'delete-id 'reka-on-wl-display-delete-id)
-    (ewc-set-listener registry 'global
-          (pcase-lambda (_object (map name interface version))
-            (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
-                        (protocol (ewc-find-protocol (reka--read-protocols) ifsym))
-                        ((member interface reka--global-binds))
-                        (objects (reka-state-objects reka--state))
-                        (new-id (cl-incf (ewc-objects-new-id objects)))
-                        (xml-version (reka--interface-version objects protocol ifsym))
-                        (bind-version
-                         (if xml-version (min version xml-version) version))
-                        (bound-object (ewc-object-add :objects objects
-                                                      :protocol protocol
-                                                      :interface ifsym
-                                                      :id new-id)))
-              (reka-log "reka: binding global %s version %s" interface bind-version)
-              (reka--request registry 'bind
-                             `((name . ,name)
-                               (interface-len . ,(1+ (string-bytes interface)))
-                               (interface . ,interface)
-                               (version . ,bind-version)
-                               (id . ,new-id)))
-              (push (cons ifsym new-id) (reka-state-globals reka--state))
-
-              (pcase ifsym
-                ('river-window-manager-v1
-                 (reka--setup-wm-listeners bound-object))
-
-                ('river-layer-shell-v1
-                 ;; Attach layer-shell objects to existing outputs/seats in STATE."
-                 (reka--do outputs (id _out reka--state)
-                           (reka--ensure-ls-output reka--state id))
-                 (reka--ensure-ls-seat reka--state))
-
-                (_ (reka-log "reka: bound %s" ifsym))))))
+    (ewc-set-listener registry 'global 'reka-on-wl-registry-global)
 
     (reka--request display 'get-registry
                    `((registry . ,(ewc-object-id registry))))))
