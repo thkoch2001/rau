@@ -1125,7 +1125,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
            (setf (reka-window-state win) 'active)
            (reka--mark-manage-dirty reka--state)))))))
 
-
 ;;;; river-output-v1 listeners
 (defun reka-on-river-output-v1-removed (object _)
   (let ((output-id (ewc-object-id object)))
@@ -1183,21 +1182,20 @@ KEY may be an integer codepoint, a symbol, or a string key name."
             (setf (reka-state-focus-dirty reka--state) t))
         (message "Window interaction for window without frame"))))))
 
-(defun reka--setup-binding-listeners (proxy)
-  "Setup listeners for one XKB binding object."
-  (ewc-set-listener proxy 'pressed
-        (lambda (object _)
-          (when-let* ((binding
-                       (cl-loop for b being the hash-values
-                                of (reka-state-bindings reka--state)
-                                thereis (and (eq (reka-binding-proxy b) object) b)))
-                      (command (reka-binding-command binding)))
-            (if (eq command 'toggle-fullscreen)
-                (reka--toggle-fullscreen reka--state)
-              (reka--enqueue
-               (lambda ()
-                 (push (cons t command) unread-command-events)))
-              (reka--focus-switch-to-frame reka--state))))))
+;;;; river-xkb-bindings-v1 protocol
+;;;; river-xkb-binding-v1 listeners
+(defun reka-on-river-xkb-binding-v1-pressed (object _)
+  (when-let* ((binding
+               (cl-loop for b being the hash-values
+                        of (reka-state-bindings reka--state)
+                        thereis (and (eq (reka-binding-proxy b) object) b)))
+              (command (reka-binding-command binding)))
+    (if (eq command 'toggle-fullscreen)
+        (reka--toggle-fullscreen reka--state)
+      (reka--enqueue
+       (lambda ()
+         (push (cons t command) unread-command-events)))
+      (reka--focus-switch-to-frame reka--state))))
 
 ;;; Reconciliation
 
@@ -1275,7 +1273,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                 :interface 'river-xkb-binding-v1
                                 :id id)))
 
-          (reka--setup-binding-listeners proxy)
+          (ewc-set-listener proxy 'pressed 'reka-on-river-xkb-binding-v1-pressed)
 
           (reka--request xkb 'get-xkb-binding
                        `((seat . ,(ewc-object-id seat-proxy))
