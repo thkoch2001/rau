@@ -778,11 +778,14 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;; Layer shell attachment helpers
 
-(defun reka--setup-ls-output-listeners (ls-output-obj output-id)
+(defun reka--setup-ls-output-listeners (ls-output-obj)
   "Setup listeners for a River layer-shell output object."
   (ewc-set-listener ls-output-obj 'non-exclusive-area
-        (pcase-lambda (_object (map x y width height))
-          (when-let* ((out (reka--output-by-id reka--state output-id)))
+        (pcase-lambda (object (map x y width height))
+          (when-let* ((out (cl-loop for out being the hash-values
+                                    of (reka-state-outputs reka--state)
+                                    thereis (and (eq (reka-output-ls-output out) object)
+                                                 out))))
             (setf (reka-output-x out) x
                   (reka-output-y out) y
                   (reka-output-width out) width
@@ -801,7 +804,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                :interface 'river-layer-shell-output-v1
                                :id ls-output-id)))
     (setf (reka-output-ls-output out) ls-output-obj)
-    (reka--setup-ls-output-listeners ls-output-obj output-id)
+    (reka--setup-ls-output-listeners ls-output-obj)
     (reka--request ls-obj 'get-output
                    `((id . ,ls-output-id)
                      (output . ,output-id)))))
