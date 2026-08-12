@@ -786,9 +786,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
             (setf (reka-output-x out) x
                   (reka-output-y out) y
                   (reka-output-width out) width
-                  (reka-output-height out) height))
-
-          (reka--mark-manage-dirty state))))
+                  (reka-output-height out) height)))))
 
 (defun reka--ensure-ls-output (state output-id)
   "Create a layer-shell output object for OUTPUT-ID if possible."
@@ -847,8 +845,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                           (remhash (ewc-object-id ls-output) table))
                         (reka--request output-obj 'destroy)
                         (remhash output-id (reka-state-outputs state))
-                        (remhash output-id table))
-                      (reka--mark-manage-dirty state)))
+                        (remhash output-id table))))
 
   (ewc-set-listener output-obj 'position
         (pcase-lambda (_object (map x y))
@@ -872,8 +869,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                          ((gethash window (reka-state-frames state))
                           (when (and win-obj
                                      (reka--focus-frame state win-obj))
-                            (setf (reka-state-focus-dirty state) t)
-                            (reka--mark-manage-dirty state)))
+                            (setf (reka-state-focus-dirty state) t)))
                          ((gethash window (reka-state-windows state))
                           (if-let* ((w (gethash window (reka-state-windows state)))
                                     (found (reka--frame-displaying-win state w))
@@ -882,8 +878,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                          (reka--focus-window state
                                                              win-obj
                                                              (reka-surface-proxy f)))
-                                (setf (reka-state-focus-dirty state) t)
-                                (reka--mark-manage-dirty state))
+                                (setf (reka-state-focus-dirty state) t))
                             (message "Window interaction for window without frame"))))))))
 
 (defun reka--setup-binding-listeners (state proxy key)
@@ -1039,8 +1034,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                     (setf (reka-output-fullscreen out)
                           (list :state 'requested
                                 :new object
-                                :previous previous))
-                    (reka--mark-manage-dirty state)))))))
+                                :previous previous))))))))
 
     (ewc-set-listener win-obj 'exit-fullscreen-requested
           (lambda (object _)
@@ -1051,8 +1045,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                            (eq (reka--fs-window fs) object))
                   (setf (reka-output-fullscreen out)
                         (list :state 'exiting
-                              :window (reka--fs-window fs)))
-                  (reka--mark-manage-dirty state))))))))
+                              :window (reka--fs-window fs))))))))))
 
 (defun reka--setup-wm-listeners (state wm-obj)
   "Setup initial event listeners for the River window manager."
@@ -1088,8 +1081,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                       :proxy seat-obj))
 
                 (reka--setup-seat-listeners state seat-obj)
-                (reka--ensure-ls-seat state)
-                (reka--mark-manage-dirty state)))))
+                (reka--ensure-ls-seat state)))))
 
     (ewc-set-listener wm-obj 'window
           (pcase-lambda (_object (map id))
