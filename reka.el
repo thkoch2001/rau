@@ -921,29 +921,29 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (when-let* ((output-id (ewc-object-id object))
                 (out (reka--output-by-id reka--state output-id)))
       (setf (reka-output-width out) width
-            (reka-output-height out) height)))))
+            (reka-output-height out) height))))
 
-(defun reka--setup-seat-listeners (seat-obj)
-  "Setup listeners for a River seat object."
-  (ewc-set-listener seat-obj 'window-interaction
-                    (pcase-lambda (_object (map window))
-                      (let ((win-obj (ewc-object-get window
-                                                     (reka-state-objects reka--state))))
-                        (cond
-                         ((gethash window (reka-state-frames reka--state))
-                          (when (and win-obj
-                                     (reka--focus-frame reka--state win-obj))
-                            (setf (reka-state-focus-dirty reka--state) t)))
-                         ((gethash window (reka-state-windows reka--state))
-                          (if-let* ((w (gethash window (reka-state-windows reka--state)))
-                                    (found (reka--frame-displaying-win reka--state w))
-                                    (f (cdr found)))
-                              (when (and win-obj
-                                         (reka--focus-window reka--state
-                                                             win-obj
-                                                             (reka-surface-proxy f)))
-                                (setf (reka-state-focus-dirty reka--state) t))
-                            (message "Window interaction for window without frame"))))))))
+;;;; river-seat-v1 listener
+
+(defun reka-on-river-seat-v1-window-interaction (_object args)
+  (pcase-let* (((map window) args)
+               (win-obj (ewc-object-get window
+                                        (reka-state-objects reka--state))))
+    (cond
+     ((gethash window (reka-state-frames reka--state))
+      (when (and win-obj
+                 (reka--focus-frame reka--state win-obj))
+        (setf (reka-state-focus-dirty reka--state) t)))
+     ((gethash window (reka-state-windows reka--state))
+      (if-let* ((w (gethash window (reka-state-windows reka--state)))
+                (found (reka--frame-displaying-win reka--state w))
+                (f (cdr found)))
+          (when (and win-obj
+                     (reka--focus-window reka--state
+                                         win-obj
+                                         (reka-surface-proxy f)))
+            (setf (reka-state-focus-dirty reka--state) t))
+        (message "Window interaction for window without frame"))))))
 
 (defun reka--setup-binding-listeners (proxy)
   "Setup listeners for one XKB binding object."
@@ -1149,7 +1149,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                       (reka-seat-make :id id
                                       :proxy seat-obj))
 
-                (reka--setup-seat-listeners seat-obj)
+                (ewc-set-listener seat-obj 'window-interaction 'reka-on-river-seat-v1-window-interaction)
                 (reka--ensure-ls-seat reka--state)))))
 
     (ewc-set-listener wm-obj 'window
