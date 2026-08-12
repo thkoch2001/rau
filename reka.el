@@ -887,18 +887,21 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                 (setf (reka-state-focus-dirty reka--state) t))
                             (message "Window interaction for window without frame"))))))))
 
-(defun reka--setup-binding-listeners (proxy key)
+(defun reka--setup-binding-listeners (proxy)
   "Setup listeners for one XKB binding object."
   (ewc-set-listener proxy 'pressed
-        (lambda (_object _)
-          (when-let* ((binding (gethash key (reka-state-bindings reka--state))))
-            (let ((command (reka-binding-command binding)))
-              (if (eq command 'toggle-fullscreen)
-                  (reka--toggle-fullscreen reka--state)
-                (reka--enqueue
-                 (lambda ()
-                   (push (cons t command) unread-command-events)))
-                (reka--focus-switch-to-frame reka--state)))))))
+        (lambda (object _)
+          (when-let* ((binding
+                       (cl-loop for b being the hash-values
+                                of (reka-state-bindings reka--state)
+                                thereis (and (eq (reka-binding-proxy b) object) b)))
+                      (command (reka-binding-command binding)))
+            (if (eq command 'toggle-fullscreen)
+                (reka--toggle-fullscreen reka--state)
+              (reka--enqueue
+               (lambda ()
+                 (push (cons t command) unread-command-events)))
+              (reka--focus-switch-to-frame reka--state))))))
 
 (defun reka--setup-window-listeners (win-obj _win-id)
   "Setup listeners for a River window object."
@@ -1199,7 +1202,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                 :interface 'river-xkb-binding-v1
                                 :id id)))
 
-          (reka--setup-binding-listeners proxy key)
+          (reka--setup-binding-listeners proxy)
 
           (reka--request xkb 'get-xkb-binding
                        `((seat . ,(ewc-object-id seat-proxy))
