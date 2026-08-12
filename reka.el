@@ -896,50 +896,49 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--setup-window-listeners (win-obj _win-id)
   "Setup listeners for a River window object."
-  (let ((objects (reka-state-objects reka--state)))
-
     (ewc-set-listener win-obj 'unreliable-pid
           (pcase-lambda (object (map unreliable-pid))
-            (let ((win-id (ewc-object-id object))
-                  (node-obj
-                   (ewc-object-add
-                    :objects objects
-                    :protocol 'river-window-management-v1
-                    :interface 'river-node-v1
-                    :id (cl-incf (ewc-objects-new-id objects)))))
+            (let* ((win-id (ewc-object-id object))
+                   (objects (reka-state-objects reka--state))
+                   (node-obj
+                    (ewc-object-add
+                     :objects objects
+                     :protocol 'river-window-management-v1
+                     :interface 'river-node-v1
+                     :id (cl-incf (ewc-objects-new-id objects)))))
 
-                  (reka--request object 'get-node
-                               `((id . ,(ewc-object-id node-obj))))
+              (reka--request object 'get-node
+                             `((id . ,(ewc-object-id node-obj))))
 
-                  (if (= unreliable-pid (reka-state-pid reka--state))
-                      (progn
-                        (reka-log "Discovered new Emacs frame")
-
-                        (puthash win-id
-                                 (reka-frame-make
-                                  :proxy object
-                                  :node node-obj)
-                                 (reka-state-frames reka--state))
-
-                        (if (> (reka-state-pending-frames reka--state) 0)
-                            (cl-decf (reka-state-pending-frames reka--state))
-                          (reka-log "New frame was not requested by WM")))
-
-                    (reka-log "Discovered new regular external window")
+              (if (= unreliable-pid (reka-state-pid reka--state))
+                  (progn
+                    (reka-log "Discovered new Emacs frame")
 
                     (puthash win-id
-                             (reka-window-make
+                             (reka-frame-make
                               :proxy object
                               :node node-obj)
-                             (reka-state-windows reka--state))
+                             (reka-state-frames reka--state))
 
-                    (reka--enqueue
-                     (lambda ()
-                       ;; Confirm that the Emacs-side buffer for the window was created.
-                       (when-let* ((win (reka--window-by-proxy reka--state object)))
-                         (reka--create-buffer object)
-                         (setf (reka-window-state win) 'active)
-                         (reka--mark-manage-dirty reka--state))))))))
+                    (if (> (reka-state-pending-frames reka--state) 0)
+                        (cl-decf (reka-state-pending-frames reka--state))
+                      (reka-log "New frame was not requested by WM")))
+
+                (reka-log "Discovered new regular external window")
+
+                (puthash win-id
+                         (reka-window-make
+                          :proxy object
+                          :node node-obj)
+                         (reka-state-windows reka--state))
+
+                (reka--enqueue
+                 (lambda ()
+                   ;; Confirm that the Emacs-side buffer for the window was created.
+                   (when-let* ((win (reka--window-by-proxy reka--state object)))
+                     (reka--create-buffer object)
+                     (setf (reka-window-state win) 'active)
+                     (reka--mark-manage-dirty reka--state))))))))
 
     (ewc-set-listener win-obj 'app-id
           (pcase-lambda (object (map app-id))
@@ -1045,19 +1044,18 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                            (eq (reka--fs-window fs) object))
                   (setf (reka-output-fullscreen out)
                         (list :state 'exiting
-                              :window (reka--fs-window fs))))))))))
+                              :window (reka--fs-window fs)))))))))
 
 (defun reka--setup-wm-listeners (wm-obj)
   "Setup initial event listeners for the River window manager."
-  (let ((objects (reka-state-objects reka--state)))
-
     (ewc-set-listener wm-obj 'output
           (pcase-lambda (_object (map id))
-            (let ((output-obj
-                   (ewc-object-add :objects objects
-                                   :protocol 'river-window-management-v1
-                                   :interface 'river-output-v1
-                                   :id id)))
+            (let* ((objects (reka-state-objects reka--state))
+                   (output-obj
+                    (ewc-object-add :objects objects
+                                    :protocol 'river-window-management-v1
+                                    :interface 'river-output-v1
+                                    :id id)))
 
               (puthash id
                        (reka-output-make :proxy output-obj)
@@ -1070,11 +1068,12 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (pcase-lambda (_object (map id))
             (if (reka-state-seat reka--state)
                 (message "reka does not support multi-seat")
-              (let ((seat-obj
-                     (ewc-object-add :objects objects
-                                     :protocol 'river-window-management-v1
-                                     :interface 'river-seat-v1
-                                     :id id)))
+              (let* ((objects (reka-state-objects reka--state))
+                     (seat-obj
+                      (ewc-object-add :objects objects
+                                      :protocol 'river-window-management-v1
+                                      :interface 'river-seat-v1
+                                      :id id)))
 
                 (setf (reka-state-seat reka--state)
                       (reka-seat-make :id id
@@ -1086,7 +1085,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (ewc-set-listener wm-obj 'window
           (pcase-lambda (_object (map id))
             (let ((win-obj
-                   (ewc-object-add :objects objects
+                   (ewc-object-add :objects (reka-state-objects reka--state)
                                    :protocol 'river-window-management-v1
                                    :interface 'river-window-v1
                                    :id id)))
@@ -1116,7 +1115,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (let ((evt evt))
         (ewc-set-listener wm-obj evt
               (lambda (_object _)
-                (message "reka: WM event %s" evt)))))))
+                (message "reka: WM event %s" evt))))))
 
 ;;; Reconciliation
 
@@ -1412,7 +1411,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
     (ewc-set-listener display 'delete-id
           (pcase-lambda (_object (map id))
-            (when-let* ((table (ewc-objects-table objects))
+            (when-let* ((objects (reka-state-objects reka--state))
+                        (table (ewc-objects-table objects))
                         (obj (gethash id table)))
               (message "delete-id for obj %d, interface=%s" id (ewc-object-interface obj))
               (remhash id table))))
@@ -1422,6 +1422,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
             (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
                         (protocol (ewc-find-protocol (reka--read-protocols) ifsym))
                         ((member interface reka--global-binds))
+                        (objects (reka-state-objects reka--state))
                         (new-id (cl-incf (ewc-objects-new-id objects)))
                         (xml-version (reka--interface-version objects protocol ifsym))
                         (bind-version
