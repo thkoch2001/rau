@@ -829,6 +829,21 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;; Listeners
 
+;;;; wl-display listeners
+
+;; TODO handle individual args and decode the message string with
+;; reka--decode-string
+(defun reka-on-wl-display-error (_object args)
+  (message "wl_display error: %S" args))
+
+(defun reka-on-wl-display-delete-id (_object args)
+  (pcase-let (((map id) args))
+    (when-let* ((objects (reka-state-objects reka--state))
+                (table (ewc-objects-table objects))
+                (obj (gethash id table)))
+      (message "delete-id for obj %d, interface=%s" id (ewc-object-interface obj))
+      (remhash id table))))
+
 (defun reka--setup-output-listeners (output-obj)
   "Setup listeners for a River output object."
   (ewc-set-listener output-obj 'removed
@@ -1412,20 +1427,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
     (setq reka--state state)
 
-    (ewc-set-listener display 'error
-                      (lambda (_object args)
-                        ;; TODO handle individual args and decode the message string with
-                        ;; reka--decode-string
-                        (message "wl_display error: %S" args)))
-
-    (ewc-set-listener display 'delete-id
-          (pcase-lambda (_object (map id))
-            (when-let* ((objects (reka-state-objects reka--state))
-                        (table (ewc-objects-table objects))
-                        (obj (gethash id table)))
-              (message "delete-id for obj %d, interface=%s" id (ewc-object-interface obj))
-              (remhash id table))))
-
+    (ewc-set-listener display 'error 'reka-on-wl-display-error)
+    (ewc-set-listener display 'delete-id 'reka-on-wl-display-delete-id)
     (ewc-set-listener registry 'global
           (pcase-lambda (_object (map name interface version))
             (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
