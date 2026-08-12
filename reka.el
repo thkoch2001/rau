@@ -1178,11 +1178,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                      `((edges . ,reka--edges-all))))
                   ;; No frame on this output yet: request one.
                   (cl-incf frame-requests))))
-
-    (when (> frame-requests (reka-state-pending-frames state))
-      (dotimes (_ (- frame-requests (reka-state-pending-frames state)))
-        (reka--enqueue state 'frame-request (lambda () (make-frame)))
-        (cl-incf (reka-state-pending-frames state))))))
+    (dotimes (_ (- frame-requests (reka-state-pending-frames state)))
+      (reka--enqueue state 'frame-request (lambda () (make-frame)))
+      (cl-incf (reka-state-pending-frames state)))))
 
 (defun reka--reconcile-windows (state)
   "Close killed windows and propose dimensions for active windows."
