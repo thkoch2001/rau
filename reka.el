@@ -872,7 +872,15 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
       (pcase ifsym
         ('river-window-manager-v1
-         (reka--setup-wm-listeners bound-object))
+         (ewc-set-listener bound-object 'output 'reka-on-river-window-manager-v1-output)
+         (ewc-set-listener bound-object 'seat 'reka-on-river-window-manager-v1-seat)
+         (ewc-set-listener bound-object 'window 'reka-on-river-window-manager-v1-window)
+         (ewc-set-listener bound-object 'manage-start 'reka-on-river-window-manager-v1-manage-start)
+         (ewc-set-listener bound-object 'render-start 'reka-on-river-window-manager-v1-render-start)
+         (ewc-set-listener bound-object 'unavailable 'reka-on-river-window-manager-v1-unavailable)
+         (ewc-set-listener bound-object 'finished 'reka-on-river-window-manager-v1-finished)
+         (ewc-set-listener bound-object 'session-locked 'reka-on-river-window-manager-v1-session-locked)
+         (ewc-set-listener bound-object 'session-unlocked 'reka-on-river-window-manager-v1-session-unlocked))
 
         ('river-layer-shell-v1
          ;; Attach layer-shell objects to existing outputs/seats in STATE."
@@ -883,6 +891,98 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (_ (reka-log "reka: bound %s" ifsym))))))
 
 ;;;; river-window-management-v1 Protocol
+;;;; river-window-manager-v1 listeners
+(defun reka-on-river-window-manager-v1-unavailable (_object _)
+  (message "reka: WM event unavailable"))
+
+(defun reka-on-river-window-manager-v1-finished (_object _)
+  (message "reka: WM event finished"))
+
+(defun reka-on-river-window-manager-v1-manage-start (object _)
+  (unwind-protect
+      (condition-case err
+          (reka--reconcile reka--state)
+        (error
+         (message "reka reconcile error: %S" err)))
+    (reka--request object 'manage-finish)))
+
+(defun reka-on-river-window-manager-v1-render-start (object _)
+  (unwind-protect
+      (condition-case err
+          (progn
+            (reka--render-frames reka--state)
+            (reka--render-windows reka--state))
+        (error
+         (message "reka render error: %S" err)))
+    (reka--request object 'render-finish)))
+
+(defun reka-on-river-window-manager-v1-session-locked (_object _)
+  (message "reka: WM event session-locked"))
+
+(defun reka-on-river-window-manager-v1-session-unlocked (_object _)
+  (message "reka: WM event session-unlocked"))
+
+(defun reka-on-river-window-manager-v1-window (_object args)
+  (pcase-let* (((map id) args)
+               (win-obj
+                (ewc-object-add :objects (reka-state-objects reka--state)
+                                :protocol 'river-window-management-v1
+                                :interface 'river-window-v1
+                                :id id)))
+    (ewc-set-listener win-obj 'unreliable-pid 'reka-on-river-window-v1-unreliable-pid)
+    (ewc-set-listener win-obj 'app-id 'reka-on-river-window-v1-app-id)
+    (ewc-set-listener win-obj 'title 'reka-on-river-window-v1-title)
+    (ewc-set-listener win-obj 'dimensions 'reka-on-river-window-v1-dimensions)
+    (ewc-set-listener win-obj 'closed 'reka-on-river-window-v1-closed)
+    (ewc-set-listener win-obj 'minimize-requested 'reka-on-river-window-v1-minimize-requested)
+    (ewc-set-listener win-obj 'fullscreen-requested 'reka-on-river-window-v1-fullscreen-requested)
+    (ewc-set-listener win-obj 'exit-fullscreen-requested 'reka-on-river-window-v1-exit-fullscreen-requested)))
+
+(defun reka-on-river-window-manager-v1-output (_object args)
+  (pcase-let* (((map id) args)
+               (objects (reka-state-objects reka--state))
+               (output-obj
+                (ewc-object-add :objects objects
+                                :protocol 'river-window-management-v1
+                                :interface 'river-output-v1
+                                :id id)))
+    (puthash id
+             (reka-output-make :proxy output-obj)
+             (reka-state-outputs reka--state))
+    (ewc-set-listener output-obj 'removed 'reka-on-river-output-v1-removed)
+    (ewc-set-listener output-obj 'position 'reka-on-river-output-v1-position)
+    (ewc-set-listener output-obj 'dimensions 'reka-on-river-output-v1-dimensions)
+    (reka--ensure-ls-output reka--state id)))
+
+(defun reka-on-river-window-manager-v1-seat (_object args)
+  (pcase-let (((map id) args))
+    (if (reka-state-seat reka--state)
+        (message "reka does not support multi-seat")
+      (let* ((objects (reka-state-objects reka--state))
+             (seat-obj
+              (ewc-object-add :objects objects
+                              :protocol 'river-window-management-v1
+                              :interface 'river-seat-v1
+                              :id id)))
+        (setf (reka-state-seat reka--state)
+              (reka-seat-make :id id
+                              :proxy seat-obj))
+        (ewc-set-listener seat-obj 'window-interaction 'reka-on-river-seat-v1-window-interaction)
+        (reka--ensure-ls-seat reka--state)))))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ;;;; river-window-v1 listeners
 (defun reka-on-river-window-v1-closed (object _)
   (let ((win-id (ewc-object-id object)))
@@ -1025,86 +1125,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
            (setf (reka-window-state win) 'active)
            (reka--mark-manage-dirty reka--state)))))))
 
-(defun reka--setup-wm-listeners (wm-obj)
-  "Setup initial event listeners for the River window manager."
-    (ewc-set-listener wm-obj 'output
-          (pcase-lambda (_object (map id))
-            (let* ((objects (reka-state-objects reka--state))
-                   (output-obj
-                    (ewc-object-add :objects objects
-                                    :protocol 'river-window-management-v1
-                                    :interface 'river-output-v1
-                                    :id id)))
-
-              (puthash id
-                       (reka-output-make :proxy output-obj)
-                       (reka-state-outputs reka--state))
-
-              (ewc-set-listener output-obj 'removed 'reka-on-river-output-v1-removed)
-              (ewc-set-listener output-obj 'position 'reka-on-river-output-v1-position)
-              (ewc-set-listener output-obj 'dimensions 'reka-on-river-output-v1-dimensions)
-
-              (reka--ensure-ls-output reka--state id))))
-
-    (ewc-set-listener wm-obj 'seat
-          (pcase-lambda (_object (map id))
-            (if (reka-state-seat reka--state)
-                (message "reka does not support multi-seat")
-              (let* ((objects (reka-state-objects reka--state))
-                     (seat-obj
-                      (ewc-object-add :objects objects
-                                      :protocol 'river-window-management-v1
-                                      :interface 'river-seat-v1
-                                      :id id)))
-
-                (setf (reka-state-seat reka--state)
-                      (reka-seat-make :id id
-                                      :proxy seat-obj))
-
-                (ewc-set-listener seat-obj 'window-interaction 'reka-on-river-seat-v1-window-interaction)
-                (reka--ensure-ls-seat reka--state)))))
-
-    (ewc-set-listener wm-obj 'window
-          (pcase-lambda (_object (map id))
-            (let ((win-obj
-                   (ewc-object-add :objects (reka-state-objects reka--state)
-                                   :protocol 'river-window-management-v1
-                                   :interface 'river-window-v1
-                                   :id id)))
-              (ewc-set-listener win-obj 'unreliable-pid 'reka-on-river-window-v1-unreliable-pid)
-              (ewc-set-listener win-obj 'app-id 'reka-on-river-window-v1-app-id)
-              (ewc-set-listener win-obj 'title 'reka-on-river-window-v1-title)
-              (ewc-set-listener win-obj 'dimensions 'reka-on-river-window-v1-dimensions)
-              (ewc-set-listener win-obj 'closed 'reka-on-river-window-v1-closed)
-              (ewc-set-listener win-obj 'minimize-requested 'reka-on-river-window-v1-minimize-requested)
-              (ewc-set-listener win-obj 'fullscreen-requested 'reka-on-river-window-v1-fullscreen-requested)
-              (ewc-set-listener win-obj 'exit-fullscreen-requested 'reka-on-river-window-v1-exit-fullscreen-requested))))
-
-    (ewc-set-listener wm-obj 'manage-start
-          (lambda (object _)
-            (unwind-protect
-                (condition-case err
-                    (reka--reconcile reka--state)
-                  (error
-                   (message "reka reconcile error: %S" err)))
-                (reka--request object 'manage-finish))))
-
-    (ewc-set-listener wm-obj 'render-start
-          (lambda (object _)
-            (unwind-protect
-                (condition-case err
-                    (progn
-                      (reka--render-frames reka--state)
-                      (reka--render-windows reka--state))
-                  (error
-                   (message "reka render error: %S" err)))
-                (reka--request object 'render-finish))))
-
-    (dolist (evt '(unavailable finished session-locked session-unlocked))
-      (let ((evt evt))
-        (ewc-set-listener wm-obj evt
-              (lambda (_object _)
-                (message "reka: WM event %s" evt))))))
 
 ;;;; river-output-v1 listeners
 (defun reka-on-river-output-v1-removed (object _)
