@@ -828,7 +828,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                 (table (ewc-client-table client))
                 (obj (gethash id table)))
       (message "delete-id for obj %d, interface=%s" id (ewc-object-interface obj))
-      (remhash id table))))
+      (ewc-object-remove client obj))))
 
 ;;;; wl-registry listeners
 (defun reka-on-wl-registry-global (registry args)
@@ -927,7 +927,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;;; river-window-v1 listeners
 (defun reka-on-river-window-v1-closed (object _)
-  (let ((win-id (ewc-object-id object)))
+  (let ((win-id (ewc-object-id object))
+        (client (reka-state-client reka--state)))
     (when (gethash win-id (reka-state-windows reka--state))
       (reka--enqueue
        (lambda ()
@@ -939,12 +940,11 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (when (eq (reka--fs-window (reka-output-fullscreen out)) object)
         (setf (reka-output-fullscreen out) 'none)))
     (when-let* ((surface (reka--surface-by-id reka--state win-id))
-                (node (reka-surface-node surface))
-                (table (ewc-client-table (reka-state-client reka--state))))
+                (node (reka-surface-node surface)))
       (reka--request node 'destroy)
-      (reka--request object 'destroy)
-      (remhash win-id table)
-      (remhash (ewc-object-id node) table))
+      (ewc-object-remove client node))
+    (ewc-object-remove client object)
+    (reka--request object 'destroy)
     (remhash win-id (reka-state-windows reka--state))
     (remhash win-id (reka-state-frames reka--state))))
 
@@ -1074,13 +1074,13 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                      (delete-frame frame))))))
     (let* ((out (gethash output-id (reka-state-outputs reka--state)))
            (ls-output (reka-output-ls-output out))
-           (table (ewc-client-table (reka-state-client reka--state))))
+           (client (reka-state-client reka--state)))
       (when ls-output
         (reka--request ls-output 'destroy)
-        (remhash (ewc-object-id ls-output) table))
+        (ewc-object-remove client ls-output))
       (reka--request object 'destroy)
       (remhash output-id (reka-state-outputs reka--state))
-      (remhash output-id table))))
+      (ewc-object-remove client object))))
 
 ;; TODO: listener for wl_output, e.g. to get monitor names
 
