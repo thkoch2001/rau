@@ -77,6 +77,7 @@ This is the Elisp version of wayland-scanner."
   (inline-quote
    (intern (string-replace "_" "-" (dom-attr ,node 'name)))))
 
+;; TODO: Add a table of all interfaces and eliminate this function
 (defun ewc-find-protocol (protocols interface)
   "Find the protocol defining INTERFACE in PROTOCOLS.
 PROTOCOLS is a list of protocols as returned by `ewc-read-protocol'."
@@ -186,22 +187,15 @@ RX holds incomplete incoming Wayland bytes."
   "Get object with ID from CLIENT, an `ewc-client' struct."
   (inline-quote (gethash ,id (ewc-client-table ,client))))
 
-;; TODO: use cl-defun
-(defun ewc-object-add (&rest arguments)
-  "Add a new object implementing INTERFACE of PROTOCOL to CLIENT.
-Optional ID may be provided.
+(defun ewc-object-add (client interface &optional id)
+  "Add a new object implementing INTERFACE to CLIENT.
+If no ID is provided, a client initiated id is generated.
 
-Returns the newly created object.
-
-PROTOCOL and INTERFACE are symbols.
-ID is a uint32 object id; provide it for server-initiated objects.
-
-\(fn &key CLIENT PROTOCOL INTERFACE ID)"
-  (pcase-let* (((map :client :protocol :interface :id)
-                arguments)
-               (protocol-def (alist-get protocol
-                                        (ewc-client-protocols client)))
-               (interface-def (alist-get interface protocol-def)))
+Returns the newly created object."
+  (let* ((protocols (ewc-client-protocols client))
+         (protocol (ewc-find-protocol protocols interface))
+         (protocol-def (alist-get protocol protocols))
+         (interface-def (alist-get interface protocol-def)))
     (unless interface-def
       (error "ewc: unknown interface %s/%s" protocol interface))
 

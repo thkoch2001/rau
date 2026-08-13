@@ -786,10 +786,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
               (client (reka-state-client state))
               (ls-output-id (cl-incf (ewc-client-new-id client)))
               (ls-output-obj
-               (ewc-object-add :client client
-                               :protocol 'river-layer-shell-v1
-                               :interface 'river-layer-shell-output-v1
-                               :id ls-output-id)))
+               (ewc-object-add client
+                               'river-layer-shell-output-v1
+                               ls-output-id)))
     (setf (reka-output-ls-output out) ls-output-obj)
     (reka--request ls-obj 'get-output
                    `((id . ,ls-output-id)
@@ -804,10 +803,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
               (client (reka-state-client state))
               (ls-seat-id (cl-incf (ewc-client-new-id client)))
               (ls-seat-obj
-               (ewc-object-add :client client
-                               :protocol 'river-layer-shell-v1
-                               :interface 'river-layer-shell-seat-v1
-                               :id ls-seat-id)))
+               (ewc-object-add client
+                               'river-layer-shell-seat-v1
+                               ls-seat-id)))
     (setf (reka-seat-ls-seat seat) ls-seat-obj)
     (reka--request ls-obj 'get-seat
                    `((id . ,ls-seat-id)
@@ -836,17 +834,15 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 (defun reka-on-wl-registry-global (registry args)
   (pcase-let (((map name interface version) args))
     (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
-                (protocol (ewc-find-protocol (reka--read-protocols) ifsym))
-                ((member interface reka--global-binds))
                 (client (reka-state-client reka--state))
+                (protocols (ewc-client-protocols client))
+                (protocol (ewc-find-protocol protocols ifsym))
+                ((member interface reka--global-binds))
                 (new-id (cl-incf (ewc-client-new-id client)))
                 (xml-version (reka--interface-version client protocol ifsym))
                 (bind-version
                  (if xml-version (min version xml-version) version))
-                (bound-object (ewc-object-add :client client
-                                              :protocol protocol
-                                              :interface ifsym
-                                              :id new-id)))
+                (bound-object (ewc-object-add client ifsym new-id)))
       (reka-log "reka: binding global %s version %s" interface bind-version)
       (reka--request registry 'bind
                      `((name . ,name)
@@ -899,19 +895,17 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka-on-river-window-manager-v1-window (_object args)
   (pcase-let* (((map id) args))
-    (ewc-object-add :client (reka-state-client reka--state)
-                    :protocol 'river-window-management-v1
-                    :interface 'river-window-v1
-                    :id id)))
+    (ewc-object-add (reka-state-client reka--state)
+                    'river-window-v1
+                    id)))
 
 (defun reka-on-river-window-manager-v1-output (_object args)
   (pcase-let* (((map id) args)
                (client (reka-state-client reka--state))
                (output-obj
-                (ewc-object-add :client client
-                                :protocol 'river-window-management-v1
-                                :interface 'river-output-v1
-                                :id id)))
+                (ewc-object-add client
+                                'river-output-v1
+                                id)))
     (puthash id
              (reka-output-make :proxy output-obj)
              (reka-state-outputs reka--state))
@@ -923,10 +917,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (message "reka does not support multi-seat")
       (let* ((client (reka-state-client reka--state))
              (seat-obj
-              (ewc-object-add :client client
-                              :protocol 'river-window-management-v1
-                              :interface 'river-seat-v1
-                              :id id)))
+              (ewc-object-add client
+                              'river-seat-v1
+                              id)))
         (setf (reka-state-seat reka--state)
               (reka-seat-make :id id
                               :proxy seat-obj))
@@ -1034,12 +1027,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (pcase-let* (((map unreliable-pid) args)
                (win-id (ewc-object-id object))
                (client (reka-state-client reka--state))
-               (node-obj
-                (ewc-object-add
-                 :client client
-                 :protocol 'river-window-management-v1
-                 :interface 'river-node-v1
-                 :id (cl-incf (ewc-client-new-id client)))))
+               (node-obj (ewc-object-add client 'river-node-v1)))
 
     (reka--request object 'get-node
                    `((id . ,(ewc-object-id node-obj))))
@@ -1229,10 +1217,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (let* ((client (reka-state-client state))
                (id (cl-incf (ewc-client-new-id client)))
                (proxy
-                (ewc-object-add :client client
-                                :protocol 'river-xkb-bindings-v1
-                                :interface 'river-xkb-binding-v1
-                                :id id)))
+                (ewc-object-add client
+                                'river-xkb-binding-v1
+                                id)))
 
           (reka--request xkb 'get-xkb-binding
                        `((seat . ,(ewc-object-id seat-proxy))
@@ -1432,12 +1419,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (let ((client (ewc-client-make :protocols (reka--read-protocols))))
     (ewc-build-listeners client "reka-on-")
     (let ((connection (ewc-connect client))
-          (display (ewc-object-add :client client
-                                   :protocol 'wayland
-                                   :interface 'wl-display))
-          (registry (ewc-object-add :client client
-                                    :protocol 'wayland
-                                    :interface 'wl-registry)))
+          (display (ewc-object-add client 'wl-display))
+          (registry (ewc-object-add client 'wl-registry)))
 
     (setq reka--state (reka-state-make :connection connection
                                        :client client))

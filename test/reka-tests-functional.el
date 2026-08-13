@@ -148,10 +148,7 @@ its id in reka--state client table."
 (ert-deftest reka-request-is-captured ()
   (reka-test-with-mock
     (let ((reka--state (reka-test-make-state)))
-      (let ((obj (ewc-object-add
-                  :client (reka-state-client reka--state)
-                  :protocol 'river-window-management-v1
-                  :interface 'river-window-v1)))
+      (let ((obj (ewc-object-add (reka-state-client reka--state) 'river-window-v1)))
         (reka--request obj 'close)
         (should (length= reka-test-captured 1))
         (reka-test-last-request-should 'river-window-v1 'close)
@@ -248,10 +245,7 @@ its id in reka--state client table."
 (ert-deftest reka-reconcile-closes-killed-window ()
   (reka-test-with-mock
     (let* ((reka--state (reka-test-make-state))
-           (proxy (ewc-object-add
-                   :client (reka-state-client reka--state)
-                   :protocol 'river-window-management-v1
-                   :interface 'river-window-v1))
+           (proxy (ewc-object-add (reka-state-client reka--state) 'river-window-v1))
            (win (reka-window-make :proxy proxy :state 'killed)))
       (puthash (ewc-object-id proxy) win (reka-state-windows reka--state))
       (reka--reconcile-windows reka--state)
@@ -260,10 +254,7 @@ its id in reka--state client table."
 (ert-deftest reka-reconcile-proposes-dimensions ()
   (reka-test-with-mock
     (let* ((reka--state (reka-test-make-state))
-           (proxy (ewc-object-add
-                   :client (reka-state-client reka--state)
-                   :protocol 'river-window-management-v1
-                   :interface 'river-window-v1))
+           (proxy (ewc-object-add (reka-state-client reka--state) 'river-window-v1))
            (params (reka-window-parameters-make :x 0 :y 0 :w 800 :h 600))
            (win (reka-window-make :proxy proxy :state 'active :params params)))
       (puthash (ewc-object-id proxy) win (reka-state-windows reka--state))
@@ -271,4 +262,3 @@ its id in reka--state client table."
       (reka-test-last-request-should 'river-window-v1 'propose-dimensions '((width . 800) (height . 600))))))
 
 (provide 'reka-tests-functional.el)
-
