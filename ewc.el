@@ -161,13 +161,17 @@ OPCODE is the request opcode."
 
 (cl-defstruct (ewc-object (:constructor ewc-object-make)
                           (:copier nil))
-  "A client-side object implementing a Wayland interface."
+  "A client-side object implementing a Wayland interface.
+
+The DATA slot is free to use for arbitrary data about this object."
   (protocol nil :type symbol :read-only t)
   (interface nil :type symbol :read-only t)
   (id nil :type integer :read-only t)
   (events nil :type list :read-only t)
   (requests nil :type list :read-only t)
-  (listeners nil :type vector :read-only t))
+  (listeners nil :type vector :read-only t)
+  (data nil)
+  (tags nil :type list))
 
 (cl-defstruct (ewc-client (:constructor ewc-client-make)
                            (:copier nil))
@@ -175,10 +179,12 @@ OPCODE is the request opcode."
 
 NEW-ID is the next client-allocated object id.
 TABLE maps object ids to `ewc-object' structs.
+TAGS maps tag symbols to lists of ewc-object structs.
 PROTOCOLS is an alist as returned by `ewc-read'.
 RX holds incomplete incoming Wayland bytes."
   (new-id 0 :type integer)
   (table (make-hash-table) :type hash-table :read-only t)
+  (tags (make-hash-table :test 'eq) :type hash-table :read-only t)
   (protocols nil :type list :read-only t)
   (listeners nil :type list)
   (rx "" :type string))
@@ -186,6 +192,46 @@ RX holds incomplete incoming Wayland bytes."
 (define-inline ewc-object-get (client id)
   "Get object with ID from CLIENT, an `ewc-client' struct."
   (inline-quote (gethash ,id (ewc-client-table ,client))))
+
+(defun ewc-object-tag (client object tag)
+  "Attach TAG to OBJECT and register OBJECT under TAG in CLIENT.
+TAG must be a symbol.  Tagging an object that already carries TAG
+is a no-op.  Note that `ewc-object-add' automatically tags every
+new object with its interface."
+  (cl-check-type tag symbol)
+  (unless (memq tag (ewc-object-tags object))
+    (push tag (ewc-object-tags object))
+    (let ((index (ewc-client-tags client)))
+      (puthash tag (cons object (gethash tag index)) index))))
+
+(defun ewc-object-untag (client object tag)
+  "Detach TAG from OBJECT and unregister OBJECT under TAG in CLIENT.
+Untagging an object that does not carry TAG is a no-op."
+  (cl-check-type tag symbol)
+  (setf (ewc-object-tags object)
+        (delq tag (ewc-object-tags object)))
+  (let ((index (ewc-client-tags client)))
+    (puthash tag (delq object (gethash tag index)) index)))
+
+(define-inline ewc-object-tagged-p (object tag)
+  "Return non-nil if OBJECT carries TAG."
+  (inline-quote (memq ,tag (ewc-object-tags ,object))))
+
+(defun ewc-objects (client tag)
+  "Return the list of objects in CLIENT carrying TAG.
+The result is a copy, so callers may mutate it and may remove
+objects from CLIENT while iterating over it."
+  (copy-sequence (gethash tag (ewc-client-tags client))))
+
+(defun ewc-object-remove (client object)
+  "Remove OBJECT from CLIENT's table and from all of its tag lists.
+Idempotent: removing an object that was never added (or was already
+removed) is a no-op."
+  (let ((index (ewc-client-tags client)))
+    (dolist (tag (ewc-object-tags object))
+      (puthash tag (delq object (gethash tag index)) index)))
+  (setf (ewc-object-tags object) nil)
+  (remhash (ewc-object-id object) (ewc-client-table client)))
 
 (defun ewc-object-add (client interface &optional id)
   "Add a new object implementing INTERFACE to CLIENT.
@@ -209,6 +255,7 @@ Returns the newly created object."
                           :requests requests
                           :listeners (cdr (assq interface (ewc-client-listeners client))))))
       (puthash id object (ewc-client-table client))
+      (ewc-object-tag client object interface)
       (ewc-log "ewc: added object id=%s interface=%s" id interface)
       object)))
 
