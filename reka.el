@@ -114,6 +114,15 @@ Not instantiated directly; windows and frames include it."
   ;; Lambda command queue: list of LAMBDA.
   (command-queue nil))
 
+
+;;; Surface tags
+
+(defconst reka--tag-frame :reka-frame
+  "Tag for `river-window-v1' objects that are Emacs frames.")
+
+(defconst reka--tag-window :reka-window
+  "Tag for `river-window-v1' objects that are external windows.")
+
 (cl-defmacro reka--do (with (key val state) &body body)
   "Iterate over a reka state hash table.
 WITH selects the collection and must be one of:
@@ -215,8 +224,8 @@ Example:
 (defun reka--buffer-killed ()
   "Request closing of the associated Wayland surface when a reka buffer is killed."
   (when-let* ((reka--window)
-              (win (reka--window-by-proxy reka--state reka--window)))
-    (setf (reka-window-state win) 'killed)
+              (data (ewc-object-data reka--window)))
+    (setf (reka-window-state data) 'killed)
     (reka--mark-manage-dirty reka--state)))
 
 (define-derived-mode reka-mode special-mode "Reka"
@@ -273,7 +282,7 @@ Example:
            (zerop (minibuffer-depth)) ;; no minibuffer editing active
            (zerop (recursion-depth))) ;; no recursive edit ongoing
       (if-let* ((wm-window (buffer-local-value 'reka--window buf))
-                (win-state (reka--window-by-proxy state wm-window))
+                (win-state (ewc-object-data wm-window))
                 (frame-found (reka--frame-displaying-win state win-state))
                 (frame (cdr frame-found)))
           (reka--focus-window state
@@ -511,23 +520,6 @@ Return nil if S is nil or empty."
                   (reka-window-parameters-w b))
            (equal (reka-window-parameters-h a)
                   (reka-window-parameters-h b)))))
-
-(defun reka--window-by-proxy (state proxy)
-  "Return window state in STATE for ewc-object PROXY."
-  (when (ewc-object-p proxy)
-    (gethash (ewc-object-id proxy)
-             (reka-state-windows state))))
-
-(defun reka--frame-by-proxy (state proxy)
-  "Return frame state in STATE for ewc-object PROXY."
-  (when (ewc-object-p proxy)
-    (gethash (ewc-object-id proxy)
-             (reka-state-frames state))))
-
-(defun reka--surface-by-id (state id)
-  "Return either a window or a frame struct from STATE by ID."
-  (or (gethash id (reka-state-frames state))
-      (gethash id (reka-state-windows state))))
 
 (defun reka--output-by-id (state id)
   "Return output state in STATE for output ID."
@@ -929,51 +921,56 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 (defun reka-on-river-window-v1-closed (object _)
   (let ((win-id (ewc-object-id object))
         (client (reka-state-client reka--state)))
-    (when (gethash win-id (reka-state-windows reka--state))
+    (when (ewc-object-tagged-p object reka--tag-window)
       (reka--enqueue
        (lambda ()
          (when-let* ((buf (reka--find-buffer-for-window object)))
            (kill-buffer buf)))))
     (reka--focus-invalidate reka--state object)
-    ;; Reset fullscreen on output if window was fullscreen
+
+    ;; Reset fullscreen on output if window was fullscreen.
     (reka--do outputs (_output-id out reka--state)
       (when (eq (reka--fs-window (reka-output-fullscreen out)) object)
         (setf (reka-output-fullscreen out) 'none)))
-    (when-let* ((surface (reka--surface-by-id reka--state win-id))
-                (node (reka-surface-node surface)))
+
+    (when-let* ((data (ewc-object-data object))
+                (node (reka-surface-node data)))
       (reka--request node 'destroy)
       (ewc-object-remove client node))
-    (ewc-object-remove client object)
+
     (reka--request object 'destroy)
+    (ewc-object-remove client object)
+
     (remhash win-id (reka-state-windows reka--state))
     (remhash win-id (reka-state-frames reka--state))))
 
 (defun reka-on-river-window-v1-dimensions (object args)
   (pcase-let (((map width height) args))
-    (when-let* ((win (reka--window-by-proxy reka--state object)))
-      (setf (reka-window-actual-width win) width
-            (reka-window-actual-height win) height))))
+    (when-let* ((data (ewc-object-data object))
+                ((reka-window-p data)))
+      (setf (reka-window-actual-width data) width
+            (reka-window-actual-height data) height))))
 
 (defun reka-on-river-window-v1-app-id (object args)
   (pcase-let (((map app-id) args))
     (when-let* ((app-id (reka--decode-string app-id))
-                (win (reka--window-by-proxy reka--state object)))
+                (win (ewc-object-data object))
+                ((reka-window-p win)))
       (setf (reka-window-app-id win) app-id))))
 
 (defun reka-on-river-window-v1-title (object args)
   (pcase-let (((map title) args))
     (when-let* ((title (reka--decode-string title))
-                (win-id (ewc-object-id object))
-                (surface (reka--surface-by-id reka--state win-id)))
-      (setf (reka-surface-title surface) title)
-      (when (reka-window-p surface)
+                (data (ewc-object-data object)))
+      (setf (reka-surface-title data) title)
+      (when (reka-window-p data)
         (reka--enqueue
          (lambda ()
            (when-let* ((buf (reka--find-buffer-for-window object)))
              (with-current-buffer buf
                (rename-buffer
                 (reka--make-buffer-name
-                 (reka-window-app-id surface)
+                 (reka-window-app-id data)
                  title)
                 t)))))))))
 
@@ -983,13 +980,14 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                 (or (and (integerp output)
                          (not (zerop output))
                          output)
-                    (when-let* ((w (reka--window-by-proxy reka--state object))
+                    (when-let* ((w (ewc-object-data object))
+                                ((reka-window-p w))
                                 (found (reka--frame-displaying-win reka--state w))
                                 (f (cdr found)))
                       (reka-frame-displayed-on f))
                     (when-let* ((cur (reka--focus-current reka--state))
                                 (frame (cdr cur))
-                                (f (reka--frame-by-proxy reka--state frame)))
+                                (f (ewc-object-data frame)))
                       (reka-frame-displayed-on f)))))
     (if (not target)
         (message "Fullscreen requested, but no output found")
@@ -1016,7 +1014,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                     :window (reka--fs-window fs)))))))
 
 (defun reka-on-river-window-v1-minimize-requested (object _)
-  (when (reka--window-by-proxy reka--state object)
+  (when-let* ((data (ewc-object-data object))
+              ((reka-window-p data)))
     (reka--enqueue
      (lambda ()
        (when-let* ((buf (reka--find-buffer-for-window object)))
@@ -1035,29 +1034,29 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (if (= unreliable-pid (reka-state-pid reka--state))
         (progn
           (reka-log "Discovered new Emacs frame")
-
-          (puthash win-id
-                   (reka-frame-make
-                    :proxy object
-                    :node node-obj)
-                   (reka-state-frames reka--state))
-
+          (let ((frame (reka-frame-make
+                        :proxy object
+                        :node node-obj)))
+            (puthash win-id frame
+                     (reka-state-frames reka--state))
+            (setf (ewc-object-data object) frame)
+            (ewc-object-tag client object reka--tag-frame))
           (if (> (reka-state-pending-frames reka--state) 0)
               (cl-decf (reka-state-pending-frames reka--state))
             (reka-log "New frame was not requested by WM")))
 
       (reka-log "Discovered new regular external window")
-
-      (puthash win-id
-               (reka-window-make
-                :proxy object
-                :node node-obj)
-               (reka-state-windows reka--state))
-
+      (let ((win (reka-window-make
+                  :proxy object
+                  :node node-obj)))
+        (puthash win-id win
+                 (reka-state-windows reka--state))
+        (setf (ewc-object-data object) win)
+        (ewc-object-tag client object reka--tag-window))
       (reka--enqueue
        (lambda ()
          ;; Confirm that the Emacs-side buffer for the window was created.
-         (when-let* ((win (reka--window-by-proxy reka--state object)))
+         (when-let* ((win (ewc-object-data object)))
            (reka--create-buffer object)
            (setf (reka-window-state win) 'active)
            (reka--mark-manage-dirty reka--state)))))))
@@ -1100,23 +1099,21 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;;; river-seat-v1 listener
 (defun reka-on-river-seat-v1-window-interaction (_object args)
-  (pcase-let* (((map window) args)
-               (win-obj (ewc-object-get (reka-state-client reka--state) window)))
-    (cond
-     ((gethash window (reka-state-frames reka--state))
-      (when (and win-obj
-                 (reka--focus-frame reka--state win-obj))
-        (setf (reka-state-focus-dirty reka--state) t)))
-     ((gethash window (reka-state-windows reka--state))
-      (if-let* ((w (gethash window (reka-state-windows reka--state)))
-                (found (reka--frame-displaying-win reka--state w))
-                (f (cdr found)))
-          (when (and win-obj
-                     (reka--focus-window reka--state
-                                         win-obj
-                                         (reka-surface-proxy f)))
-            (setf (reka-state-focus-dirty reka--state) t))
-        (message "Window interaction for window without frame"))))))
+  (pcase-let* (((map window) args))
+    (when-let* ((win-obj (ewc-object-get (reka-state-client reka--state) window)))
+      (cond
+       ((ewc-object-tagged-p win-obj reka--tag-frame)
+        (when (reka--focus-frame reka--state win-obj)
+          (setf (reka-state-focus-dirty reka--state) t)))
+       ((ewc-object-tagged-p win-obj reka--tag-window)
+        (if-let* ((w (ewc-object-data win-obj))
+                  (found (reka--frame-displaying-win reka--state w))
+                  (f (cdr found)))
+            (when (reka--focus-window reka--state
+                                      win-obj
+                                      (reka-surface-proxy f))
+              (setf (reka-state-focus-dirty reka--state) t))
+          (message "Window interaction for window without frame")))))))
 
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
@@ -1292,7 +1289,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
       (when dirty
         (when-let* ((frame-obj (and frame
-                                    (reka--frame-by-proxy state frame)))
+                                    (ewc-object-data frame)))
                     (out-id (reka-frame-displayed-on frame-obj))
                     (out (reka--output-by-id state out-id))
                     (ls (reka-output-ls-output out)))
@@ -1387,7 +1384,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
            (lambda ()
              (message "reka: can not fullscreen Emacs even more!")))
 
-        (if-let* ((frame-obj (reka--frame-by-proxy state frame))
+        (if-let* ((frame-obj (ewc-object-data frame))
                   (out-id (reka-frame-displayed-on frame-obj))
                   (out (reka--output-by-id state out-id)))
             (let ((fs (reka-output-fullscreen out)))

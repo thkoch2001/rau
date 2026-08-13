@@ -34,6 +34,8 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
                           :x 0 :y 0 :w 800 :h 600)))))
     (puthash 100 frame (reka-state-frames state))
     (puthash 200 win   (reka-state-windows state))
+    (setf (ewc-object-data frame-obj) frame)
+    (setf (ewc-object-data win-obj) win)
     (list state frame-obj win-obj win)))
 
 ;; ---- Pure functions ---------------------------
