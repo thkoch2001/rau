@@ -22,7 +22,8 @@
   "Build a reka-state with one frame and one window.
 If WITH-DISPLAY, the window has params pointing at that frame.
 Return (STATE FRAME-OBJ WIN-OBJ WIN)."
-  (let* ((state (reka-state-make))
+  (let* ((client (ewc-client-make))
+         (state (reka-state-make :client client))
          (frame-obj (ewc-object-make :id 100 :interface 'river-window-v1))
          (frame (reka-frame-make :proxy frame-obj :title "reka-frame-test"))
          (win-obj (ewc-object-make :id 200 :interface 'river-window-v1))
@@ -32,10 +33,10 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
                          (reka-window-parameters-make
                           :window win-obj :frame-name "reka-frame-test"
                           :x 0 :y 0 :w 800 :h 600)))))
-    (puthash 100 frame (reka-state-frames state))
-    (puthash 200 win   (reka-state-windows state))
     (setf (ewc-object-data frame-obj) frame)
     (setf (ewc-object-data win-obj) win)
+    (ewc-object-tag client frame-obj reka--tag-frame)
+    (ewc-object-tag client win-obj reka--tag-window)
     (list state frame-obj win-obj win)))
 
 ;; ---- Pure functions ---------------------------

@@ -92,11 +92,6 @@ Not instantiated directly; windows and frames include it."
   ;; Current seat.
   (seat nil)
 
-  ;; State tracking.  Hash tables are keyed by Wayland object id.
-  (outputs (make-hash-table :test 'eql))
-  (windows (make-hash-table :test 'eql))
-  (frames (make-hash-table :test 'eql))
-
   ;; XKB bindings: (keysym . modifiers) -> reka-binding.
   (bindings (make-hash-table :test 'equal))
 
@@ -124,32 +119,34 @@ Not instantiated directly; windows and frames include it."
   "Tag for `river-window-v1' objects that are external windows.")
 
 (cl-defmacro reka--do (with (key val state) &body body)
-  "Iterate over a reka state hash table.
-WITH selects the collection and must be one of:
-  windows, outputs, frames, bindings
-KEY and VAL are the lambda arguments for `maphash'.
-STATE is evaluated once and bound to that same name within BODY,
-so BODY may refer to the `reka-state' object as STATE.
-
-Example:
-  (reka--do windows (id win state)
-    (message \"window id=%s\" id))"
+  "Iterate over a reka collection.
+WITH selects the collection: windows, outputs, frames, bindings.
+KEY and VAL are bound for each element.
+STATE is evaluated once and bound to that same name within BODY.
+`windows', `outputs' and `frames' are iterated via the ewc tag
+index; `bindings' still uses a reka state hash table."
   (declare (indent 1))
   (unless (symbolp state)
     (error "reka--do: STATE slot must be a symbol, got: %S" state))
-  (let* ((accessor
-          (pcase with
-            ('windows  'reka-state-windows)
-            ('outputs  'reka-state-outputs)
-            ('frames   'reka-state-frames)
-            ('bindings 'reka-state-bindings)
-            (_ (error "Unknown reka--do collection: %S" with))))
-         (table (cl-gensym "reka--do-table")))
-    `(let* ((,state ,state)
-            (,table (,accessor ,state)))
-       (maphash (lambda (,key ,val)
-                  ,@body)
-                ,table))))
+  (let ((tag (pcase with
+               ('windows 'reka--tag-window)
+               ('frames  'reka--tag-frame)
+               ;; outputs use their automatic interface tag, not an own tag
+               ('outputs ''river-output-v1))))
+    (if tag
+        (let ((obj (cl-gensym "reka--do-obj")))
+          `(let ((,state ,state))
+             (dolist (,obj (ewc-objects (reka-state-client ,state) ,tag))
+               (let ((,key (ewc-object-id ,obj))
+                     (,val (ewc-object-data ,obj)))
+                 ,@body))))
+      (let* ((accessor (pcase with
+                         ('bindings 'reka-state-bindings)
+                         (_ (error "Unknown reka--do collection: %S" with))))
+             (table (cl-gensym "reka--do-table")))
+        `(let* ((,state ,state)
+                (,table (,accessor ,state)))
+           (maphash (lambda (,key ,val) ,@body) ,table))))))
 
 (defun reka--set-frame-name (frame)
   (unless (string-prefix-p "reka-frame-"
@@ -523,14 +520,14 @@ Return nil if S is nil or empty."
 
 (defun reka--output-by-id (state id)
   "Return output state in STATE for output ID."
-  (gethash id (reka-state-outputs state)))
+  (when-let* ((obj (ewc-object-get (reka-state-client state) id)))
+    (ewc-object-data obj)))
 
 (defun reka--frame-by-cond (state predicate)
   "Return (ID . FRAME) for the first frame in STATE matching PREDICATE."
-  (cl-loop for id being the hash-keys
-           of (reka-state-frames state)
-           using (hash-value f)
-           thereis (and (funcall predicate f) (cons id f))))
+  (cl-loop for obj in (ewc-objects (reka-state-client state) reka--tag-frame)
+           for f = (ewc-object-data obj)
+           thereis (and f (funcall predicate f) (cons (ewc-object-id obj) f))))
 
 (defun reka--frame-displaying-win (state win)
   "Return (ID . FRAME) frame displaying window WIN in STATE, if any."
@@ -894,13 +891,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 (defun reka-on-river-window-manager-v1-output (_object args)
   (pcase-let* (((map id) args)
                (client (reka-state-client reka--state))
-               (output-obj
-                (ewc-object-add client
-                                'river-output-v1
-                                id)))
-    (puthash id
-             (reka-output-make :proxy output-obj)
-             (reka-state-outputs reka--state))
+               (output-obj (ewc-object-add client 'river-output-v1 id)))
+    (setf (ewc-object-data output-obj)
+          (reka-output-make :proxy output-obj))
     (reka--ensure-ls-output reka--state id)))
 
 (defun reka-on-river-window-manager-v1-seat (_object args)
@@ -919,8 +912,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;;; river-window-v1 listeners
 (defun reka-on-river-window-v1-closed (object _)
-  (let ((win-id (ewc-object-id object))
-        (client (reka-state-client reka--state)))
+  (let ((client (reka-state-client reka--state)))
     (when (ewc-object-tagged-p object reka--tag-window)
       (reka--enqueue
        (lambda ()
@@ -939,10 +931,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (ewc-object-remove client node))
 
     (reka--request object 'destroy)
-    (ewc-object-remove client object)
-
-    (remhash win-id (reka-state-windows reka--state))
-    (remhash win-id (reka-state-frames reka--state))))
+    (ewc-object-remove client object)))
 
 (defun reka-on-river-window-v1-dimensions (object args)
   (pcase-let (((map width height) args))
@@ -1037,8 +1026,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (let ((frame (reka-frame-make
                         :proxy object
                         :node node-obj)))
-            (puthash win-id frame
-                     (reka-state-frames reka--state))
             (setf (ewc-object-data object) frame)
             (ewc-object-tag client object reka--tag-frame))
           (if (> (reka-state-pending-frames reka--state) 0)
@@ -1049,8 +1036,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (let ((win (reka-window-make
                   :proxy object
                   :node node-obj)))
-        (puthash win-id win
-                 (reka-state-windows reka--state))
         (setf (ewc-object-data object) win)
         (ewc-object-tag client object reka--tag-window))
       (reka--enqueue
@@ -1063,23 +1048,21 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;;; river-output-v1 listeners
 (defun reka-on-river-output-v1-removed (object _)
-  (let ((output-id (ewc-object-id object)))
+  (let ((output-id (ewc-object-id object))
+        (client (reka-state-client reka--state)))
     (reka--do frames (_fid f reka--state)
-              (when-let* (((eql (reka-frame-displayed-on f) output-id))
-                          (name (reka-surface-title f)))
-                (reka--enqueue
-                 (lambda ()
-                   (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
-                     (delete-frame frame))))))
-    (let* ((out (gethash output-id (reka-state-outputs reka--state)))
-           (ls-output (reka-output-ls-output out))
-           (client (reka-state-client reka--state)))
-      (when ls-output
-        (reka--request ls-output 'destroy)
-        (ewc-object-remove client ls-output))
-      (reka--request object 'destroy)
-      (remhash output-id (reka-state-outputs reka--state))
-      (ewc-object-remove client object))))
+      (when-let* (((eql (reka-frame-displayed-on f) output-id))
+                  (name (reka-surface-title f)))
+        (reka--enqueue
+         (lambda ()
+           (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
+             (delete-frame frame))))))
+    (when-let* ((out (ewc-object-data object))
+                (ls-output (reka-output-ls-output out)))
+      (reka--request ls-output 'destroy)
+      (ewc-object-remove client ls-output))
+    (reka--request object 'destroy)
+    (ewc-object-remove client object)))
 
 ;; TODO: listener for wl_output, e.g. to get monitor names
 
@@ -1134,10 +1117,13 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;;;; river-layer-shell-output-v1 listeners
 (defun reka-on-river-layer-shell-output-v1-non-exclusive-area (object args)
   (pcase-let (((map x y width height) args))
-    (when-let* ((out (cl-loop for out being the hash-values
-                              of (reka-state-outputs reka--state)
-                              thereis (and (eq (reka-output-ls-output out) object)
-                                           out))))
+    (when-let* ((out (cl-loop for obj in (ewc-objects
+                                          (reka-state-client reka--state)
+                                          'river-output-v1)
+                              for data = (ewc-object-data obj)
+                              thereis (and data
+                                           (eq (reka-output-ls-output data) object)
+                                           data))))
       (setf (reka-output-x out) x
             (reka-output-y out) y
             (reka-output-width out) width
