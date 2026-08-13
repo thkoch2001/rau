@@ -25,14 +25,13 @@
 ;;
 ;; Protocol XML is translated into pack/unpack functions using bindat.
 ;; Objects are represented by `ewc-object' structs.
-;; Global client state is represented by `ewc-objects'.
+;; Global client state is represented by `ewc-client'.
 ;;
 ;; Main entry points:
 ;;
-;;   (ewc-connect protocols) -> ewc-objects
+;;   (ewc-connect client) -> connection
 ;;   (ewc-object-add ...)    -> ewc-object
-;;   (ewc-request object request args)
-;;   (setf (ewc-listener object event) listener)
+;;   (ewc-request connection object request args)
 
 ;;; Code:
 
@@ -169,7 +168,7 @@ OPCODE is the request opcode."
   (requests nil :type list :read-only t)
   (listeners nil :type vector :read-only t))
 
-(cl-defstruct (ewc-objects (:constructor ewc-objects-make)
+(cl-defstruct (ewc-client (:constructor ewc-client-make)
                            (:copier nil))
   "Global state of the Wayland client.
 
@@ -183,13 +182,13 @@ RX holds incomplete incoming Wayland bytes."
   (listeners nil :type list)
   (rx "" :type string))
 
-(define-inline ewc-object-get (id objects)
-  "Get object with ID from OBJECTS, an `ewc-objects' struct."
-  (inline-quote (gethash ,id (ewc-objects-table ,objects))))
+(define-inline ewc-object-get (id client)
+  "Get object with ID from CLIENT, an `ewc-client' struct."
+  (inline-quote (gethash ,id (ewc-client-table ,client))))
 
 ;; TODO: use cl-defun
 (defun ewc-object-add (&rest arguments)
-  "Add a new object implementing INTERFACE of PROTOCOL to OBJECTS.
+  "Add a new object implementing INTERFACE of PROTOCOL to CLIENT.
 Optional ID may be provided.
 
 Returns the newly created object.
@@ -197,25 +196,25 @@ Returns the newly created object.
 PROTOCOL and INTERFACE are symbols.
 ID is a uint32 object id; provide it for server-initiated objects.
 
-\(fn &key OBJECTS PROTOCOL INTERFACE ID)"
-  (pcase-let* (((map :objects :protocol :interface :id)
+\(fn &key CLIENT PROTOCOL INTERFACE ID)"
+  (pcase-let* (((map :client :protocol :interface :id)
                 arguments)
                (protocol-def (alist-get protocol
-                                        (ewc-objects-protocols objects)))
+                                        (ewc-client-protocols client)))
                (interface-def (alist-get interface protocol-def)))
     (unless interface-def
       (error "ewc: unknown interface %s/%s" protocol interface))
 
     (pcase-let* ((`(,_version ,events ,requests) interface-def)
-                 (id (or id (cl-incf (ewc-objects-new-id objects))))
+                 (id (or id (cl-incf (ewc-client-new-id client))))
                  (object (ewc-object-make
                           :protocol protocol
                           :interface interface
                           :id id
                           :events events
                           :requests requests
-                          :listeners (cdr (assq interface (ewc-objects-listeners objects))))))
-      (puthash id object (ewc-objects-table objects))
+                          :listeners (cdr (assq interface (ewc-client-listeners client))))))
+      (puthash id object (ewc-client-table client))
       (ewc-log "ewc: added object id=%s interface=%s" id interface)
       object)))
 
@@ -242,13 +241,13 @@ ID is a uint32 object id; provide it for server-initiated objects.
                (len uint 16 t))
   "Wayland message header.")
 
-(defun ewc-event (objects str _str-len idx)
-  "Parse one Wayland event message STR in OBJECTS."
+(defun ewc-event (client str _str-len idx)
+  "Parse one Wayland event message STR in CLIENT."
   (pcase-let* ((bindat-idx idx)
                (bindat-raw str)
                ((map id opcode _len)
                 (funcall (bindat--type-ue ewc-msg-head))))
-    (if-let* ((object (ewc-object-get id objects)))
+    (if-let* ((object (ewc-object-get id client)))
         (let ((listeners (ewc-object-listeners object)))
           (if (and (< opcode (length listeners))
                    (aref listeners opcode))
@@ -298,18 +297,18 @@ ID is a uint32 object id; provide it for server-initiated objects.
 
 ;;; Connection and process filter
 
-(defun ewc-filter (objects)
-  "Return a process filter for OBJECTS.
+(defun ewc-filter (client)
+  "Return a process filter for CLIENT.
 The filter accumulates partial Wayland messages and dispatches
 complete ones."
   (lambda (_proc str)
     (setq str (encode-coding-string str 'binary))
-    (setf (ewc-objects-rx objects)
-          (concat (ewc-objects-rx objects) str))
+    (setf (ewc-client-rx client)
+          (concat (ewc-client-rx client) str))
 
     (let ((progress t))
       (while progress
-        (let ((buf (ewc-objects-rx objects)))
+        (let ((buf (ewc-client-rx client)))
           (if (< (string-bytes buf) 8)
               (setq progress nil)
             (pcase-let* ((bindat-raw buf)
@@ -319,7 +318,7 @@ complete ones."
               (cond
                ((< len 8)
                 (ewc-log "ewc: invalid message length %s; dropping buffer" len)
-                (setf (ewc-objects-rx objects) "")
+                (setf (ewc-client-rx client) "")
                 (setq progress nil))
 
                ((< (string-bytes buf) len)
@@ -328,22 +327,22 @@ complete ones."
 
                (t
                 (let ((msg (substring buf 0 len)))
-                  (setf (ewc-objects-rx objects)
+                  (setf (ewc-client-rx client)
                         (substring buf len))
                   (condition-case err
-                      (ewc-event objects msg len 0)
+                      (ewc-event client msg len 0)
                     (error (message "ewc: dispatch error: %S" err)))))))))))))
 
-(defun ewc--interfaces-events (objects)
-  "Return an alist of (INTERFACE . EVENT-NAMES) from OBJECTS.
+(defun ewc--interfaces-events (client)
+  "Return an alist of (INTERFACE . EVENT-NAMES) from CLIENT.
 INTERFACE is a symbol.  EVENT-NAMES is a list of event symbols
 in opcode order, as declared in the protocol XML."
-  (cl-loop for (_protocol . interfaces) in (ewc-objects-protocols objects)
+  (cl-loop for (_protocol . interfaces) in (ewc-client-protocols client)
            append (cl-loop for (iface _version events _requests) in interfaces
                            collect (cons iface (mapcar #'car events)))))
 
-(defun ewc-build-listeners (objects prefix)
-  "Populate the `listeners' slot of OBJECTS by scanning the obarray.
+(defun ewc-build-listeners (client prefix)
+  "Populate the `listeners' slot of CLIENT by scanning the obarray.
 
 PREFIX is a string such as \"reka-on-\".  Every function whose
 name starts with PREFIX is expected to follow the naming scheme
@@ -355,7 +354,7 @@ for example
     reka-on-river-window-v1-title
 
 The name is decomposed by matching INTERFACE against the
-interfaces declared in OBJECTS' protocols.  EVENT must be a known
+interfaces declared in CLIENT's protocols.  EVENT must be a known
 event of that interface; the function symbol is then stored at
 the event's opcode index in a per-interface vector.
 
@@ -366,7 +365,7 @@ no registered listeners get an all-nil vector.
 Signals an error listing every function matching PREFIX that does
 not correspond to a known (interface event) pair.  This catches
 typos at startup rather than silently dropping events."
-  (let* ((iface-events (ewc--interfaces-events objects))
+  (let* ((iface-events (ewc--interfaces-events client))
          (table (mapcar (lambda (entry)
                           (cons (car entry)
                                 (make-vector (length (cdr entry)) nil)))
@@ -395,11 +394,11 @@ typos at startup rather than silently dropping events."
     (when unmatched
       (error "ewc: listener(s) match no known interface/event: %s"
              (mapconcat #'symbol-name unmatched ", ")))
-    (setf (ewc-objects-listeners objects) table)
+    (setf (ewc-client-listeners client) table)
     table))
 
-(defun ewc-connect (objects &optional socket)
-  "Connect to Wayland SOCKET using OBJECTS for event dispatch.
+(defun ewc-connect (client &optional socket)
+  "Connect to Wayland SOCKET using CLIENT for event dispatch.
 SOCKET defaults to the value of WAYLAND_DISPLAY.
 
 Returns a network client process."
@@ -422,7 +421,7 @@ Returns a network client process."
      :service nil ;silence warning: "called without required keyword argument :service"
      :coding 'binary
      :noquery t
-     :filter (ewc-filter objects)
+     :filter (ewc-filter client)
      :sentinel (lambda (_proc msg)
                  (message "ewc: connection sentinel: %s" msg)))))
 

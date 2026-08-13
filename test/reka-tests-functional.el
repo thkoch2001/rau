@@ -31,7 +31,7 @@
   "Build a fresh `reka-state' with no live connection."
   (reka-state-make
    :connection nil
-   :objects (ewc-objects-make :protocols (reka-test--protocols))))
+   :client (ewc-client-make :protocols (reka-test--protocols))))
 
 (defun reka-test-server-object-id ()
   "Return and increment a server new_id."
@@ -39,7 +39,7 @@
 
 ;;; Advice
 
-(defun reka-test--adv-connect (_orig _objects &optional _socket)
+(defun reka-test--adv-connect (_orig _client &optional _socket)
   "Do not open a real Wayland socket."
   nil)
 
@@ -91,8 +91,8 @@
   "Find first object of INTERFACE in STATE."
   (or (cl-find-if
                (lambda (o) (eq (ewc-object-interface o) interface))
-               (hash-table-values (ewc-objects-table
-                                   (reka-state-objects state))))
+               (hash-table-values (ewc-client-table
+                                   (reka-state-client state))))
       (ert-fail (format "Did not find object of %s in state" interface))))
 
 (defun reka-test-find-listener (state interface event)
@@ -113,9 +113,9 @@ it with optional ARGS."
 
 (defun reka-test-call-listener (proxy event &optional args)
   "Call EVENT on PROXY with optional ARGS. PROXY can be an ewc-object or
-its id in reka--state objects table."
+its id in reka--state client table."
   (let ((proxy-obj (if (integerp proxy)
-                       (ewc-object-get proxy (reka-state-objects reka--state))
+                       (ewc-object-get proxy (reka-state-client reka--state))
                      proxy)))
     (funcall (should (ewc-listener proxy-obj event)) proxy-obj args)))
 
@@ -149,7 +149,7 @@ its id in reka--state objects table."
   (reka-test-with-mock
     (let ((reka--state (reka-test-make-state)))
       (let ((obj (ewc-object-add
-                  :objects (reka-state-objects reka--state)
+                  :client (reka-state-client reka--state)
                   :protocol 'river-window-management-v1
                   :interface 'river-window-v1)))
         (reka--request obj 'close)
@@ -249,7 +249,7 @@ its id in reka--state objects table."
   (reka-test-with-mock
     (let* ((reka--state (reka-test-make-state))
            (proxy (ewc-object-add
-                   :objects (reka-state-objects reka--state)
+                   :client (reka-state-client reka--state)
                    :protocol 'river-window-management-v1
                    :interface 'river-window-v1))
            (win (reka-window-make :proxy proxy :state 'killed)))
@@ -261,7 +261,7 @@ its id in reka--state objects table."
   (reka-test-with-mock
     (let* ((reka--state (reka-test-make-state))
            (proxy (ewc-object-add
-                   :objects (reka-state-objects reka--state)
+                   :client (reka-state-client reka--state)
                    :protocol 'river-window-management-v1
                    :interface 'river-window-v1))
            (params (reka-window-parameters-make :x 0 :y 0 :w 800 :h 600))
