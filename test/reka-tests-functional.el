@@ -185,25 +185,6 @@ its id in reka--state client table."
     (should reka--state)
     (reka-test-last-request-should 'wl-display 'get-registry)))
 
-;; ---- A small end-to-end flow: bind WM global, then an output event
-(ert-deftest reka-output-event-marks-manage-dirty ()
-  (reka-test-with-mock
-    (reka--start-wm)
-    ;; Compositor advertises the window-manager global.
-    (reka-test-find-call-listener reka--state
-                             'wl-registry 'global
-                             '((name . 1)
-                               (interface . "river_window_manager_v1")
-                               (version . 1)))
-
-    (let ((wm (reka--global reka--state 'river-window-manager-v1)))
-      (should wm)
-      (should (= reka-test-dirty-count 0))
-      ;; Compositor announces an output.
-      (funcall (ewc-listener wm 'output) wm '((id . 1)))
-      (should (= reka-test-dirty-count 0))
-      (should (reka--output-by-id reka--state 1)))))
-
 ;; ---- Output
 (ert-deftest reka-setup-one-output ()
   (reka-test-with-mock
@@ -218,8 +199,7 @@ its id in reka--state client table."
           (_ (reka-test-last-request-should 'wl-registry 'bind))
           (output-id (reka-test-server-object-id))
           (_ (reka-test-call-listener wm 'output `((id . ,output-id))))
-          (output-struct (should (reka--output-by-id reka--state output-id)))
-          (output-proxy (should (reka-output-proxy output-struct)))
+          (output-proxy (should (car (ewc-objects client 'river-output-v1))))
           (_ (should (= reka-test-dirty-count 0)))
           (_ (should (length= (frame-list) 1)))
           (_ (reka-test-call-listener output-proxy 'position '((x . 42) (y . 43))))
