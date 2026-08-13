@@ -791,7 +791,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                :interface 'river-layer-shell-output-v1
                                :id ls-output-id)))
     (setf (reka-output-ls-output out) ls-output-obj)
-    (ewc-set-listener ls-output-obj 'non-exclusive-area 'reka-on-river-layer-shell-output-v1-non-exclusive-area)
     (reka--request ls-obj 'get-output
                    `((id . ,ls-output-id)
                      (output . ,output-id)))))
@@ -858,17 +857,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (push (cons ifsym new-id) (reka-state-globals reka--state))
 
       (pcase ifsym
-        ('river-window-manager-v1
-         (ewc-set-listener bound-object 'output 'reka-on-river-window-manager-v1-output)
-         (ewc-set-listener bound-object 'seat 'reka-on-river-window-manager-v1-seat)
-         (ewc-set-listener bound-object 'window 'reka-on-river-window-manager-v1-window)
-         (ewc-set-listener bound-object 'manage-start 'reka-on-river-window-manager-v1-manage-start)
-         (ewc-set-listener bound-object 'render-start 'reka-on-river-window-manager-v1-render-start)
-         (ewc-set-listener bound-object 'unavailable 'reka-on-river-window-manager-v1-unavailable)
-         (ewc-set-listener bound-object 'finished 'reka-on-river-window-manager-v1-finished)
-         (ewc-set-listener bound-object 'session-locked 'reka-on-river-window-manager-v1-session-locked)
-         (ewc-set-listener bound-object 'session-unlocked 'reka-on-river-window-manager-v1-session-unlocked))
-
         ('river-layer-shell-v1
          ;; Attach layer-shell objects to existing outputs/seats in STATE."
          (reka--do outputs (id _out reka--state)
@@ -910,20 +898,11 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (message "reka: WM event session-unlocked"))
 
 (defun reka-on-river-window-manager-v1-window (_object args)
-  (pcase-let* (((map id) args)
-               (win-obj
-                (ewc-object-add :objects (reka-state-objects reka--state)
-                                :protocol 'river-window-management-v1
-                                :interface 'river-window-v1
-                                :id id)))
-    (ewc-set-listener win-obj 'unreliable-pid 'reka-on-river-window-v1-unreliable-pid)
-    (ewc-set-listener win-obj 'app-id 'reka-on-river-window-v1-app-id)
-    (ewc-set-listener win-obj 'title 'reka-on-river-window-v1-title)
-    (ewc-set-listener win-obj 'dimensions 'reka-on-river-window-v1-dimensions)
-    (ewc-set-listener win-obj 'closed 'reka-on-river-window-v1-closed)
-    (ewc-set-listener win-obj 'minimize-requested 'reka-on-river-window-v1-minimize-requested)
-    (ewc-set-listener win-obj 'fullscreen-requested 'reka-on-river-window-v1-fullscreen-requested)
-    (ewc-set-listener win-obj 'exit-fullscreen-requested 'reka-on-river-window-v1-exit-fullscreen-requested)))
+  (pcase-let* (((map id) args))
+    (ewc-object-add :objects (reka-state-objects reka--state)
+                    :protocol 'river-window-management-v1
+                    :interface 'river-window-v1
+                    :id id)))
 
 (defun reka-on-river-window-manager-v1-output (_object args)
   (pcase-let* (((map id) args)
@@ -936,9 +915,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (puthash id
              (reka-output-make :proxy output-obj)
              (reka-state-outputs reka--state))
-    (ewc-set-listener output-obj 'removed 'reka-on-river-output-v1-removed)
-    (ewc-set-listener output-obj 'position 'reka-on-river-output-v1-position)
-    (ewc-set-listener output-obj 'dimensions 'reka-on-river-output-v1-dimensions)
     (reka--ensure-ls-output reka--state id)))
 
 (defun reka-on-river-window-manager-v1-seat (_object args)
@@ -954,7 +930,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (setf (reka-state-seat reka--state)
               (reka-seat-make :id id
                               :proxy seat-obj))
-        (ewc-set-listener seat-obj 'window-interaction 'reka-on-river-seat-v1-window-interaction)
         (reka--ensure-ls-seat reka--state)))))
 
 ;;;; river-window-v1 listeners
@@ -970,9 +945,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (reka--do outputs (_output-id out reka--state)
       (when (eq (reka--fs-window (reka-output-fullscreen out)) object)
         (setf (reka-output-fullscreen out) 'none)))
-    (let* ((surface (reka--surface-by-id reka--state win-id))
-           (node (reka-surface-node surface))
-           (table (ewc-objects-table (reka-state-objects reka--state))))
+    (when-let* ((surface (reka--surface-by-id reka--state win-id))
+                (node (reka-surface-node surface))
+                (table (ewc-objects-table (reka-state-objects reka--state))))
       (reka--request node 'destroy)
       (reka--request object 'destroy)
       (remhash win-id table)
@@ -1260,8 +1235,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                 :interface 'river-xkb-binding-v1
                                 :id id)))
 
-          (ewc-set-listener proxy 'pressed 'reka-on-river-xkb-binding-v1-pressed)
-
           (reka--request xkb 'get-xkb-binding
                        `((seat . ,(ewc-object-id seat-proxy))
                          (keysym . ,(reka-binding-keysym binding))
@@ -1457,25 +1430,21 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--start-wm ()
   "Connect to Wayland and initialize the reka state."
-  (let* ((objects (ewc-objects-make :protocols (reka--read-protocols)))
-         (connection (ewc-connect objects))
-         (display (ewc-object-add :objects objects
-                                  :protocol 'wayland
-                                  :interface 'wl-display))
-         (registry (ewc-object-add :objects objects
+  (let ((objects (ewc-objects-make :protocols (reka--read-protocols))))
+    (ewc-build-listeners objects "reka-on-")
+    (let ((connection (ewc-connect objects))
+          (display (ewc-object-add :objects objects
                                    :protocol 'wayland
-                                   :interface 'wl-registry))
-         (state (reka-state-make :connection connection
-                                 :objects objects)))
+                                   :interface 'wl-display))
+          (registry (ewc-object-add :objects objects
+                                    :protocol 'wayland
+                                    :interface 'wl-registry)))
 
-    (setq reka--state state)
-
-    (ewc-set-listener display 'error 'reka-on-wl-display-error)
-    (ewc-set-listener display 'delete-id 'reka-on-wl-display-delete-id)
-    (ewc-set-listener registry 'global 'reka-on-wl-registry-global)
+    (setq reka--state (reka-state-make :connection connection
+                                       :objects objects))
 
     (reka--request display 'get-registry
-                   `((registry . ,(ewc-object-id registry))))))
+                   `((registry . ,(ewc-object-id registry)))))))
 
 ;; NOTE: No need for reka-disable since this Emacs process is serving as a
 ;; Window Manager and disabling reka while keeping the Emacs process running

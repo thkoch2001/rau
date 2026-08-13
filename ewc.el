@@ -180,6 +180,7 @@ RX holds incomplete incoming Wayland bytes."
   (new-id 0 :type integer)
   (table (make-hash-table) :type hash-table :read-only t)
   (protocols nil :type list :read-only t)
+  (listeners nil :type list)
   (rx "" :type string))
 
 (define-inline ewc-object-get (id objects)
@@ -213,7 +214,7 @@ ID is a uint32 object id; provide it for server-initiated objects.
                           :id id
                           :events events
                           :requests requests
-                          :listeners (make-vector (length events) nil))))
+                          :listeners (cdr (assq interface (ewc-objects-listeners objects))))))
       (puthash id object (ewc-objects-table objects))
       (ewc-log "ewc: added object id=%s interface=%s" id interface)
       object)))
@@ -232,12 +233,6 @@ ID is a uint32 object id; provide it for server-initiated objects.
   "Return listener for EVENT on OBJECT."
   (aref (ewc-object-listeners object)
         (ewc--event-index object event)))
-
-(defun ewc-set-listener (object event listener)
-  "Set LISTENER for EVENT on OBJECT."
-  (aset (ewc-object-listeners object)
-        (ewc--event-index object event)
-        listener))
 
 ;;; Wire messages
 
@@ -338,6 +333,70 @@ complete ones."
                   (condition-case err
                       (ewc-event objects msg len 0)
                     (error (message "ewc: dispatch error: %S" err)))))))))))))
+
+(defun ewc--interfaces-events (objects)
+  "Return an alist of (INTERFACE . EVENT-NAMES) from OBJECTS.
+INTERFACE is a symbol.  EVENT-NAMES is a list of event symbols
+in opcode order, as declared in the protocol XML."
+  (cl-loop for (_protocol . interfaces) in (ewc-objects-protocols objects)
+           append (cl-loop for (iface _version events _requests) in interfaces
+                           collect (cons iface (mapcar #'car events)))))
+
+(defun ewc-build-listeners (objects prefix)
+  "Populate the `listeners' slot of OBJECTS by scanning the obarray.
+
+PREFIX is a string such as \"reka-on-\".  Every function whose
+name starts with PREFIX is expected to follow the naming scheme
+
+    PREFIX-INTERFACE-EVENT
+
+for example
+
+    reka-on-river-window-v1-title
+
+The name is decomposed by matching INTERFACE against the
+interfaces declared in OBJECTS' protocols.  EVENT must be a known
+event of that interface; the function symbol is then stored at
+the event's opcode index in a per-interface vector.
+
+The resulting alist maps each interface symbol to a vector of
+listener symbols (or nil for unhandled events).  Interfaces with
+no registered listeners get an all-nil vector.
+
+Signals an error listing every function matching PREFIX that does
+not correspond to a known (interface event) pair.  This catches
+typos at startup rather than silently dropping events."
+  (let* ((iface-events (ewc--interfaces-events objects))
+         (table (mapcar (lambda (entry)
+                          (cons (car entry)
+                                (make-vector (length (cdr entry)) nil)))
+                        iface-events))
+         (unmatched nil))
+    (mapatoms
+     (lambda (sym)
+       (when (and (fboundp sym)
+                  (string-prefix-p prefix (symbol-name sym)))
+         (let ((rest (substring (symbol-name sym) (length prefix)))
+               (found nil))
+           (dolist (entry iface-events)
+             (when-let* (((not found))
+                         (iface      (car entry))
+                         (events     (cdr entry))
+                         (iface-prefix  (concat (symbol-name iface) "-"))
+                         ((string-prefix-p iface-prefix rest))
+                         (event-str (substring rest (length iface-prefix)))
+                         (event-sym (intern event-str))
+                         (opcode    (cl-position event-sym events))
+                         (vec (cdr (assq iface table))))
+               (aset vec opcode sym)
+               (setq found t)))
+           (unless found
+             (push sym unmatched))))))
+    (when unmatched
+      (error "ewc: listener(s) match no known interface/event: %s"
+             (mapconcat #'symbol-name unmatched ", ")))
+    (setf (ewc-objects-listeners objects) table)
+    table))
 
 (defun ewc-connect (objects &optional socket)
   "Connect to Wayland SOCKET using OBJECTS for event dispatch.
