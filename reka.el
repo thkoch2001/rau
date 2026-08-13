@@ -482,7 +482,7 @@ when used from other files (e.g. tests)."
 (defun reka--global (state interface)
   "Fetch the ewc-object for INTERFACE from STATE's globals."
   (when-let* ((id (alist-get interface (reka-state-globals state))))
-    (ewc-object-get id (reka-state-client state))))
+    (ewc-object-get (reka-state-client state) id)))
 
 ;; TODO consider moving to ewc.el
 (defun reka--decode-string (s)
@@ -1113,8 +1113,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;;;; river-seat-v1 listener
 (defun reka-on-river-seat-v1-window-interaction (_object args)
   (pcase-let* (((map window) args)
-               (win-obj (ewc-object-get window
-                                        (reka-state-client reka--state))))
+               (win-obj (ewc-object-get (reka-state-client reka--state) window)))
     (cond
      ((gethash window (reka-state-frames reka--state))
       (when (and win-obj

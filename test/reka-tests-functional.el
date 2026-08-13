@@ -115,7 +115,7 @@ it with optional ARGS."
   "Call EVENT on PROXY with optional ARGS. PROXY can be an ewc-object or
 its id in reka--state client table."
   (let ((proxy-obj (if (integerp proxy)
-                       (ewc-object-get proxy (reka-state-client reka--state))
+                       (ewc-object-get (reka-state-client reka--state) proxy)
                      proxy)))
     (funcall (should (ewc-listener proxy-obj event)) proxy-obj args)))
 

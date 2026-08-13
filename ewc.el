@@ -182,7 +182,7 @@ RX holds incomplete incoming Wayland bytes."
   (listeners nil :type list)
   (rx "" :type string))
 
-(define-inline ewc-object-get (id client)
+(define-inline ewc-object-get (client id)
   "Get object with ID from CLIENT, an `ewc-client' struct."
   (inline-quote (gethash ,id (ewc-client-table ,client))))
 
@@ -247,7 +247,7 @@ ID is a uint32 object id; provide it for server-initiated objects.
                (bindat-raw str)
                ((map id opcode _len)
                 (funcall (bindat--type-ue ewc-msg-head))))
-    (if-let* ((object (ewc-object-get id client)))
+    (if-let* ((object (ewc-object-get client id)))
         (let ((listeners (ewc-object-listeners object)))
           (if (and (< opcode (length listeners))
                    (aref listeners opcode))
