@@ -86,9 +86,6 @@ Not instantiated directly; windows and frames include it."
   (client nil :type ewc-client)
   (pid (emacs-pid))
 
-  ;; Bound globals: alist of interface symbol -> object id.
-  (globals nil)
-
   ;; Current seat.
   (seat nil)
 
@@ -486,9 +483,8 @@ when used from other files (e.g. tests)."
     (car interface-def)))
 
 (defun reka--global (state interface)
-  "Fetch the ewc-object for INTERFACE from STATE's globals."
-  (when-let* ((id (alist-get interface (reka-state-globals state))))
-    (ewc-object-get (reka-state-client state) id)))
+  "Fetch the ewc-object for INTERFACE from STATE's tag index."
+  (car (ewc-objects (reka-state-client state) interface)))
 
 ;; TODO consider moving to ewc.el
 (defun reka--decode-string (s)
@@ -839,8 +835,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                        (interface . ,interface)
                        (version . ,bind-version)
                        (id . ,new-id)))
-      (push (cons ifsym new-id) (reka-state-globals reka--state))
-
       (pcase ifsym
         ('river-layer-shell-v1
          ;; Attach layer-shell objects to existing outputs/seats in STATE."
