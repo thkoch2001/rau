@@ -217,6 +217,12 @@ Untagging an object that does not carry TAG is a no-op."
   "Return non-nil if OBJECT carries TAG."
   (inline-quote (memq ,tag (ewc-object-tags ,object))))
 
+(defun ewc-first-object (client tag)
+  "Fetch the first ewc-object in CLIENT for TAG. This is meant to be used
+for TAGs that should only be attached to one object, e.g. global
+interfaces."
+  (car (ewc-objects client tag)))
+
 (defun ewc-objects (client tag)
   "Return the list of objects in CLIENT carrying TAG.
 The result is a copy, so callers may mutate it and may remove
