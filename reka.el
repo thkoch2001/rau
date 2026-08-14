@@ -31,7 +31,6 @@
 
 (cl-defstruct (reka-output (:constructor reka-output-make))
   "State for a River output."
-  proxy
   ls-output
   (x 0)
   (y 0)
@@ -114,10 +113,10 @@ Not instantiated directly; windows and frames include it."
 (defconst reka--tag-window :reka-window
   "Tag for `river-window-v1' objects that are external windows.")
 
-(cl-defmacro reka--do (with (key val state) &body body)
+(cl-defmacro reka--do (with (obj val state) &body body)
   "Iterate over a reka collection.
 WITH selects the collection: windows, outputs, frames.
-KEY is bound to the object id and VAL to its data for each element.
+OBJ is bound to the ewc-object and VAL to its data for each element.
 STATE is evaluated once and bound to that same name within BODY."
   (declare (indent 1))
   (unless (symbolp state)
@@ -126,12 +125,10 @@ STATE is evaluated once and bound to that same name within BODY."
                ('windows 'reka--tag-window)
                ('frames  'reka--tag-frame)
                ('outputs ''river-output-v1)
-               (_ (error "Unknown reka--do collection: %S" with))))
-        (obj (cl-gensym "reka--do-obj")))
+               (_ (error "Unknown reka--do collection: %S" with)))))
     `(let ((,state ,state))
        (dolist (,obj (ewc-objects (reka-state-client ,state) ,tag))
-         (let ((,key (ewc-object-id ,obj))
-               (,val (ewc-object-data ,obj)))
+         (let ((,val (ewc-object-data ,obj)))
            ,@body)))))
 
 (defun reka--set-frame-name (frame)
@@ -177,8 +174,9 @@ STATE is evaluated once and bound to that same name within BODY."
                                 :w (- right left)
                                 :h (- bottom top))
                                params))))))
-            (reka--do windows (id win state)
-              (let ((new (gethash id params))
+            (reka--do windows (object win state)
+              (let* ((id (ewc-object-id object))
+                     (new (gethash id params))
                     (old (reka-window-params win)))
                 (unless (reka--params-equal old new)
                   (setf (reka-window-params win) new)
@@ -516,9 +514,9 @@ Return nil if S is nil or empty."
     (reka--frame-by-cond state
       (lambda (f) (equal (reka-surface-title f) name)))))
 
-(defun reka--frame-for-output (state output-id)
+(defun reka--frame-for-output (state output)
   "Return (ID . FRAME) for frame associated to OUTPUT or nil."
-  (reka--frame-by-cond state (lambda (f) (eq (reka-frame-displayed-on f) output-id))))
+  (reka--frame-by-cond state (lambda (f) (eq (reka-frame-displayed-on f) output))))
 
 (defun reka--frame-without-output (state)
   "Return (ID . FRAME) of a frame not associated to any output or nil."
@@ -820,8 +818,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (pcase ifsym
         ('river-layer-shell-v1
          ;; Attach layer-shell objects to existing outputs/seats in STATE."
-         (reka--do outputs (_id out reka--state)
-                   (reka--ensure-ls-output reka--state (reka-output-proxy out)))
+         (reka--do outputs (object _out reka--state)
+                   (reka--ensure-ls-output reka--state object))
          (reka--ensure-ls-seat reka--state))
 
         (_ (reka-log "reka: bound %s" ifsym))))))
@@ -869,7 +867,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                (client (reka-state-client reka--state))
                (output-obj (ewc-object-add client 'river-output-v1 id)))
     (setf (ewc-object-data output-obj)
-          (reka-output-make :proxy output-obj))
+          (reka-output-make))
     (reka--ensure-ls-output reka--state output-obj)))
 
 (defun reka-on-river-window-manager-v1-seat (_object args)
@@ -897,7 +895,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (reka--focus-invalidate reka--state object)
 
     ;; Reset fullscreen on output if window was fullscreen.
-    (reka--do outputs (_output-id out reka--state)
+    (reka--do outputs (_ out reka--state)
       (when (eq (reka--fs-window (reka-output-fullscreen out)) object)
         (setf (reka-output-fullscreen out) 'none)))
 
@@ -969,7 +967,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                       :previous previous)))))))
 
 (defun reka-on-river-window-v1-exit-fullscreen-requested (object _)
-  (reka--do outputs (_output-id out reka--state)
+  (reka--do outputs (_ out reka--state)
     (let ((fs (reka-output-fullscreen out)))
       (when (and (member (reka--fs-state fs)
                          '(requested fullscreen))
@@ -1025,7 +1023,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;;;; river-output-v1 listeners
 (defun reka-on-river-output-v1-removed (object _)
   (let ((client (reka-state-client reka--state)))
-    (reka--do frames (_fid f reka--state)
+    (reka--do frames (_ f reka--state)
       (when (eq (reka-frame-displayed-on f) object)
         (setf (reka-frame-displayed-on f) nil)
         (when-let* ((name (reka-surface-title f)))
@@ -1105,8 +1103,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 (defun reka--reconcile-frames (state)
   "Ensure each output gets one maximized Emacs frame."
   (let ((frame-requests 0))
-    (reka--do outputs (_output-id out state)
-              (if-let* ((found (reka--frame-for-output state (reka-output-proxy out)))
+    (reka--do outputs (object out state)
+              (if-let* ((found (reka--frame-for-output state object))
                         (f (cdr found)))
                   ;; Frame already assigned: only re-propose if size changed.
                   (unless (and (eq (reka-frame-proposed-width f) (reka-output-width out))
@@ -1122,7 +1120,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                           (f (cdr found))
                           (frame-proxy (reka-surface-proxy f)))
                     (progn
-                      (setf (reka-frame-displayed-on f) (reka-output-proxy out)
+                      (setf (reka-frame-displayed-on f) object
                             (reka-frame-proposed-width f) (reka-output-width out)
                             (reka-frame-proposed-height f) (reka-output-height out))
                       (reka--request frame-proxy
@@ -1142,22 +1140,22 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--reconcile-windows (state)
   "Close killed windows and propose dimensions for active windows."
-  (reka--do windows (_id win state)
+  (reka--do windows (object win state)
             (pcase (reka-window-state win)
               ;; nothing to do for window-state 'starting
               ('active
                (when-let* ((params (reka-window-params win)))
                  ;; TODO: This gets sent on every loop for all windows?
-                 (reka--request (reka-surface-proxy win)
+                 (reka--request object
                                 'set-tiled
                                 `((edges . ,reka--edges-all)))
 
-                 (reka--request (reka-surface-proxy win)
+                 (reka--request object
                                 'propose-dimensions
                                 `((width . ,(reka-window-parameters-w params))
                                   (height . ,(reka-window-parameters-h params))))))
               ('killed
-               (reka--request (reka-surface-proxy win) 'close)))))
+               (reka--request object 'close)))))
 
 (defun reka--reconcile-bindings (state)
   "Create and enable XKB bindings."
@@ -1183,7 +1181,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--reconcile-fullscreen (state)
   "Advance fullscreen state machines."
-  (reka--do outputs (_output-id out state)
+  (reka--do outputs (object out state)
     (let ((fs (reka-output-fullscreen out)))
       (pcase (reka--fs-state fs)
         ('requested
@@ -1198,7 +1196,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
              (reka--request new 'inform-fullscreen)
              (reka--request new 'fullscreen
                           `((output . ,(ewc-object-id
-                                        (reka-output-proxy out))))))
+                                        object)))))
 
            (setf (reka-output-fullscreen out)
                  (list :state 'fullscreen
@@ -1261,9 +1259,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--render-frames (state)
   "Run the render-sequence reconciliation for frames on STATE."
-  (reka--do frames (_id frame state)
-            (let ((proxy (reka-surface-proxy frame))
-                  (node (reka-surface-node frame))
+  (reka--do frames (proxy frame state)
+            (let ((node (reka-surface-node frame))
                   (out-obj (reka-frame-displayed-on frame)))
               (if (not out-obj)
                   (when (reka-frame-visible frame)
@@ -1286,9 +1283,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--render-windows (state)
   "Run the render-sequence reconciliation for windows on STATE."
-  (reka--do windows (_id win state)
-    (let ((proxy (reka-surface-proxy win))
-          (node (reka-surface-node win)))
+  (reka--do windows (proxy win state)
+    (let ((node (reka-surface-node win)))
       (if (not (eq (reka-window-state win) 'active))
           (reka--request proxy 'hide)
 
