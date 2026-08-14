@@ -25,10 +25,9 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
   (let* ((client (ewc-client-make))
          (state (reka-state-make :client client))
          (frame-obj (ewc-object-make :id 100 :interface 'river-window-v1))
-         (frame (reka-frame-make :proxy frame-obj :title "reka-frame-test"))
+         (frame (reka-frame-make :title "reka-frame-test"))
          (win-obj (ewc-object-make :id 200 :interface 'river-window-v1))
          (win (reka-window-make
-               :proxy win-obj
                :params (when with-display
                          (reka-window-parameters-make
                           :window win-obj :frame-name "reka-frame-test"
