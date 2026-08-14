@@ -66,8 +66,6 @@ Not instantiated directly; windows and frames include it."
 
 (cl-defstruct (reka-seat (:constructor reka-seat-make))
   "State for a River seat."
-  id
-  proxy
   ls-seat)
 
 (cl-defstruct (reka-binding (:constructor reka-binding-make))
@@ -83,9 +81,6 @@ Not instantiated directly; windows and frames include it."
   (connection nil)
   (client nil :type ewc-client)
   (pid (emacs-pid))
-
-  ;; Current seat.
-  (seat nil)
 
   ;; XKB bindings: (keysym . modifiers) -> reka-binding.
   (bindings (make-hash-table :test 'equal))
@@ -454,6 +449,11 @@ when used from other files (e.g. tests)."
 
 ;;; Basic helpers
 
+(defun reka--seat (state)
+  "Return STATE's single seat ewc-object, or nil. Reka supports only one
+seat at the moment."
+  (car (ewc-objects (reka-state-client state) 'river-seat-v1)))
+
 (defun reka--request (object request &optional arguments)
   "Send REQUEST on OBJECT using the current reka Wayland connection."
   (ewc-request (reka-state-connection reka--state)
@@ -762,7 +762,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;; TODO: this ls-seat is never used ATM.
 (defun reka--ensure-ls-seat (state)
   "Create a layer-shell seat object for the current seat if possible."
-  (when-let* ((seat (reka-state-seat state))
+  (when-let* ((seat-obj (reka--seat state))
+              (seat (ewc-object-data seat-obj))
               ((null (reka-seat-ls-seat seat)))
               (ls-obj (reka--global state 'river-layer-shell-v1))
               (client (reka-state-client state))
@@ -774,7 +775,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (setf (reka-seat-ls-seat seat) ls-seat-obj)
     (reka--request ls-obj 'get-seat
                    `((id . ,ls-seat-id)
-                     (seat . ,(reka-seat-id seat))))))
+                     (seat . ,(ewc-object-id seat-obj))))))
 
 ;;; Listeners
 
@@ -872,16 +873,11 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka-on-river-window-manager-v1-seat (_object args)
   (pcase-let (((map id) args))
-    (if (reka-state-seat reka--state)
+    (if (reka--seat reka--state)
         (message "reka does not support multi-seat")
       (let* ((client (reka-state-client reka--state))
-             (seat-obj
-              (ewc-object-add client
-                              'river-seat-v1
-                              id)))
-        (setf (reka-state-seat reka--state)
-              (reka-seat-make :id id
-                              :proxy seat-obj))
+             (seat-obj (ewc-object-add client 'river-seat-v1 id)))
+        (setf (ewc-object-data seat-obj) (reka-seat-make))
         (reka--ensure-ls-seat reka--state)))))
 
 ;;;; river-window-v1 listeners
@@ -1160,8 +1156,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 (defun reka--reconcile-bindings (state)
   "Create and enable XKB bindings."
   (when-let* ((xkb (reka--global state 'river-xkb-bindings-v1))
-              (seat (reka-state-seat state))
-              (seat-proxy (reka-seat-proxy seat))
+              (seat-obj (reka--seat state))
               (client (reka-state-client state)))
     (maphash
      (lambda (_key binding)
@@ -1169,7 +1164,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
          (let* ((id (cl-incf (ewc-client-new-id client)))
                 (proxy (ewc-object-add client 'river-xkb-binding-v1 id)))
            (reka--request xkb 'get-xkb-binding
-                          `((seat . ,(ewc-object-id seat-proxy))
+                          `((seat . ,(ewc-object-id seat-obj))
                             (keysym . ,(reka-binding-keysym binding))
                             (modifiers . ,(reka-binding-modifiers binding))
                             (id . ,id)))
@@ -1222,15 +1217,14 @@ KEY may be an integer codepoint, a symbol, or a string key name."
               (f (cdr found)))
         (reka--focus-frame state (reka-surface-proxy f))))
 
-  (when-let* ((seat (reka-state-seat state))
-              (seat-proxy (reka-seat-proxy seat))
+  (when-let* ((seat-obj (reka--seat state))
               (cur (reka--focus-current state)))
     (let* ((target (car cur))
            (frame (cdr cur))
            (dirty (reka-state-focus-dirty state)))
 
       (when (and target (ewc-object-p target))
-        (reka--request seat-proxy
+        (reka--request seat-obj
                        'focus-window
                        `((window . ,(ewc-object-id target)))))
 
