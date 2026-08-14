@@ -77,8 +77,7 @@ Not instantiated directly; windows and frames include it."
   modifiers
   command
   event
-  (state 'requested)
-  proxy)
+  (state 'requested))
 
 (cl-defstruct (reka-state (:constructor reka-state-make))
   "Holds the state of the reka Wayland client."
@@ -117,33 +116,23 @@ Not instantiated directly; windows and frames include it."
 
 (cl-defmacro reka--do (with (key val state) &body body)
   "Iterate over a reka collection.
-WITH selects the collection: windows, outputs, frames, bindings.
-KEY and VAL are bound for each element.
-STATE is evaluated once and bound to that same name within BODY.
-`windows', `outputs' and `frames' are iterated via the ewc tag
-index; `bindings' still uses a reka state hash table."
+WITH selects the collection: windows, outputs, frames.
+KEY is bound to the object id and VAL to its data for each element.
+STATE is evaluated once and bound to that same name within BODY."
   (declare (indent 1))
   (unless (symbolp state)
     (error "reka--do: STATE slot must be a symbol, got: %S" state))
   (let ((tag (pcase with
                ('windows 'reka--tag-window)
                ('frames  'reka--tag-frame)
-               ;; outputs use their automatic interface tag, not an own tag
-               ('outputs ''river-output-v1))))
-    (if tag
-        (let ((obj (cl-gensym "reka--do-obj")))
-          `(let ((,state ,state))
-             (dolist (,obj (ewc-objects (reka-state-client ,state) ,tag))
-               (let ((,key (ewc-object-id ,obj))
-                     (,val (ewc-object-data ,obj)))
-                 ,@body))))
-      (let* ((accessor (pcase with
-                         ('bindings 'reka-state-bindings)
-                         (_ (error "Unknown reka--do collection: %S" with))))
-             (table (cl-gensym "reka--do-table")))
-        `(let* ((,state ,state)
-                (,table (,accessor ,state)))
-           (maphash (lambda (,key ,val) ,@body) ,table))))))
+               ('outputs ''river-output-v1)
+               (_ (error "Unknown reka--do collection: %S" with))))
+        (obj (cl-gensym "reka--do-obj")))
+    `(let ((,state ,state))
+       (dolist (,obj (ewc-objects (reka-state-client ,state) ,tag))
+         (let ((,key (ewc-object-id ,obj))
+               (,val (ewc-object-data ,obj)))
+           ,@body)))))
 
 (defun reka--set-frame-name (frame)
   (unless (string-prefix-p "reka-frame-"
@@ -1086,10 +1075,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
 (defun reka-on-river-xkb-binding-v1-pressed (object _)
-  (when-let* ((binding
-               (cl-loop for b being the hash-values
-                        of (reka-state-bindings reka--state)
-                        thereis (and (eq (reka-binding-proxy b) object) b)))
+  (when-let* ((binding (ewc-object-data object))
               (command (reka-binding-command binding)))
     (if (eq command 'toggle-fullscreen)
         (reka--toggle-fullscreen reka--state)
@@ -1177,31 +1163,23 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   "Create and enable XKB bindings."
   (when-let* ((xkb (reka--global state 'river-xkb-bindings-v1))
               (seat (reka-state-seat state))
-              (seat-proxy (reka-seat-proxy seat)))
-
-    ;; TODO: combine the two loops into one
-    (reka--do bindings (key binding state)
-      (when (eq (reka-binding-state binding) 'requested)
-        (let* ((client (reka-state-client state))
-               (id (cl-incf (ewc-client-new-id client)))
-               (proxy
-                (ewc-object-add client
-                                'river-xkb-binding-v1
-                                id)))
-
-          (reka--request xkb 'get-xkb-binding
-                       `((seat . ,(ewc-object-id seat-proxy))
-                         (keysym . ,(reka-binding-keysym binding))
-                         (modifiers . ,(reka-binding-modifiers binding))
-                         (id . ,id)))
-
-          (setf (reka-binding-proxy binding) proxy
-                (reka-binding-state binding) 'registered))))
-
-    (reka--do bindings (_key binding state)
-      (when (eq (reka-binding-state binding) 'registered)
-        (reka--request (reka-binding-proxy binding) 'enable)
-        (setf (reka-binding-state binding) 'enabled)))))
+              (seat-proxy (reka-seat-proxy seat))
+              (client (reka-state-client state)))
+    (maphash
+     (lambda (_key binding)
+       (when (eq (reka-binding-state binding) 'requested)
+         (let* ((id (cl-incf (ewc-client-new-id client)))
+                (proxy (ewc-object-add client 'river-xkb-binding-v1 id)))
+           (reka--request xkb 'get-xkb-binding
+                          `((seat . ,(ewc-object-id seat-proxy))
+                            (keysym . ,(reka-binding-keysym binding))
+                            (modifiers . ,(reka-binding-modifiers binding))
+                            (id . ,id)))
+           (setf (ewc-object-data proxy) binding
+                 (reka-binding-state binding) 'registered)
+           (reka--request proxy 'enable)
+           (setf (reka-binding-state binding) 'enabled))))
+     (reka-state-bindings state))))
 
 (defun reka--reconcile-fullscreen (state)
   "Advance fullscreen state machines."
