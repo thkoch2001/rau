@@ -19,6 +19,16 @@
 
 ;;; State structs
 
+(cl-defstruct (reka-fs (:constructor reka-fs) (:copier nil))
+  "Fullscreen state machine for one output.
+STATE is one of: `none', `requested', `fullscreen', `exiting'.
+NEW and PREVIOUS are meaningful only when STATE is `requested'.
+WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
+  (state    'none :type symbol :read-only t)
+  (new      nil   :read-only t)
+  (previous nil   :read-only t)
+  (window   nil   :read-only t))
+
 (cl-defstruct (reka-window-parameters
                (:constructor reka-window-parameters-make))
   "Window parameters describing where an external surface should be placed."
@@ -36,7 +46,7 @@
   (y 0)
   (width 0)
   (height 0)
-  (fullscreen 'none))
+  (fullscreen (reka-fs)))
 
 (cl-defstruct (reka-surface (:constructor nil))
   "Common state shared by windows and frames.
@@ -632,17 +642,11 @@ Return non-nil if the focus state changed."
 
 ;;; Fullscreen helpers
 
-(defun reka--fs-state (fs)
-  "Return the state symbol from fullscreen state FS."
-  (if (listp fs)
-      (or (plist-get fs :state) 'none)
-    'none))
-
 (defun reka--fs-window (fs)
   "Return the window involved in fullscreen state FS, if any."
-  (pcase (reka--fs-state fs)
-    ('requested (plist-get fs :new))
-    ((or 'fullscreen 'exiting) (plist-get fs :window))
+  (pcase (reka-fs-state fs)
+    ('requested (reka-fs-new fs))
+    ((or 'fullscreen 'exiting) (reka-fs-window fs))
     (_ nil)))
 
 (defun reka--select-buffer-for-window (window)
@@ -883,7 +887,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     ;; Reset fullscreen on output if window was fullscreen.
     (reka--do outputs (_ out reka--state)
       (when (eq (reka--fs-window (reka-output-fullscreen out)) object)
-        (setf (reka-output-fullscreen out) 'none)))
+        (setf (reka-output-fullscreen out) (reka-fs))))
 
     (when-let* ((data (ewc-object-data object))
                 (node (reka-surface-node data)))
@@ -943,24 +947,24 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (when-let* ((out (ewc-object-data target)))
         (let* ((fs (reka-output-fullscreen out))
                (previous
-                (pcase (reka--fs-state fs)
+                (pcase (reka-fs-state fs)
                   ((or 'fullscreen 'exiting)
-                   (plist-get fs :window))
+                   (reka-fs-window fs))
                   (_ nil))))
           (setf (reka-output-fullscreen out)
-                (list :state 'requested
-                      :new object
-                      :previous previous)))))))
+                (reka-fs :state 'requested
+                         :new object
+                         :previous previous)))))))
 
 (defun reka-on-river-window-v1-exit-fullscreen-requested (object _)
   (reka--do outputs (_ out reka--state)
     (let ((fs (reka-output-fullscreen out)))
-      (when (and (member (reka--fs-state fs)
+      (when (and (member (reka-fs-state fs)
                          '(requested fullscreen))
                  (eq (reka--fs-window fs) object))
         (setf (reka-output-fullscreen out)
-              (list :state 'exiting
-                    :window (reka--fs-window fs)))))))
+              (reka-fs :state 'exiting
+                       :window (reka--fs-window fs)))))))
 
 (defun reka-on-river-window-v1-minimize-requested (object _)
   (when-let* ((data (ewc-object-data object))
@@ -1162,33 +1166,25 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   "Advance fullscreen state machines."
   (reka--do outputs (object out state)
     (let ((fs (reka-output-fullscreen out)))
-      (pcase (reka--fs-state fs)
+      (pcase (reka-fs-state fs)
         ('requested
-         (let ((new (plist-get fs :new))
-               (prev (plist-get fs :previous)))
-
+         (let ((new (reka-fs-new fs))
+               (prev (reka-fs-previous fs)))
            (when (and prev (ewc-object-p prev))
              (reka--request prev 'inform-not-fullscreen)
              (reka--request prev 'exit-fullscreen))
-
            (when (and new (ewc-object-p new))
              (reka--request new 'inform-fullscreen)
              (reka--request new 'fullscreen
-                          `((output . ,(ewc-object-id
-                                        object)))))
-
+                            `((output . ,(ewc-object-id object)))))
            (setf (reka-output-fullscreen out)
-                 (list :state 'fullscreen
-                       :window new))))
-
+                 (reka-fs :state 'fullscreen :window new))))
         ('exiting
-         (let ((win (plist-get fs :window)))
+         (let ((win (reka-fs-window fs)))
            (when (and win (ewc-object-p win))
              (reka--request win 'inform-not-fullscreen)
              (reka--request win 'exit-fullscreen))
-
-           (setf (reka-output-fullscreen out) 'none)))
-
+           (setf (reka-output-fullscreen out) (reka-fs))))
         (_ nil)))))
 
 (defun reka--reconcile-focus (state)
@@ -1311,18 +1307,17 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                   (out-obj (reka-frame-displayed-on frame-data))
                   (out (ewc-object-data out-obj)))
             (let ((fs (reka-output-fullscreen out)))
-              (pcase (reka--fs-state fs)
+              (pcase (reka-fs-state fs)
                 ('none
                  (setf (reka-output-fullscreen out)
-                       (list :state 'requested
-                             :new focus
-                             :previous nil))
+                       (reka-fs :state 'requested
+                                :new focus))
                  (reka--mark-manage-dirty state))
 
                 ('fullscreen
                  (setf (reka-output-fullscreen out)
-                       (list :state 'exiting
-                             :window (plist-get fs :window)))
+                       (reka-fs :state 'exiting
+                                :window (reka-fs-window fs)))
                  (reka--mark-manage-dirty state))
 
                 (_
