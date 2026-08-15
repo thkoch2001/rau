@@ -30,7 +30,7 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
          (win (reka-window-make
                :params (when with-display
                          (reka-window-parameters-make
-                          :window win-obj :frame-name "reka-frame-test"
+                          :frame-name "reka-frame-test"
                           :x 0 :y 0 :w 800 :h 600)))))
     (setf (ewc-object-data frame-obj) frame)
     (setf (ewc-object-data win-obj) win)

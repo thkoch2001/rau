@@ -32,7 +32,6 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
 (cl-defstruct (reka-window-parameters
                (:constructor reka-window-parameters-make))
   "Window parameters describing where an external surface should be placed."
-  window
   frame-name
   x
   y
@@ -169,7 +168,6 @@ within BODY."
                                  (window-inside-absolute-pixel-edges window)))
                       (puthash (ewc-object-id wm-window)
                                (reka-window-parameters-make
-                                :window wm-window
                                 :frame-name frame-name
                                 :x left
                                 :y top
@@ -180,7 +178,7 @@ within BODY."
               (let* ((id (ewc-object-id object))
                      (new (gethash id params))
                     (old (reka-window-params win)))
-                (unless (reka--params-equal old new)
+                (unless (equal old new)
                   (setf (reka-window-params win) new)
                   (setq changed t))))
             (when changed
@@ -476,27 +474,6 @@ when used from other files (e.g. tests)."
 Return nil if S is nil or empty."
   (when (and s (not (string-empty-p s)))
     (decode-coding-string s 'utf-8)))
-
-(defun reka--params-equal (a b)
-  "Compare two `reka-window-parameters' values without deep traversal."
-  (or (eq a b)
-      (and a b
-           (let ((wa (reka-window-parameters-window a))
-                 (wb (reka-window-parameters-window b)))
-             (and (ewc-object-p wa)
-                  (ewc-object-p wb)
-                  (= (ewc-object-id wa)
-                     (ewc-object-id wb))))
-           (equal (reka-window-parameters-frame-name a)
-                  (reka-window-parameters-frame-name b))
-           (equal (reka-window-parameters-x a)
-                  (reka-window-parameters-x b))
-           (equal (reka-window-parameters-y a)
-                  (reka-window-parameters-y b))
-           (equal (reka-window-parameters-w a)
-                  (reka-window-parameters-w b))
-           (equal (reka-window-parameters-h a)
-                  (reka-window-parameters-h b)))))
 
 (defun reka--frame-by-cond (state predicate)
   "Return the first frame ewc-object in STATE matching PREDICATE."
