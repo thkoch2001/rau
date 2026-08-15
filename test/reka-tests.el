@@ -27,11 +27,17 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
          (frame-obj (ewc-object-make :id 100 :interface 'river-window-v1))
          (frame (reka-frame-make :title "reka-frame-test"))
          (win-obj (ewc-object-make :id 200 :interface 'river-window-v1))
-         (win (reka-window-make
-               :params (when with-display
-                         (reka-window-parameters-make
-                          :frame-name "reka-frame-test"
-                          :x 0 :y 0 :w 800 :h 600)))))
+         ;; TODO: consider storing ewc frame obj in reka-window-parameters and
+         ;; just return it from reka--frame-displaying-win. That however
+         ;; requires the title event to have happened before
+         ;; reka--handle-commands.
+         (emacs-frame (selected-frame))
+         (params (when with-display
+                   (reka-window-parameters-make
+                    :frame emacs-frame
+                    :x 0 :y 0 :w 800 :h 600)))
+         (win (reka-window-make :params params)))
+    (set-frame-parameter emacs-frame 'reka-ewc-frame frame-obj)
     (setf (ewc-object-data frame-obj) frame)
     (setf (ewc-object-data win-obj) win)
     (ewc-object-tag client frame-obj reka--tag-frame)

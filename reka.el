@@ -32,7 +32,7 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
 (cl-defstruct (reka-window-parameters
                (:constructor reka-window-parameters-make))
   "Window parameters describing where an external surface should be placed."
-  frame-name
+  frame
   x
   y
   w
@@ -65,6 +65,7 @@ Not instantiated directly; windows and frames include it."
 (cl-defstruct (reka-frame (:constructor reka-frame-make)
                           (:include reka-surface))
   "State for an Emacs frame managed by reka."
+  emacs-frame
   displayed-on
   proposed-width
   proposed-height
@@ -159,21 +160,20 @@ within BODY."
           (let ((params (make-hash-table :test 'eql))
                 (changed nil))
             (dolist (frame (frame-list))
-              (let ((frame-name (frame-parameter frame 'name)))
-                (dolist (window (window-list frame))
-                  (when-let* ((buffer (window-buffer window))
-                              ((reka--is-reka-buffer buffer))
-                              (wm-window (buffer-local-value 'reka--window buffer)))
-                    (pcase-let ((`(,left ,top ,right ,bottom)
-                                 (window-inside-absolute-pixel-edges window)))
-                      (puthash (ewc-object-id wm-window)
-                               (reka-window-parameters-make
-                                :frame-name frame-name
-                                :x left
-                                :y top
-                                :w (- right left)
-                                :h (- bottom top))
-                               params))))))
+              (dolist (window (window-list frame))
+                (when-let* ((buffer (window-buffer window))
+                            ((reka--is-reka-buffer buffer))
+                            (wm-window (buffer-local-value 'reka--window buffer)))
+                  (pcase-let ((`(,left ,top ,right ,bottom)
+                               (window-inside-absolute-pixel-edges window)))
+                    (puthash (ewc-object-id wm-window)
+                             (reka-window-parameters-make
+                              :frame frame
+                              :x left
+                              :y top
+                              :w (- right left)
+                              :h (- bottom top))
+                             params)))))
             (reka--do reka--tag-window (object win state)
               (let* ((id (ewc-object-id object))
                      (new (gethash id params))
@@ -264,7 +264,7 @@ within BODY."
            (zerop (recursion-depth))) ;; no recursive edit ongoing
       (if-let* ((wm-window (buffer-local-value 'reka--window buf))
                 (win-state (ewc-object-data wm-window))
-                (frame-obj (reka--frame-displaying-win state win-state)))
+                (frame-obj (reka--frame-displaying-win win-state)))
           (reka--focus-window state
                               wm-window
                               frame-obj)
@@ -481,12 +481,12 @@ Return nil if S is nil or empty."
            for f = (ewc-object-data obj)
            thereis (and f (funcall predicate f) obj)))
 
-(defun reka--frame-displaying-win (state win)
-  "Return frame displaying window WIN in STATE, if any."
+(defun reka--frame-displaying-win (win)
+  "Return the ewc frame object displaying window WIN."
   (when-let* ((p (reka-window-params win))
-              (name (reka-window-parameters-frame-name p)))
-    (reka--frame-by-cond state
-      (lambda (f) (equal (reka-surface-title f) name)))))
+              (f (reka-window-parameters-frame p))
+              ((frame-live-p f)))
+    (frame-parameter f 'reka-ewc-frame)))
 
 (defun reka--frame-for-output (state output)
   "Return frame associated to OUTPUT or nil."
@@ -900,7 +900,17 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                 (reka--make-buffer-name
                  (reka-window-app-id data)
                  title)
-                t)))))))))
+                t))))))
+      (when (reka-frame-p data)
+        (when-let* ((emacs-frame
+                     (cl-find title (frame-list)
+                              :test #'equal
+                              :key (lambda (f) (frame-parameter f 'name)))))
+          (setf (reka-frame-emacs-frame data) emacs-frame)
+          (reka--enqueue
+           (lambda ()
+             (when (frame-live-p emacs-frame)
+               (set-frame-parameter emacs-frame 'reka-ewc-frame object)))))))))
 
 (defun reka-on-river-window-v1-fullscreen-requested (object args)
   (pcase-let* (((map output) args)
@@ -910,7 +920,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                          (ewc-object-get (reka-state-client reka--state) output))
                     (when-let* ((w (ewc-object-data object))
                                 ((reka-window-p w))
-                                (frame-obj (reka--frame-displaying-win reka--state w))
+                                (frame-obj (reka--frame-displaying-win w))
                                 (f (ewc-object-data frame-obj)))
                       (reka-frame-displayed-on f))
                     (when-let* ((cur (reka--focus-current reka--state))
@@ -989,11 +999,11 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (reka--do reka--tag-frame (_ f reka--state)
       (when (eq (reka-frame-displayed-on f) object)
         (setf (reka-frame-displayed-on f) nil)
-        (when-let* ((name (reka-surface-title f)))
-          (reka--enqueue
-           (lambda ()
-             (when-let* ((frame (alist-get name (make-frame-names-alist) nil nil #'equal)))
-               (delete-frame frame)))))))
+        (reka--enqueue
+         (lambda ()
+           (when-let* ((frame (reka-frame-emacs-frame f))
+                       ((frame-live-p frame)))
+             (delete-frame frame))))))
     (when-let* ((out (ewc-object-data object))
                 (ls-output (reka-output-ls-output out)))
       (reka--request ls-output 'destroy)
@@ -1025,7 +1035,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (setf (reka-state-focus-dirty reka--state) t)))
        ((ewc-object-tagged-p win-obj reka--tag-window)
         (if-let* ((w (ewc-object-data win-obj))
-                  (frame-obj (reka--frame-displaying-win reka--state w)))
+                  (frame-obj (reka--frame-displaying-win w)))
             (when (reka--focus-window reka--state win-obj frame-obj)
               (setf (reka-state-focus-dirty reka--state) t))
           (message "Window interaction for window without frame")))))))
@@ -1238,7 +1248,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (reka--request win-obj 'hide)
 
         (if-let* ((params (reka-window-params win))
-                  (frame-obj (reka--frame-displaying-win state win))
+                  (frame-obj (reka--frame-displaying-win win))
                   (frame (ewc-object-data frame-obj))
                   (out-obj (reka-frame-displayed-on frame))
                   (out (ewc-object-data out-obj)))
