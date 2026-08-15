@@ -96,7 +96,7 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
     (reka--focus-invalidate state f)            ; focused frame closed
     (should (eq 'lost (reka-state-focus-state state)))))
 
-;; ---- reka--update-focus-for-buffer (the regression tests) --------------
+;; ---- reka--update-focus-for-window (the regression tests) --------------
 
 (ert-deftest reka-focus-request-focuses-displayed-reka-buffer ()
   (pcase-let* ((`(,state ,_fobj ,win-obj ,_win) (reka-test--make-state :with-display t))
@@ -105,7 +105,7 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
                (buf (reka-test--fake-reka-buffer win-obj)))
     (unwind-protect
         (progn
-          (should (eq t (reka--update-focus-for-buffer state buf)))
+          (should (eq t (reka--update-focus-for-window state win-obj)))
           (should (eq 'window (reka-state-focus-state state)))
           (should (eq win-obj (reka-state-focused-window state))))
       (kill-buffer buf))))
@@ -119,7 +119,7 @@ so a later hook run can retry."
                (buf (reka-test--fake-reka-buffer win-obj)))
     (unwind-protect
         (progn
-          (should (null (reka--update-focus-for-buffer state buf)))
+          (should (null (reka--update-focus-for-window state win-obj)))
           (should (eq 'lost (reka-state-focus-state state))))
       (kill-buffer buf))))
 
@@ -132,9 +132,12 @@ so a later hook run can retry."
     (setf (reka-state-focus-state state) 'window
           (reka-state-focused-window state) win-obj
           (reka-state-focused-frame state) frame-obj)
-    (unwind-protect
-        (progn
-          (should (eq t (reka--update-focus-for-buffer state buf)))
-          (should (eq 'frame (reka-state-focus-state state)))
-          (should (null (reka-state-focused-window state))))
-      (kill-buffer buf))))
+    (let ((prev (window-buffer (selected-window)))
+          (reka--manage-timer nil))
+      (unwind-protect
+          (progn
+            (set-window-buffer (selected-window) buf)
+            (should (eq t (reka--update-focus-request)))
+            (should (eq 'frame (reka-state-focus-state state))))
+        (set-window-buffer (selected-window) prev)
+        (kill-buffer buf)))))

@@ -242,36 +242,41 @@ within BODY."
 (defvar reka--last-focused nil
   "Last buffer for which a focus request was sent.")
 
-(defun reka--update-focus-request (&rest _)
-  "Wrapper for hooks and to make the wrapped fun testable"
-  (when-let* ((state reka--state)
-              (buf (window-buffer (selected-window)))
-              ((reka--update-focus-for-buffer state buf)))
-    (setq reka--last-focused buf)
-    (reka--mark-manage-dirty state)))
+(defun reka--focus-change-allowed-p ()
+  "Non-nil when no interactive command or edit is in progress."
+  (and (not this-command)
+       (length= unread-command-events 0)
+       (length= (this-single-command-keys) 0)
+       (zerop (minibuffer-depth))
+       (zerop (recursion-depth))))
 
-(defun reka--update-focus-for-buffer (state buf)
-  "Send a focus request to the WM reflecting the current selected window."
-  (unless (eq buf reka--last-focused)
-    (cond
-     ;; The selected buffer is a reka buffer and Emacs is in a
-     ;; stable state: focus the external Wayland window.
-     ((and (reka--is-reka-buffer buf)
-           (not this-command) ;; not in an interactive command
-           (length= unread-command-events 0) ;; no pending key injections
-           (length= (this-single-command-keys) 0) ;; no unfinished command sequence
-           (zerop (minibuffer-depth)) ;; no minibuffer editing active
-           (zerop (recursion-depth))) ;; no recursive edit ongoing
-      (if-let* ((wm-window (buffer-local-value 'reka--window buf))
-                (win-state (ewc-object-data wm-window))
-                (frame-obj (reka--frame-displaying-win win-state)))
-          (reka--focus-window state
-                              wm-window
-                              frame-obj)
-        (reka-log "reka: cannot focus window that is not displayed")
-        nil))
-     ;; Otherwise: return focus to the Emacs frame.
-     (t (reka--focus-switch-to-frame state)))))
+(defun reka--update-focus-for-window (state win-obj)
+  "Focus external window WIN-OBJ in STATE if it is displayed.
+Return non-nil if the focus state changed.  Return nil without
+changing state when the window has no parameters yet, so a later
+hook run can retry."
+  (if-let* ((win (ewc-object-data win-obj))
+            (frame-obj (reka--frame-displaying-win win)))
+      (reka--focus-window state win-obj frame-obj)
+    (reka-log "reka: cannot focus window that is not displayed")
+    nil))
+
+(defun reka--update-focus-request (&rest _)
+  "Reconcile Wayland focus with the selected window."
+  (when-let* ((state reka--state))
+    (let ((buf (window-buffer (selected-window)))
+          changed)
+      (unless (eq buf reka--last-focused)
+        (setq changed
+              (cond
+               ((and (reka--is-reka-buffer buf) (reka--focus-change-allowed-p))
+                (when-let* ((win-obj (buffer-local-value 'reka--window buf)))
+                  (reka--update-focus-for-window state win-obj)))
+               (t (reka--focus-switch-to-frame state))))
+        (when changed
+          (setq reka--last-focused buf)
+          (reka--mark-manage-dirty state)))
+      changed)))
 
 (defconst reka--modifier-bits
   '((shift   . 1)
