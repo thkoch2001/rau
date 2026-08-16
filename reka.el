@@ -133,10 +133,10 @@ within BODY."
        (let ((,val (ewc-object-data ,obj)))
          ,@body))))
 
-(defun reka--set-frame-name (frame)
+(defun reka--set-frame-name (emacs-frame)
   (unless (string-prefix-p "reka-frame-"
-                           (frame-parameter frame 'name))
-    (set-frame-parameter frame 'name (make-temp-name "reka-frame-"))))
+                           (frame-parameter emacs-frame 'name))
+    (set-frame-parameter emacs-frame 'name (make-temp-name "reka-frame-"))))
 
 (defun reka--find-buffer-for-window (window-wl)
   (seq-find (lambda (buf)
@@ -1363,8 +1363,8 @@ starting Emacs inside of river."
   (message "Launching reka (pure Elisp) ...")
 
   ;; Ensure each existing frame has a unique title that reka can match.
-  (cl-loop for frame being the frames
-           do (reka--set-frame-name frame))
+  (cl-loop for emacs-frame being the frames
+           do (reka--set-frame-name emacs-frame))
   (add-to-list 'after-make-frame-functions #'reka--set-frame-name)
 
   (reka--start-wm)
