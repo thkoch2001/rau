@@ -160,12 +160,12 @@ within BODY."
           (let ((params (make-hash-table :test 'eql))
                 (changed nil))
             (dolist (emacs-frame (frame-list))
-              (dolist (window (window-list emacs-frame))
-                (when-let* ((buffer (window-buffer window))
+              (dolist (emacs-window (window-list emacs-frame))
+                (when-let* ((buffer (window-buffer emacs-window))
                             ((reka--is-reka-buffer buffer))
                             (wm-window (buffer-local-value 'reka--window buffer)))
                   (pcase-let ((`(,left ,top ,right ,bottom)
-                               (window-inside-absolute-pixel-edges window)))
+                               (window-inside-absolute-pixel-edges emacs-window)))
                     (puthash (ewc-object-id wm-window)
                              (reka-window-parameters-make
                               :emacs-frame emacs-frame
@@ -1005,9 +1005,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (setf (reka-frame-output-wl f) nil)
         (reka--enqueue
          (lambda ()
-           (when-let* ((frame (reka-frame-emacs-frame f))
-                       ((frame-live-p frame)))
-             (delete-frame frame))))))
+           (when-let* ((emacs-frame (reka-frame-emacs-frame f))
+                       ((frame-live-p emacs-frame)))
+             (delete-frame emacs-frame))))))
     (when-let* ((out (ewc-object-data output-wl))
                 (ls-output-wl (reka-output-ls-output-wl out)))
       (reka--request ls-output-wl 'destroy)
