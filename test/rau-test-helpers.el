@@ -1,4 +1,4 @@
-(defun reka-debug-test (test-name)
+(defun rau-debug-test (test-name)
   "Run ERT test TEST-NAME and drop into the debugger on failure."
   (interactive "STest: ")
   (let ((print-level nil)
