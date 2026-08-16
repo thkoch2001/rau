@@ -759,10 +759,10 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;;;; wl-display listeners
 ;; TODO handle individual args and decode the message string with
 ;; reka--decode-string
-(defun reka-on-wl-display-error (_object args)
+(defun reka-on-wl-display-error (_display-wl args)
   (message "wl_display error: %S" args))
 
-(defun reka-on-wl-display-delete-id (_object args)
+(defun reka-on-wl-display-delete-id (_display-wl args)
   (pcase-let (((map id) args))
     (when-let* ((client (reka-state-client reka--state))
                 (table (ewc-client-table client))
@@ -771,7 +771,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (ewc-object-remove client obj))))
 
 ;;;; wl-registry listeners
-(defun reka-on-wl-registry-global (registry args)
+(defun reka-on-wl-registry-global (registry-wl args)
   (pcase-let (((map name interface version) args))
     (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
                 (client (reka-state-client reka--state))
@@ -784,7 +784,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                  (if xml-version (min version xml-version) version))
                 (bound-object (ewc-object-add client ifsym new-id)))
       (reka-log "reka: binding global %s version %s" interface bind-version)
-      (reka--request registry 'bind
+      (reka--request registry-wl 'bind
                      `((name . ,name)
                        (interface-len . ,(1+ (string-bytes interface)))
                        (interface . ,interface)
@@ -801,21 +801,21 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;;; river-window-management-v1 Protocol
 ;;;; river-window-manager-v1 listeners
-(defun reka-on-river-window-manager-v1-unavailable (_object _)
+(defun reka-on-river-window-manager-v1-unavailable (_wm-wl _)
   (message "reka: WM event unavailable"))
 
-(defun reka-on-river-window-manager-v1-finished (_object _)
+(defun reka-on-river-window-manager-v1-finished (_wm-wl _)
   (message "reka: WM event finished"))
 
-(defun reka-on-river-window-manager-v1-manage-start (object _)
+(defun reka-on-river-window-manager-v1-manage-start (wm-wl _)
   (unwind-protect
       (condition-case err
           (reka--reconcile reka--state)
         (error
          (message "reka reconcile error: %S" err)))
-    (reka--request object 'manage-finish)))
+    (reka--request wm-wl 'manage-finish)))
 
-(defun reka-on-river-window-manager-v1-render-start (object _)
+(defun reka-on-river-window-manager-v1-render-start (wm-wl _)
   (unwind-protect
       (condition-case err
           (progn
@@ -823,21 +823,21 @@ KEY may be an integer codepoint, a symbol, or a string key name."
             (reka--render-windows reka--state))
         (error
          (message "reka render error: %S" err)))
-    (reka--request object 'render-finish)))
+    (reka--request wm-wl 'render-finish)))
 
-(defun reka-on-river-window-manager-v1-session-locked (_object _)
+(defun reka-on-river-window-manager-v1-session-locked (_wm-wl _)
   (message "reka: WM event session-locked"))
 
-(defun reka-on-river-window-manager-v1-session-unlocked (_object _)
+(defun reka-on-river-window-manager-v1-session-unlocked (_wm-wl _)
   (message "reka: WM event session-unlocked"))
 
-(defun reka-on-river-window-manager-v1-window (_object args)
+(defun reka-on-river-window-manager-v1-window (_wm-wl args)
   (pcase-let* (((map id) args))
     (ewc-object-add (reka-state-client reka--state)
                     'river-window-v1
                     id)))
 
-(defun reka-on-river-window-manager-v1-output (_object args)
+(defun reka-on-river-window-manager-v1-output (_wm-wl args)
   (pcase-let* (((map id) args)
                (client (reka-state-client reka--state))
                (output-obj (ewc-object-add client 'river-output-v1 id)))
@@ -845,7 +845,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (reka-output-make))
     (reka--ensure-ls-output reka--state output-obj)))
 
-(defun reka-on-river-window-manager-v1-seat (_object args)
+(defun reka-on-river-window-manager-v1-seat (_wm-wl args)
   (pcase-let (((map id) args)
               (client (reka-state-client reka--state)))
     (if (ewc-first-object client 'river-seat-v1)
@@ -998,39 +998,39 @@ KEY may be an integer codepoint, a symbol, or a string key name."
            (reka--mark-manage-dirty reka--state)))))))
 
 ;;;; river-output-v1 listeners
-(defun reka-on-river-output-v1-removed (object _)
+(defun reka-on-river-output-v1-removed (output-wl _)
   (let ((client (reka-state-client reka--state)))
     (reka--do reka--tag-frame (_ f reka--state)
-      (when (eq (reka-frame-output-wl f) object)
+      (when (eq (reka-frame-output-wl f) output-wl)
         (setf (reka-frame-output-wl f) nil)
         (reka--enqueue
          (lambda ()
            (when-let* ((frame (reka-frame-emacs-frame f))
                        ((frame-live-p frame)))
              (delete-frame frame))))))
-    (when-let* ((out (ewc-object-data object))
+    (when-let* ((out (ewc-object-data output-wl))
                 (ls-output (reka-output-ls-output-wl out)))
       (reka--request ls-output 'destroy)
       (ewc-object-remove client ls-output))
-    (reka--request object 'destroy)
-    (ewc-object-remove client object)))
+    (reka--request output-wl 'destroy)
+    (ewc-object-remove client output-wl)))
 
 ;; TODO: listener for wl_output, e.g. to get monitor names
 
-(defun reka-on-river-output-v1-position (object args)
+(defun reka-on-river-output-v1-position (output-wl args)
   (pcase-let (((map x y) args))
-    (when-let* ((out (ewc-object-data object)))
+    (when-let* ((out (ewc-object-data output-wl)))
       (setf (reka-output-x out) x
             (reka-output-y out) y))))
 
-(defun reka-on-river-output-v1-dimensions (object args)
+(defun reka-on-river-output-v1-dimensions (output-wl args)
   (pcase-let (((map width height) args))
-    (when-let* ((out (ewc-object-data object)))
+    (when-let* ((out (ewc-object-data output-wl)))
       (setf (reka-output-width out) width
             (reka-output-height out) height))))
 
 ;;;; river-seat-v1 listener
-(defun reka-on-river-seat-v1-window-interaction (_object args)
+(defun reka-on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
     (when-let* ((win-obj (ewc-object-get (reka-state-client reka--state) window)))
       (cond
@@ -1046,8 +1046,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
-(defun reka-on-river-xkb-binding-v1-pressed (object _)
-  (when-let* ((binding (ewc-object-data object))
+(defun reka-on-river-xkb-binding-v1-pressed (binding-wl _)
+  (when-let* ((binding (ewc-object-data binding-wl))
               (command (reka-binding-command binding)))
     (if (eq command 'toggle-fullscreen)
         (reka--toggle-fullscreen reka--state)
@@ -1058,14 +1058,14 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;;; river-layer-shell-v1 protocol
 ;;;; river-layer-shell-output-v1 listeners
-(defun reka-on-river-layer-shell-output-v1-non-exclusive-area (object args)
+(defun reka-on-river-layer-shell-output-v1-non-exclusive-area (ls-output-wl args)
   (pcase-let (((map x y width height) args))
     (when-let* ((out (cl-loop for obj in (ewc-objects
                                           (reka-state-client reka--state)
                                           'river-output-v1)
                               for data = (ewc-object-data obj)
                               thereis (and data
-                                           (eq (reka-output-ls-output-wl data) object)
+                                           (eq (reka-output-ls-output-wl data) ls-output-wl)
                                            data))))
       (setf (reka-output-x out) x
             (reka-output-y out) y
