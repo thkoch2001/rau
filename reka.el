@@ -491,7 +491,7 @@ Return nil if S is nil or empty."
   (when-let* ((p (reka-window-params win))
               (emacs-frame (reka-window-parameters-emacs-frame p))
               ((frame-live-p emacs-frame)))
-    (frame-parameter emacs-frame 'reka-ewc-frame)))
+    (frame-parameter emacs-frame 'reka-frame-wl)))
 
 (defun reka--frame-for-output (state output-wl)
   "Return frame associated to OUTPUT or nil."
@@ -916,7 +916,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (reka--enqueue
            (lambda ()
              (when (frame-live-p emacs-frame)
-               (set-frame-parameter emacs-frame 'reka-ewc-frame window-wl)))))))))
+               (set-frame-parameter emacs-frame 'reka-frame-wl window-wl)))))))))
 
 (defun reka-on-river-window-v1-fullscreen-requested (window-wl args)
   (pcase-let* (((map output) args)
@@ -1224,7 +1224,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 (defun reka--render-frames (state)
   "Run the render-sequence reconciliation for frames on STATE."
   (reka--do reka--tag-frame (frame-wl frame state)
-            (let ((node (reka-surface-node-wl frame))
+            (let ((node-wl (reka-surface-node-wl frame))
                   (output-wl (reka-frame-output-wl frame)))
               (if (not output-wl)
                   (when (reka-frame-visible frame)
@@ -1233,22 +1233,22 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                 (unless (reka-frame-visible frame)
                   (setf (reka-frame-visible frame) t)
                   (reka--request frame-wl 'show))
-                (when node
-                  (reka--request node 'place-bottom))
+                (when node-wl
+                  (reka--request node-wl 'place-bottom))
                 (when-let* ((out (ewc-object-data output-wl))
-                            (node)
+                            (node-wl)
                             ((not (and (eq (reka-frame-last-x frame) (reka-output-x out))
                                        (eq (reka-frame-last-y frame) (reka-output-y out))))))
                   (setf (reka-frame-last-x frame) (reka-output-x out)
                         (reka-frame-last-y frame) (reka-output-y out))
-                  (reka--request node 'set-position
+                  (reka--request node-wl 'set-position
                                  `((x . ,(reka-output-x out))
                                    (y . ,(reka-output-y out)))))))))
 
 (defun reka--render-windows (state)
   "Run the render-sequence reconciliation for windows on STATE."
   (reka--do reka--tag-window (window-wl win state)
-    (let ((node (reka-surface-node-wl win)))
+    (let ((node-wl (reka-surface-node-wl win)))
       (if (not (eq (reka-window-state win) 'active))
           (reka--request window-wl 'hide)
 
@@ -1260,14 +1260,14 @@ KEY may be an integer codepoint, a symbol, or a string key name."
             (progn
               (reka--request window-wl 'show)
 
-              (when node
-                (reka--request node 'set-position
+              (when node-wl
+                (reka--request node-wl 'set-position
                              `((x . ,(+ (reka-window-parameters-x params)
                                         (reka-output-x out)))
                                (y . ,(+ (reka-window-parameters-y params)
                                         (reka-output-y out)))))
 
-                (reka--request node 'place-top))
+                (reka--request node-wl 'place-top))
 
               (let ((clip-w (or (reka-window-actual-width win)
                                 (reka-window-parameters-w params)))

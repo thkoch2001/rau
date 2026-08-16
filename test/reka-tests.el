@@ -37,7 +37,7 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
                     :emacs-frame emacs-frame
                     :x 0 :y 0 :w 800 :h 600)))
          (win (reka-window-make :params params)))
-    (set-frame-parameter emacs-frame 'reka-ewc-frame frame-obj)
+    (set-frame-parameter emacs-frame 'reka-frame-wl frame-obj)
     (setf (ewc-object-data frame-obj) frame)
     (setf (ewc-object-data win-obj) win)
     (ewc-object-tag client frame-obj reka--tag-frame)
