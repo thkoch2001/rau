@@ -163,10 +163,10 @@ within BODY."
               (dolist (emacs-window (window-list emacs-frame))
                 (when-let* ((buffer (window-buffer emacs-window))
                             ((reka--is-reka-buffer buffer))
-                            (wm-window (buffer-local-value 'reka--window buffer)))
+                            (window-wl (buffer-local-value 'reka--window buffer)))
                   (pcase-let ((`(,left ,top ,right ,bottom)
                                (window-inside-absolute-pixel-edges emacs-window)))
-                    (puthash (ewc-object-id wm-window)
+                    (puthash (ewc-object-id window-wl)
                              (reka-window-parameters-make
                               :emacs-frame emacs-frame
                               :x left
@@ -595,15 +595,16 @@ Return non-nil if the focus state changed."
   )
 
 (defun reka--focus-current (state)
-  "Return current focus as (TARGET . FRAME), if any."
+  "Return current focus as (TARGET-WL . FRAME-WL), if any. TARGET-WL is
+either a WINDOW-WL or FRAME-WL."
   (pcase (reka-state-focus-state state)
     ('window
-     (when-let* ((w (reka-state-focused-window state))
-                (f (reka-state-focused-frame state)))
-       (cons w f)))
+     (when-let* ((window-wl (reka-state-focused-window state))
+                (frame-wl (reka-state-focused-frame state)))
+       (cons window-wl frame-wl)))
     ('frame
-     (when-let* ((f (reka-state-focused-frame state)))
-       (cons f f)))
+     (when-let* ((frame-wl (reka-state-focused-frame state)))
+       (cons frame-wl frame-wl)))
     (_ nil)))
 
 (defun reka--focus-invalidate (state target-wl)
@@ -919,22 +920,22 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka-on-river-window-v1-fullscreen-requested (window-wl args)
   (pcase-let* (((map output) args)
-               (target
+               (output-wl
                 (or (and (integerp output)
                          (not (zerop output))
                          (ewc-object-get (reka-state-client reka--state) output))
                     (when-let* ((w (ewc-object-data window-wl))
                                 ((reka-window-p w))
                                 (frame-wl (reka--frame-displaying-win w))
-                                (f (ewc-object-data frame-wl)))
-                      (reka-frame-output-wl f))
+                                (frame (ewc-object-data frame-wl)))
+                      (reka-frame-output-wl frame))
                     (when-let* ((cur (reka--focus-current reka--state))
-                                (frame (cdr cur))
-                                (f (ewc-object-data frame)))
-                      (reka-frame-output-wl f)))))
-    (if (not target)
+                                (frame-wl (cdr cur))
+                                (frame (ewc-object-data frame-wl)))
+                      (reka-frame-output-wl frame)))))
+    (if (not output-wl)
         (message "Fullscreen requested, but no output found")
-      (when-let* ((out (ewc-object-data target)))
+      (when-let* ((out (ewc-object-data output-wl)))
         (let* ((fs (reka-output-fullscreen out))
                (previous
                 (pcase (reka-fs-state fs)
@@ -1060,10 +1061,10 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;;;; river-layer-shell-output-v1 listeners
 (defun reka-on-river-layer-shell-output-v1-non-exclusive-area (ls-output-wl args)
   (pcase-let (((map x y width height) args))
-    (when-let* ((out (cl-loop for obj in (ewc-objects
+    (when-let* ((out (cl-loop for output-wl in (ewc-objects
                                           (reka-state-client reka--state)
                                           'river-output-v1)
-                              for data = (ewc-object-data obj)
+                              for data = (ewc-object-data output-wl)
                               thereis (and data
                                            (eq (reka-output-ls-output-wl data) ls-output-wl)
                                            data))))
@@ -1157,22 +1158,22 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (let ((fs (reka-output-fullscreen out)))
       (pcase (reka-fs-state fs)
         ('requested
-         (let ((new (reka-fs-new fs))
-               (prev (reka-fs-previous fs)))
-           (when (and prev (ewc-object-p prev))
-             (reka--request prev 'inform-not-fullscreen)
-             (reka--request prev 'exit-fullscreen))
-           (when (and new (ewc-object-p new))
-             (reka--request new 'inform-fullscreen)
-             (reka--request new 'fullscreen
+         (let ((new-wl (reka-fs-new fs))
+               (prev-wl (reka-fs-previous fs)))
+           (when (and prev-wl (ewc-object-p prev-wl))
+             (reka--request prev-wl 'inform-not-fullscreen)
+             (reka--request prev-wl 'exit-fullscreen))
+           (when (and new-wl (ewc-object-p new-wl))
+             (reka--request new-wl 'inform-fullscreen)
+             (reka--request new-wl 'fullscreen
                             `((output . ,(ewc-object-id output-wl)))))
            (setf (reka-output-fullscreen out)
-                 (reka-fs :state 'fullscreen :window new))))
+                 (reka-fs :state 'fullscreen :window new-wl))))
         ('exiting
-         (let ((win (reka-fs-window fs)))
-           (when (and win (ewc-object-p win))
-             (reka--request win 'inform-not-fullscreen)
-             (reka--request win 'exit-fullscreen))
+         (let ((window-wl (reka-fs-window fs)))
+           (when (and window-wl (ewc-object-p window-wl))
+             (reka--request window-wl 'inform-not-fullscreen)
+             (reka--request window-wl 'exit-fullscreen))
            (setf (reka-output-fullscreen out) (reka-fs))))
         (_ nil)))))
 
@@ -1188,27 +1189,27 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (when-let* ((client (reka-state-client state))
               (seat-wl (ewc-first-object client 'river-seat-v1))
               (cur (reka--focus-current state)))
-    (let* ((target (car cur))
-           (frame (cdr cur))
+    (let* ((target-wl (car cur))
+           (frame-wl (cdr cur))
            (dirty (reka-state-focus-dirty state)))
 
-      (when (and target (ewc-object-p target))
+      (when (and target-wl (ewc-object-p target-wl))
         (reka--request seat-wl
                        'focus-window
-                       `((window . ,(ewc-object-id target)))))
+                       `((window . ,(ewc-object-id target-wl)))))
 
       (when dirty
-        (when-let* ((frame-data (and frame
-                                    (ewc-object-data frame)))
+        (when-let* ((frame-data (and frame-wl
+                                    (ewc-object-data frame-wl)))
                     (output-wl (reka-frame-output-wl frame-data))
                     (out (ewc-object-data output-wl))
                     (ls-output-wl (reka-output-ls-output-wl out)))
           (reka--request ls-output-wl 'set-default))
 
-        (unless (and frame target (eq target frame))
+        (unless (and frame-wl target-wl (eq target-wl frame-wl))
           (reka--enqueue
            (lambda ()
-             (reka--select-buffer-for-window target))))
+             (reka--select-buffer-for-window target-wl))))
 
         (setf (reka-state-focus-dirty state) nil)))))
 
@@ -1285,14 +1286,14 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 (defun reka--toggle-fullscreen (state)
   "Toggle fullscreen for the currently focused external window."
   (if-let* ((cur (reka--focus-current state))
-            (focus (car cur))
-            (frame (cdr cur)))
-      (if (eq focus frame)
+            (target-wl (car cur))
+            (frame-wl (cdr cur)))
+      (if (eq target-wl frame-wl)
           (reka--enqueue
            (lambda ()
              (message "reka: can not fullscreen Emacs even more!")))
 
-        (if-let* ((frame-data (ewc-object-data frame))
+        (if-let* ((frame-data (ewc-object-data frame-wl))
                   (output-wl (reka-frame-output-wl frame-data))
                   (out (ewc-object-data output-wl)))
             (let ((fs (reka-output-fullscreen out)))
@@ -1300,7 +1301,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                 ('none
                  (setf (reka-output-fullscreen out)
                        (reka-fs :state 'requested
-                                :new focus))
+                                :new target-wl))
                  (reka--mark-manage-dirty state))
 
                 ('fullscreen
@@ -1323,14 +1324,14 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (let ((client (ewc-client-make :protocols (reka--read-protocols))))
     (ewc-build-listeners client "reka-on-")
     (let ((connection (ewc-connect client))
-          (display (ewc-object-add client 'wl-display))
-          (registry (ewc-object-add client 'wl-registry)))
+          (display-wl (ewc-object-add client 'wl-display))
+          (registry-wl (ewc-object-add client 'wl-registry)))
 
     (setq reka--state (reka-state-make :connection connection
                                        :client client))
 
-    (reka--request display 'get-registry
-                   `((registry . ,(ewc-object-id registry)))))))
+    (reka--request display-wl 'get-registry
+                   `((registry . ,(ewc-object-id registry-wl)))))))
 
 ;; NOTE: No need for reka-disable since this Emacs process is serving as a
 ;; Window Manager and disabling reka while keeping the Emacs process running
