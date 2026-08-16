@@ -25,9 +25,9 @@ STATE is one of: `none', `requested', `fullscreen', `exiting'.
 NEW and PREVIOUS are meaningful only when STATE is `requested'.
 WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   (state    'none :type symbol :read-only t)
-  (new      nil   :read-only t)
-  (previous nil   :read-only t)
-  (window   nil   :read-only t))
+  (new      nil   :type ewc-object :read-only t)
+  (previous nil   :type ewc-object :read-only t)
+  (window   nil   :type ewc-object :read-only t))
 
 (cl-defstruct (reka-window-parameters
                (:constructor reka-window-parameters-make))
@@ -40,7 +40,7 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
 
 (cl-defstruct (reka-output (:constructor reka-output-make))
   "State for a River output."
-  ls-output-wl
+  (ls-output-wl nil :type ewc-object)
   (x 0)
   (y 0)
   (width 0)
@@ -50,7 +50,7 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
 (cl-defstruct (reka-surface (:constructor nil))
   "Common state shared by windows and frames.
 Not instantiated directly; windows and frames include it."
-  node-wl
+  (node-wl nil :type ewc-object)
   title)
 
 (cl-defstruct (reka-window (:constructor reka-window-make)
@@ -66,7 +66,7 @@ Not instantiated directly; windows and frames include it."
                           (:include reka-surface))
   "State for an Emacs frame managed by reka."
   emacs-frame
-  (output-wl nil :documentation "displaying this frame")
+  (output-wl nil :type ewc-object :documentation "displaying this frame")
   proposed-width
   proposed-height
   visible
@@ -75,7 +75,7 @@ Not instantiated directly; windows and frames include it."
 
 (cl-defstruct (reka-seat (:constructor reka-seat-make))
   "State for a River seat."
-  ls-seat-wl)
+  (ls-seat-wl nil :type ewc-object))
 
 (cl-defstruct (reka-binding (:constructor reka-binding-make))
   "State for one global XKB binding."
@@ -96,9 +96,9 @@ Not instantiated directly; windows and frames include it."
 
   ;;; Focus tracking.
   ;; one of 'lost 'window 'frame
-  (focus-state 'lost)
-  (focused-window nil)
-  (focused-frame nil)
+  (focus-state 'lost :type symbol)
+  (focused-window nil :type ewc-object)
+  (focused-frame nil :type ewc-object)
   ;; set only by window_interaction event
   (focus-dirty nil)
 
