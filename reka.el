@@ -482,9 +482,9 @@ Return nil if S is nil or empty."
 
 (defun reka--frame-by-cond (state predicate)
   "Return the first frame ewc-object in STATE matching PREDICATE."
-  (cl-loop for obj in (ewc-objects (reka-state-client state) reka--tag-frame)
-           for f = (ewc-object-data obj)
-           thereis (and f (funcall predicate f) obj)))
+  (cl-loop for frame-wl in (ewc-objects (reka-state-client state) reka--tag-frame)
+           for f = (ewc-object-data frame-wl)
+           thereis (and f (funcall predicate f) frame-wl)))
 
 (defun reka--frame-displaying-win (win)
   "Return the ewc frame object displaying window WIN."
@@ -543,9 +543,9 @@ handler timer. Only to be used in event listeners."
              (setq reka--manage-timer nil)
              (condition-case err
                  (when-let* ((client (reka-state-client state))
-                             (wm (ewc-first-object client
+                             (wm-wl (ewc-first-object client
                                                    'river-window-manager-v1)))
-                   (reka--request wm 'manage-dirty))
+                   (reka--request wm-wl 'manage-dirty))
                (error
                 (message "reka manage-dirty error: %S" err))))
            state))))
@@ -766,9 +766,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (pcase-let (((map id) args))
     (when-let* ((client (reka-state-client reka--state))
                 (table (ewc-client-table client))
-                (obj (gethash id table)))
-      (message "delete-id for obj %d, interface=%s" id (ewc-object-interface obj))
-      (ewc-object-remove client obj))))
+                (object-wl (gethash id table)))
+      (message "delete-id for object %d, interface=%s" id (ewc-object-interface object-wl))
+      (ewc-object-remove client object-wl))))
 
 ;;;; wl-registry listeners
 (defun reka-on-wl-registry-global (registry-wl args)
@@ -870,9 +870,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (setf (reka-output-fullscreen out) (reka-fs))))
 
     (when-let* ((data (ewc-object-data window-wl))
-                (node (reka-surface-node-wl data)))
-      (reka--request node 'destroy)
-      (ewc-object-remove client node))
+                (node-wl (reka-surface-node-wl data)))
+      (reka--request node-wl 'destroy)
+      (ewc-object-remove client node-wl))
 
     (reka--request window-wl 'destroy)
     (ewc-object-remove client window-wl)))
@@ -1133,21 +1133,21 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 (defun reka--reconcile-bindings (state)
   "Create and enable XKB bindings."
   (when-let* ((client (reka-state-client state))
-              (xkb (ewc-first-object client 'river-xkb-bindings-v1))
+              (xkb-bindings-wl (ewc-first-object client 'river-xkb-bindings-v1))
               (seat-wl (ewc-first-object client 'river-seat-v1)))
     (maphash
      (lambda (_key binding)
        (when (eq (reka-binding-state binding) 'requested)
          (let* ((id (cl-incf (ewc-client-new-id client)))
-                (proxy (ewc-object-add client 'river-xkb-binding-v1 id)))
-           (reka--request xkb 'get-xkb-binding
+                (binding-wl (ewc-object-add client 'river-xkb-binding-v1 id)))
+           (reka--request xkb-bindings-wl 'get-xkb-binding
                           `((seat . ,(ewc-object-id seat-wl))
                             (keysym . ,(reka-binding-keysym binding))
                             (modifiers . ,(reka-binding-modifiers binding))
                             (id . ,id)))
-           (setf (ewc-object-data proxy) binding
+           (setf (ewc-object-data binding-wl) binding
                  (reka-binding-state binding) 'registered)
-           (reka--request proxy 'enable)
+           (reka--request binding-wl 'enable)
            (setf (reka-binding-state binding) 'enabled))))
      (reka-state-bindings state))))
 
@@ -1202,8 +1202,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                     (ewc-object-data frame)))
                     (output-wl (reka-frame-output-wl frame-data))
                     (out (ewc-object-data output-wl))
-                    (ls (reka-output-ls-output-wl out)))
-          (reka--request ls 'set-default))
+                    (ls-output-wl (reka-output-ls-output-wl out)))
+          (reka--request ls-output-wl 'set-default))
 
         (unless (and frame target (eq target frame))
           (reka--enqueue
