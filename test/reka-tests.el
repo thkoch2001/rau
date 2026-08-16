@@ -15,7 +15,7 @@
       ;; Set major-mode directly so we don't run reka-mode's body
       ;; (scroll-bar-mode etc.), which can misbehave in -batch.
       (setq major-mode 'reka-mode)
-      (setq-local reka--window win-obj))
+      (setq-local reka--window-wl win-obj))
     buf))
 
 (defun reka-test--make-state (&key with-display)

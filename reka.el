@@ -140,7 +140,7 @@ within BODY."
 
 (defun reka--find-buffer-for-window (window-wl)
   (seq-find (lambda (buf)
-              (eq (buffer-local-value 'reka--window buf) window-wl))
+              (eq (buffer-local-value 'reka--window-wl buf) window-wl))
             (buffer-list)))
 
 (defun reka--make-buffer-name (app-id title)
@@ -163,7 +163,7 @@ within BODY."
               (dolist (emacs-window (window-list emacs-frame))
                 (when-let* ((buffer (window-buffer emacs-window))
                             ((reka--is-reka-buffer buffer))
-                            (window-wl (buffer-local-value 'reka--window buffer)))
+                            (window-wl (buffer-local-value 'reka--window-wl buffer)))
                   (pcase-let ((`(,left ,top ,right ,bottom)
                                (window-inside-absolute-pixel-edges emacs-window)))
                     (puthash (ewc-object-id window-wl)
@@ -199,13 +199,13 @@ within BODY."
         (run-at-time nil nil #'reka--update-focus-request)))))
 
 ;; Major mode for reka-managed buffers
-(defvar-local reka--window nil
+(defvar-local reka--window-wl nil
   "Window object for this reka-mode buffer.")
 
 (defun reka--buffer-killed ()
   "Request closing of the associated Wayland surface when a reka buffer is killed."
-  (when-let* ((reka--window)
-              (data (ewc-object-data reka--window)))
+  (when-let* ((reka--window-wl)
+              (data (ewc-object-data reka--window-wl)))
     (setf (reka-window-state data) 'killed)
     (reka--mark-manage-dirty reka--state)))
 
@@ -235,7 +235,7 @@ within BODY."
       (let ((buffer (get-buffer-create (make-temp-name "reka-window-"))))
         (with-current-buffer buffer
           (reka-mode)
-          (setq-local reka--window window-wl))
+          (setq-local reka--window-wl window-wl))
         (display-buffer buffer)
         buffer)))
 
@@ -270,7 +270,7 @@ hook run can retry."
         (setq changed
               (cond
                ((and (reka--is-reka-buffer buf) (reka--focus-change-allowed-p))
-                (when-let* ((window-wl (buffer-local-value 'reka--window buf)))
+                (when-let* ((window-wl (buffer-local-value 'reka--window-wl buf)))
                   (reka--update-focus-for-window state window-wl)))
                (t (reka--focus-switch-to-frame state))))
         (when changed
