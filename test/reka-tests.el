@@ -8,41 +8,41 @@
 
 ;; ---- fixtures -----------------------------------------------------------
 
-(defun reka-test--fake-reka-buffer (win-obj)
+(defun reka-test--fake-reka-buffer (window-wl)
   "Make a buffer that `reka--is-reka-buffer' accepts, without `reka-mode' side effects."
   (let ((buf (generate-new-buffer " *reka-test*")))
     (with-current-buffer buf
       ;; Set major-mode directly so we don't run reka-mode's body
       ;; (scroll-bar-mode etc.), which can misbehave in -batch.
       (setq major-mode 'reka-mode)
-      (setq-local reka--window-wl win-obj))
+      (setq-local reka--window-wl window-wl))
     buf))
 
 (defun reka-test--make-state (&key with-display)
   "Build a reka-state with one frame and one window.
 If WITH-DISPLAY, the window has params pointing at that frame.
-Return (STATE FRAME-OBJ WIN-OBJ WIN)."
+Return (STATE FRAME-WL WINDOW-WL WIN)."
   (let* ((client (ewc-client-make))
          (state (reka-state-make :client client))
-         (frame-obj (ewc-object-make :id 100 :interface 'river-window-v1))
+         (frame-wl (ewc-object-make :id 100 :interface 'river-window-v1))
          (frame (reka-frame-make :title "reka-frame-test"))
-         (win-obj (ewc-object-make :id 200 :interface 'river-window-v1))
          ;; TODO: consider storing ewc frame obj in reka-window-parameters and
          ;; just return it from reka--frame-displaying-win. That however
          ;; requires the title event to have happened before
          ;; reka--handle-commands.
+         (window-wl (ewc-object-make :id 200 :interface 'river-window-v1))
          (emacs-frame (selected-frame))
          (params (when with-display
                    (reka-window-parameters-make
                     :emacs-frame emacs-frame
                     :x 0 :y 0 :w 800 :h 600)))
          (win (reka-window-make :params params)))
-    (set-frame-parameter emacs-frame 'reka-frame-wl frame-obj)
-    (setf (ewc-object-data frame-obj) frame)
-    (setf (ewc-object-data win-obj) win)
-    (ewc-object-tag client frame-obj reka--tag-frame)
-    (ewc-object-tag client win-obj reka--tag-window)
-    (list state frame-obj win-obj win)))
+    (set-frame-parameter emacs-frame 'reka-frame-wl frame-wl)
+    (setf (ewc-object-data frame-wl) frame)
+    (setf (ewc-object-data window-wl) win)
+    (ewc-object-tag client frame-wl reka--tag-frame)
+    (ewc-object-tag client window-wl reka--tag-window)
+    (list state frame-wl window-wl win)))
 
 ;; ---- Pure functions ---------------------------
 (ert-deftest reka-resolve-keysym ()
@@ -74,64 +74,64 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
 
 (ert-deftest reka-focus-state-machine ()
   (let ((state (reka-state-make))
-        (w (ewc-object-make :id 1))
-        (f (ewc-object-make :id 2)))
-    (should (reka--focus-window state w f))
+        (window-wl (ewc-object-make :id 1))
+        (frame-wl (ewc-object-make :id 2)))
+    (should (reka--focus-window state window-wl frame-wl))
     (should (eq 'window (reka-state-focus-state state)))
-    (should (equal (cons w f) (reka--focus-current state)))
-    (should-not (reka--focus-window state w f)) ; second call is a no-op
+    (should (equal (cons window-wl frame-wl) (reka--focus-current state)))
+    (should-not (reka--focus-window state window-wl frame-wl)) ; second call is a no-op
     (should (reka--focus-switch-to-frame state))
     (should (eq 'frame (reka-state-focus-state state)))
-    (should (equal (cons f f) (reka--focus-current state)))
+    (should (equal (cons frame-wl frame-wl) (reka--focus-current state)))
     (should-not (reka--focus-switch-to-frame state))))
 
 (ert-deftest reka-focus-invalidate ()
   (let ((state (reka-state-make))
-        (w (ewc-object-make :id 1))
-        (f (ewc-object-make :id 2)))
-    (reka--focus-window state w f)
-    (reka--focus-invalidate state w)            ; focused window closed
+        (window-wl (ewc-object-make :id 1))
+        (frame-wl (ewc-object-make :id 2)))
+    (reka--focus-window state window-wl frame-wl)
+    (reka--focus-invalidate state window-wl)    ; focused window closed
     (should (eq 'frame (reka-state-focus-state state)))
     (should (null (reka-state-focused-window state)))
-    (reka--focus-invalidate state f)            ; focused frame closed
+    (reka--focus-invalidate state frame-wl)     ; focused frame closed
     (should (eq 'lost (reka-state-focus-state state)))))
 
 ;; ---- reka--update-focus-for-window (the regression tests) --------------
 
 (ert-deftest reka-focus-request-focuses-displayed-reka-buffer ()
-  (pcase-let* ((`(,state ,_fobj ,win-obj ,_win) (reka-test--make-state :with-display t))
+  (pcase-let* ((`(,state ,_frame-wl ,window-wl ,_win) (reka-test--make-state :with-display t))
                (reka--state state)
                (reka--last-focused nil)
-               (buf (reka-test--fake-reka-buffer win-obj)))
+               (buf (reka-test--fake-reka-buffer window-wl)))
     (unwind-protect
         (progn
-          (should (eq t (reka--update-focus-for-window state win-obj)))
+          (should (eq t (reka--update-focus-for-window state window-wl)))
           (should (eq 'window (reka-state-focus-state state)))
-          (should (eq win-obj (reka-state-focused-window state))))
+          (should (eq window-wl (reka-state-focused-window state))))
       (kill-buffer buf))))
 
 (ert-deftest reka-focus-request-defers-when-not-displayed ()
   "when params aren't ready yet, do NOT set reka--last-focused,
 so a later hook run can retry."
-  (pcase-let* ((`(,state ,_fobj ,win-obj ,_win) (reka-test--make-state :with-display nil))
+  (pcase-let* ((`(,state ,_frame-wl ,window-wl ,_win) (reka-test--make-state :with-display nil))
                (reka--state state)
                (reka--last-focused nil)
-               (buf (reka-test--fake-reka-buffer win-obj)))
+               (buf (reka-test--fake-reka-buffer window-wl)))
     (unwind-protect
         (progn
-          (should (null (reka--update-focus-for-window state win-obj)))
+          (should (null (reka--update-focus-for-window state window-wl)))
           (should (eq 'lost (reka-state-focus-state state))))
       (kill-buffer buf))))
 
 (ert-deftest reka-focus-request-returns-focus-to-frame-for-normal-buffer ()
-  (pcase-let* ((`(,state ,frame-obj ,win-obj ,_win) (reka-test--make-state :with-display t))
+  (pcase-let* ((`(,state ,frame-wl ,window-wl ,_win) (reka-test--make-state :with-display t))
                (reka--state state)
                (reka--last-focused nil)
                (buf (generate-new-buffer " *normal*"))
                (manage-calls nil))
     (setf (reka-state-focus-state state) 'window
-          (reka-state-focused-window state) win-obj
-          (reka-state-focused-frame state) frame-obj)
+          (reka-state-focused-window state) window-wl
+          (reka-state-focused-frame state) frame-wl)
     (let ((prev (window-buffer (selected-window)))
           (reka--manage-timer nil))
       (unwind-protect
