@@ -1,16 +1,17 @@
+
 .PHONY: test test-interactiv river
 
 test:
 	emacs --batch -Q -L . -L test -l ert \
-	  -l reka-tests.el \
-	  -l reka-tests-functional.el \
+	  -l rau-tests.el \
+	  -l rau-tests-functional.el \
 	  -l ewc-tags-tests.el \
 	  -f ert-run-tests-batch-and-exit
 
 test-interactiv:
 	emacs -nw -Q -L . -L test -l ert \
-	  -l reka-tests.el \
-	  -l reka-tests-functional.el \
+	  -l rau-tests.el \
+	  -l rau-tests-functional.el \
 	  -l ewc-tags-tests.el \
 	  --eval="(ert t)" -f delete-other-windows
 

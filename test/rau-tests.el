@@ -1,8 +1,8 @@
 ;;; reka-tests.el -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'cl-lib)
-(require 'reka)
-(require 'reka-test-helpers)
+(require 'rau)
+(require 'rau-test-helpers)
 
 ;;(setq ert-batch-backtrace-right-margin 240)
 

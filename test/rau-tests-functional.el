@@ -1,7 +1,7 @@
 ;;; reka-test.el --- Functional tests for reka -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'cl-lib)
-(require 'reka)
+(require 'rau)
 
 ;;; Test debug helpers
 

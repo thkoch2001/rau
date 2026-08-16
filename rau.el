@@ -416,18 +416,18 @@ when used from other files (e.g. tests)."
              ;; reka.el is currently being loaded.
              ((and load-file-name
                    (member (file-name-nondirectory load-file-name)
-                           '("reka.el" "reka.elc")))
+                           '("rau.el" "rau.elc")))
               load-file-name)
              ;; reka.el is currently being byte-compiled.
              ((and (bound-and-true-p byte-compile-current-file)
                    (member (file-name-nondirectory byte-compile-current-file)
-                           '("reka.el" "reka.elc")))
+                           '("rau.el" "rau.elc")))
               byte-compile-current-file)
              ;; Expansion originates from some other file: find reka.el
              ;; on the load path.
              (t
-              (or (locate-file "reka" load-path '(".el" ".elc"))
-                  (error "reka: cannot locate reka.el; add its directory to `load-path'")))))
+              (or (locate-file "rau" load-path '(".el" ".elc"))
+                  (error "reka: cannot locate rau.el; add its directory to `load-path'")))))
            (reka-dir (file-name-directory (expand-file-name reka-file))))
       (expand-file-name "protocol" reka-dir)))
 
@@ -1387,4 +1387,4 @@ starting Emacs inside of river."
 
   (run-hooks 'reka-enable-hook))
 
-(provide 'reka)
+(provide 'rau)

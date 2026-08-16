@@ -9,4 +9,4 @@
     ;; debug-on-error gets the signal and opens a full *Backtrace*.
     (funcall (ert-test-body (ert-get-test test-name)))))
 
-(provide 'reka-test-helpers)
+(provide 'rau-test-helpers)
