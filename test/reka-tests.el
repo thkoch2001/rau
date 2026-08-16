@@ -34,7 +34,7 @@ Return (STATE FRAME-OBJ WIN-OBJ WIN)."
          (emacs-frame (selected-frame))
          (params (when with-display
                    (reka-window-parameters-make
-                    :frame emacs-frame
+                    :emacs-frame emacs-frame
                     :x 0 :y 0 :w 800 :h 600)))
          (win (reka-window-make :params params)))
     (set-frame-parameter emacs-frame 'reka-ewc-frame frame-obj)
