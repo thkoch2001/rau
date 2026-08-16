@@ -138,9 +138,9 @@ within BODY."
                            (frame-parameter frame 'name))
     (set-frame-parameter frame 'name (make-temp-name "reka-frame-"))))
 
-(defun reka--find-buffer-for-window (window)
+(defun reka--find-buffer-for-window (window-wl)
   (seq-find (lambda (buf)
-              (eq (buffer-local-value 'reka--window buf) window))
+              (eq (buffer-local-value 'reka--window buf) window-wl))
             (buffer-list)))
 
 (defun reka--make-buffer-name (app-id title)
@@ -229,13 +229,13 @@ within BODY."
 ;; TODO: consider (set-window-dedicated-p win t) on the window showing a reka
 ;; buffer, so an accidental C-x b doesn't silently detach the external surface
 ;; (as it stands the surface just hides, which is confusing).
-(defun reka--create-buffer (window)
-  "Create and display a reka buffer for Wayland WINDOW."
-  (or (reka--find-buffer-for-window window)
+(defun reka--create-buffer (window-wl)
+  "Create and display a reka buffer for Wayland WINDOW-WL."
+  (or (reka--find-buffer-for-window window-wl)
       (let ((buffer (get-buffer-create (make-temp-name "reka-window-"))))
         (with-current-buffer buffer
           (reka-mode)
-          (setq-local reka--window window))
+          (setq-local reka--window window-wl))
         (display-buffer buffer)
         buffer)))
 
@@ -458,10 +458,10 @@ when used from other files (e.g. tests)."
 
 ;;; Basic helpers
 
-(defun reka--request (object request &optional arguments)
+(defun reka--request (object-wl request &optional arguments)
   "Send REQUEST on OBJECT using the current reka Wayland connection."
   (ewc-request (reka-state-connection reka--state)
-               object
+               object-wl
                request
                arguments))
 
@@ -493,9 +493,9 @@ Return nil if S is nil or empty."
               ((frame-live-p emacs-frame)))
     (frame-parameter emacs-frame 'reka-ewc-frame)))
 
-(defun reka--frame-for-output (state output)
+(defun reka--frame-for-output (state output-wl)
   "Return frame associated to OUTPUT or nil."
-  (reka--frame-by-cond state (lambda (f) (eq (reka-frame-output-wl f) output))))
+  (reka--frame-by-cond state (lambda (f) (eq (reka-frame-output-wl f) output-wl))))
 
 (defun reka--frame-without-output (state)
   "Return a frame not associated to any output or nil."
@@ -552,33 +552,33 @@ handler timer. Only to be used in event listeners."
 
 ;;; Focus helpers
 
-(defun reka--focus-frame (state frame)
-  "Focus FRAME in STATE.
+(defun reka--focus-frame (state frame-wl)
+  "Focus FRAME-WL in STATE.
 Return non-nil if the focus state changed."
   (let ((changed
          (not (and (eq (reka-state-focus-state state) 'frame)
                    (eq
                     (reka-state-focused-frame state)
-                    frame)))))
+                    frame-wl)))))
     (setf (reka-state-focus-state state) 'frame
-          (reka-state-focused-frame state) frame
+          (reka-state-focused-frame state) frame-wl
           (reka-state-focused-window state) nil)
     changed))
 
-(defun reka--focus-window (state window frame)
-  "Focus WINDOW on FRAME in STATE.
+(defun reka--focus-window (state window-wl frame-wl)
+  "Focus WINDOW-WL on FRAME-WL in STATE.
 Return non-nil if the focus state changed."
   (let ((changed
          (not (and (eq (reka-state-focus-state state) 'window)
                    (eq
                     (reka-state-focused-window state)
-                    window)
+                    window-wl)
                    (eq
                     (reka-state-focused-frame state)
-                    frame)))))
+                    frame-wl)))))
     (setf (reka-state-focus-state state) 'window
-          (reka-state-focused-window state) window
-          (reka-state-focused-frame state) frame)
+          (reka-state-focused-window state) window-wl
+          (reka-state-focused-frame state) frame-wl)
     changed))
 
 (defun reka--focus-switch-to-frame (state)
@@ -606,17 +606,17 @@ Return non-nil if the focus state changed."
        (cons f f)))
     (_ nil)))
 
-(defun reka--focus-invalidate (state target)
-  "Invalidate TARGET in STATE's focus tracking, e.g. after close."
+(defun reka--focus-invalidate (state target-wl)
+  "Invalidate TARGET-WL in STATE's focus tracking, e.g. after close."
   (cond
    ((and (reka-state-focused-frame state)
-         (eq (reka-state-focused-frame state) target))
+         (eq (reka-state-focused-frame state) target-wl))
     (setf (reka-state-focus-state state) 'lost
           (reka-state-focused-frame state) nil
           (reka-state-focused-window state) nil))
 
    ((and (reka-state-focused-window state)
-         (eq (reka-state-focused-window state) target))
+         (eq (reka-state-focused-window state) target-wl))
     (setf (reka-state-focus-state state) 'frame
           (reka-state-focused-window state) nil))))
 
@@ -629,11 +629,11 @@ Return non-nil if the focus state changed."
     ((or 'fullscreen 'exiting) (reka-fs-window fs))
     (_ nil)))
 
-(defun reka--select-buffer-for-window (window)
-  "Select the Emacs window displaying Wayland WINDOW, if visible."
-  (when-let* ((buf (reka--find-buffer-for-window window))
-              (win (get-buffer-window buf t)))
-    (select-window win 'norecord)))
+(defun reka--select-buffer-for-window (window-wl)
+  "Select the Emacs window displaying Wayland WINDOW-WL, if visible."
+  (when-let* ((buf (reka--find-buffer-for-window window-wl))
+              (emacs-window (get-buffer-window buf t)))
+    (select-window emacs-window 'norecord)))
 
 ;;; XKB keysym resolution
 
