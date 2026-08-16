@@ -174,8 +174,8 @@ within BODY."
                               :w (- right left)
                               :h (- bottom top))
                              params)))))
-            (reka--do reka--tag-window (object win state)
-              (let* ((id (ewc-object-id object))
+            (reka--do reka--tag-window (window-wl win state)
+              (let* ((id (ewc-object-id window-wl))
                      (new (gethash id params))
                     (old (reka-window-params win)))
                 (unless (equal old new)
@@ -1077,8 +1077,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 (defun reka--reconcile-frames (state)
   "Ensure each output gets one maximized Emacs frame."
   (let ((frame-requests 0))
-    (reka--do 'river-output-v1 (object out state)
-              (if-let* ((frame-obj (reka--frame-for-output state object))
+    (reka--do 'river-output-v1 (output-wl out state)
+              (if-let* ((frame-obj (reka--frame-for-output state output-wl))
                         (f (ewc-object-data frame-obj)))
                   ;; Frame already assigned: only re-propose if size changed.
                   (unless (and (eq (reka-frame-proposed-width f) (reka-output-width out))
@@ -1093,7 +1093,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                 (if-let* ((frame-obj (reka--frame-without-output state))
                           (f (ewc-object-data frame-obj)))
                     (progn
-                      (setf (reka-frame-output-wl f) object
+                      (setf (reka-frame-output-wl f) output-wl
                             (reka-frame-proposed-width f) (reka-output-width out)
                             (reka-frame-proposed-height f) (reka-output-height out))
                       (reka--request frame-obj
@@ -1113,22 +1113,22 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--reconcile-windows (state)
   "Close killed windows and propose dimensions for active windows."
-  (reka--do reka--tag-window (object win state)
+  (reka--do reka--tag-window (window-wl win state)
             (pcase (reka-window-state win)
               ;; nothing to do for window-state 'starting
               ('active
                (when-let* ((params (reka-window-params win)))
                  ;; TODO: This gets sent on every loop for all windows?
-                 (reka--request object
+                 (reka--request window-wl
                                 'set-tiled
                                 `((edges . ,reka--edges-all)))
 
-                 (reka--request object
+                 (reka--request window-wl
                                 'propose-dimensions
                                 `((width . ,(reka-window-parameters-w params))
                                   (height . ,(reka-window-parameters-h params))))))
               ('killed
-               (reka--request object 'close)))))
+               (reka--request window-wl 'close)))))
 
 (defun reka--reconcile-bindings (state)
   "Create and enable XKB bindings."
@@ -1153,7 +1153,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--reconcile-fullscreen (state)
   "Advance fullscreen state machines."
-  (reka--do 'river-output-v1 (object out state)
+  (reka--do 'river-output-v1 (output-wl out state)
     (let ((fs (reka-output-fullscreen out)))
       (pcase (reka-fs-state fs)
         ('requested
@@ -1165,7 +1165,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
            (when (and new (ewc-object-p new))
              (reka--request new 'inform-fullscreen)
              (reka--request new 'fullscreen
-                            `((output . ,(ewc-object-id object)))))
+                            `((output . ,(ewc-object-id output-wl)))))
            (setf (reka-output-fullscreen out)
                  (reka-fs :state 'fullscreen :window new))))
         ('exiting
@@ -1222,16 +1222,16 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--render-frames (state)
   "Run the render-sequence reconciliation for frames on STATE."
-  (reka--do reka--tag-frame (frame-obj frame state)
+  (reka--do reka--tag-frame (frame-wl frame state)
             (let ((node (reka-surface-node-wl frame))
                   (out-obj (reka-frame-output-wl frame)))
               (if (not out-obj)
                   (when (reka-frame-visible frame)
                     (setf (reka-frame-visible frame) nil)
-                    (reka--request frame-obj 'hide))
+                    (reka--request frame-wl 'hide))
                 (unless (reka-frame-visible frame)
                   (setf (reka-frame-visible frame) t)
-                  (reka--request frame-obj 'show))
+                  (reka--request frame-wl 'show))
                 (when node
                   (reka--request node 'place-bottom))
                 (when-let* ((out (ewc-object-data out-obj))
@@ -1246,10 +1246,10 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 (defun reka--render-windows (state)
   "Run the render-sequence reconciliation for windows on STATE."
-  (reka--do reka--tag-window (win-obj win state)
+  (reka--do reka--tag-window (window-wl win state)
     (let ((node (reka-surface-node-wl win)))
       (if (not (eq (reka-window-state win) 'active))
-          (reka--request win-obj 'hide)
+          (reka--request window-wl 'hide)
 
         (if-let* ((params (reka-window-params win))
                   (frame-obj (reka--frame-displaying-win win))
@@ -1257,7 +1257,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                   (out-obj (reka-frame-output-wl frame))
                   (out (ewc-object-data out-obj)))
             (progn
-              (reka--request win-obj 'show)
+              (reka--request window-wl 'show)
 
               (when node
                 (reka--request node 'set-position
@@ -1272,13 +1272,13 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                                 (reka-window-parameters-w params)))
                     (clip-h (or (reka-window-actual-height win)
                                 (reka-window-parameters-h params))))
-                (reka--request win-obj 'set-clip-box
+                (reka--request window-wl 'set-clip-box
                              `((x . 0)
                                (y . 0)
                                (width . ,clip-w)
                                (height . ,clip-h)))))
 
-          (reka--request win-obj 'hide))))))
+          (reka--request window-wl 'hide))))))
 
 ;;; Fullscreen toggle
 
