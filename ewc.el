@@ -62,7 +62,7 @@
 (defvar bindat-idx)
 
 (defmacro ewc-read (&rest protocols)
-  "Read Wayland PROTOCOLS from XML files into Elisp.
+  "Read Wayland PROTOCOLS from XML files into an interfaces hash table.
 Each PROTOCOL is either a path to a Wayland XML protocol
 or a list (path interface ...) restricting the interfaces
 read to those specified.
@@ -70,11 +70,17 @@ read to those specified.
 Path should be a string and interface a symbol.
 
 This is the Elisp version of wayland-scanner."
-  `(progn
-     (defvar bindat-idx)
-     (list ,@(mapcar (lambda (protocol)
-                       (apply #'ewc-read-protocol (ensure-list protocol)))
-                     protocols))))
+  (let ((all-interfaces
+         (mapcan (lambda (protocol)
+                   (apply #'ewc-read-protocol (ensure-list protocol)))
+                 protocols)))
+    `(progn
+       (defvar bindat-idx)
+       (let ((table (make-hash-table :test 'eq)))
+         ,@(mapcar (lambda (iface-form)
+                     `(puthash ,(cadr iface-form) (list ,@(cddr iface-form)) table))
+                   all-interfaces)
+         table))))
 
 (define-inline ewc-node-name (node)
   "Return the Elisp symbol name for DOM NODE."
@@ -83,20 +89,20 @@ This is the Elisp version of wayland-scanner."
 
 (defun ewc-read-protocol (protocol &rest select-interfaces)
   "Read one Wayland protocol XML file PROTOCOL.
+Return a list of interface forms as produced by `ewc-read-interface'.
 If SELECT-INTERFACES is non-nil, only read those interfaces."
   (let ((protocol (with-temp-buffer
                     (insert-file-contents protocol)
                     (libxml-parse-xml-region (point-min) (point-max)))))
-    `(cons ',(ewc-node-name protocol)
-           (list ,@(mapcar #'ewc-read-interface
-                           (let ((interfaces (dom-by-tag protocol 'interface)))
-                             (if select-interfaces
-                                 (seq-filter
-                                  (lambda (interface)
-                                    (member (ewc-node-name interface)
-                                            select-interfaces))
-                                  interfaces)
-                               interfaces)))))))
+    (mapcar #'ewc-read-interface
+            (let ((interfaces (dom-by-tag protocol 'interface)))
+              (if select-interfaces
+                  (seq-filter
+                   (lambda (interface)
+                     (member (ewc-node-name interface)
+                             select-interfaces))
+                   interfaces)
+                interfaces)))))
 
 (defun ewc-read-interface (interface)
   "Translate one Wayland INTERFACE dom node into Elisp."
@@ -173,7 +179,7 @@ The DATA slot is free to use for arbitrary data about this object."
 NEW-ID is the next client-allocated object id.
 TABLE maps object ids to `ewc-object' structs.
 TAGS maps tag symbols to lists of ewc-object structs.
-INTERFACES is a hash table of Wayland interfaces.
+INTERFACES is a hash table of Wayland interfaces as returned by `ewc-read'.
 RX holds incomplete incoming Wayland bytes."
   (new-id 0 :type integer)
   (connection)
@@ -471,22 +477,12 @@ The network process is set in the CONNECTION slot of CLIENT."
     (process-send-string connection
                          (ewc-pack object request arguments))))
 
-(defun ewc--flatten-protocols (protocols)
-  (let ((ifaces (make-hash-table :test 'eq)))
-    (dolist (protocol-def protocols)
-      (dolist (iface-def (cdr protocol-def))
-        (let ((name (car iface-def)))
-          (puthash name (cdr iface-def) ifaces))))
-    (message "found %d interfaces" (hash-table-count ifaces))
-    ifaces
-    ))
-
-(defun ewc-start (protocols listener-prefix)
+(defun ewc-start (interfaces listener-prefix)
   "Setup ewc-client, send get-registry request and return the client.
-PROTOCOLS are the protocols as read by ewc-read. LISTENER-PREFIX is the
-prefix string of event listener functions to be registered with the
+INTERFACES are the interfaces as read by ewc-read. LISTENER-PREFIX is
+the prefix string of event listener functions to be registered with the
 client."
-  (let ((client (ewc-client-make :interfaces (ewc--flatten-protocols protocols))))
+  (let ((client (ewc-client-make :interfaces interfaces)))
     (ewc-build-listeners client listener-prefix)
     (ewc-connect client)
     (let ((display-wl (ewc-object-add client 'wl-display))

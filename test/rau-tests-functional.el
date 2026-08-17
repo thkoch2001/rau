@@ -25,7 +25,7 @@
 
 (defun rau-test--interfaces ()
   (or rau-test--interfaces-cache
-      (setq rau-test--interfaces-cache (ewc--flatten-protocols (rau--read-protocols)))))
+      (setq rau-test--interfaces-cache (rau--read-protocols))))
 
 (defun rau-test-make-state ()
   "Build a fresh `rau-state' with no live connection."

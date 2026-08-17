@@ -1366,8 +1366,8 @@ Call this function once when starting Emacs inside of river."
            do (rau--set-frame-name emacs-frame))
   (add-to-list 'after-make-frame-functions #'rau--set-frame-name)
 
-  (let* ((protocols (rau--read-protocols))
-         (client (ewc-start protocols "rau-on-")))
+  (let* ((interfaces (rau--read-protocols))
+         (client (ewc-start interfaces "rau-on-")))
     (setq rau--state (rau-state-make :client client)))
 
   (rau-push-intercept-prefixes)
