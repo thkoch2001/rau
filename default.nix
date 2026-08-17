@@ -1,16 +1,26 @@
-{ pkgs ? import <nixpkgs> { }, depot ? { }, ... }:
+{ pkgs ? import <nixpkgs> { }, ... }:
 
 let
-  emacsBuilder = depot.tools.emacs-pkgs.buildEmacsPackage or pkgs.emacs-pgtk.pkgs.trivialBuild;
+  fs = pkgs.lib.fileset;
 in
-emacsBuilder {
-  pname = "reka";
-  version = "0.2";
-  src = ./reka.el;
-
-  passthru.meta.ci.extraSteps.codeberg = depot.tools.releases.filteredGitPush {
-    filter = ":/tools/emacs-pkgs/reka";
-    remote = "ssh://git@codeberg.org/tazjin/reka.git";
-    ref = "refs/heads/canon";
+pkgs.emacs-pgtk.pkgs.trivialBuild {
+  pname = "rau";
+  version = "0.1";
+  src = fs.toSource {
+    root = ./.;
+    fileset = fs.unions [
+      ./ewc.el
+      ./rau.el
+      (fs.fileFilter
+        (file: file.hasExt "xml")
+        ./protocol
+      )
+    ];
   };
+  preInstall = ''
+    # trivialBuild only installs elisp files, so ship the protocol
+    # XML alongside them by hand.
+    mkdir -p $out/share/emacs/site-lisp
+    cp -r protocol $out/share/emacs/site-lisp/
+  '';
 }

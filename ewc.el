@@ -1,9 +1,11 @@
-;;; ewc.el --- A Wayland client in Elisp -*- lexical-binding: t; -*-
+;;; ewc.el --- Wayland client in Elisp -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2023 Michael Bauer
+;; Copyright (C) 2023 Michael Bauer, 2026 Thomas Koch
 ;; Author: Michael Bauer <michael-bauer@posteo.de>
+;; Maintainer: Thomas Koch <thomas@koch.ro>
+;; URL: http://perma-curious.eu/repo-ewx/
 ;; Keywords: unix
-;; Version: 0.2
+;; Version: 0.3
 ;; Package-Requires: ((emacs "28.2"))
 
 ;; This program is free software; you can redistribute it and/or modify

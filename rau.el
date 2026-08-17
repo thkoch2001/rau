@@ -1,5 +1,27 @@
-;;; -*- lexical-binding: t -*-
+;;; rau.el --- Wayland Window Manager based on River -*- lexical-binding: t -*-
+
+;; Copyright (C) 2026 Thomas Koch
+
+;; Author: Thomas Koch <thomas@koch.ro>
+;; Version: 0.1
+;; Keywords: frames
+;; URL: https://github.com/thkoch2001/rau
+;; Package-Requires: ((emacs "30.2"))
+
+;;; Commentary:
+;; Rau is a Wayland Window Manager based on Emacs and River in pure Elisp. The
+;; heavy lifting is provided by River, written in Zig and thus fast while the
+;; opinionated parts like Window placement, Keybindings and Focus management
+;; are written in Elisp and are thus easy to customize.
+
+;;; History:
+;; This package is based on <https://codeberg.org/tazjin/reka>. The major
+;; difference is that reka uses Rust code to bind to libwayland while rau uses
+;; the ewc.el library of Michael Bauer to implement wayland communication.
+
 ;;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Code:
 
 (require 'cl-lib)
 (require 'ewc)
@@ -16,6 +38,13 @@
 (defcustom rau-enable-hook nil
   "Hook run at the end of `rau-enable'."
   :type 'hook)
+
+(defvar rau-debug nil
+  "When non-nil, enable verbose rau debugging messages.")
+
+(defvar rau--state nil
+  "Current global rau WM state.")
+
 
 ;;; State structs
 
@@ -116,6 +145,18 @@ Not instantiated directly; windows and frames include it."
 
 (defconst rau--tag-window :rau-window
   "Tag for `river-window-v1' objects that are external windows.")
+
+(defvar rau--command-timer nil
+  "Timer used to drain the rau command queue.")
+
+(defvar rau--manage-timer nil
+  "Timer used to coalesce `manage-dirty' requests.")
+
+(defvar rau--handling-commands nil
+  "Non-nil while `rau--handle-commands' is running.")
+
+(defvar rau--pending-handler nil
+  "Non-nil if a command handler was requested while already handling commands.")
 
 (cl-defmacro rau--do (tag (obj val state) &body body)
   "Iterate over the ewc objects in STATE tagged with TAG.
@@ -325,11 +366,6 @@ COMMAND may be `toggle-fullscreen'."
                    (rau-state-bindings rau--state))))
       (rau--mark-manage-dirty rau--state))))
 
-(defun rau-push-intercept-prefixes () ;; TODO: remove, leave only one way?
-  "Update the intercept prefixes defined in `rau-intercept-prefixes'."
-  (dolist (prefix rau-intercept-prefixes)
-    (rau-push-intercept-prefix prefix)))
-
 (defcustom rau-intercept-prefixes
   '("C-x" "C-u" "C-h" "M-x")
   "Prefix keys that should always go to Emacs."
@@ -340,6 +376,11 @@ COMMAND may be `toggle-fullscreen'."
                     rau--state
                     (fboundp 'rau-push-intercept-prefixes))
            (rau-push-intercept-prefixes))))
+
+(defun rau-push-intercept-prefixes () ;; TODO: remove, leave only one way?
+  "Update the intercept prefixes defined in `rau-intercept-prefixes'."
+  (dolist (prefix rau-intercept-prefixes)
+    (rau-push-intercept-prefix prefix)))
 
 (defun rau--suppress-focus-event (_orig-fn _event)
   "No-op for suppressing certain focus events in advice."
@@ -372,24 +413,6 @@ tabs, for example, is completely valid."
           (with-selected-window other
             (switch-to-buffer (other-buffer)))))))
   (apply orig win buf r))
-
-(defvar rau-debug nil
-  "When non-nil, enable verbose rau debugging messages.")
-
-(defvar rau--state nil
-  "Current global rau WM state.")
-
-(defvar rau--command-timer nil
-  "Timer used to drain the rau command queue.")
-
-(defvar rau--manage-timer nil
-  "Timer used to coalesce `manage-dirty' requests.")
-
-(defvar rau--handling-commands nil
-  "Non-nil while `rau--handle-commands' is running.")
-
-(defvar rau--pending-handler nil
-  "Non-nil if a command handler was requested while already handling commands.")
 
 (defun rau-log (&rest args)
   "Log ARGS with `message' when `rau-debug' is non-nil."
@@ -444,8 +467,7 @@ when used from other files (e.g. tests)."
          (let ((spec (ensure-list spec)))
            (cons (rau--protocol-file (car spec))
                  (cdr spec))))
-       rau--protocol-basenames)))
-)
+       rau--protocol-basenames))))
 
 (defconst rau--global-binds
   '("river_window_manager_v1"
@@ -521,8 +543,7 @@ Return nil if S is nil or empty."
                    (rau--handle-commands state)
                  (error
                   (message "rau command handler error: %S" err))))
-             rau--state
-             )))))
+             rau--state)))))
 
 (defun rau--enqueue (fn)
   "Queue FN for execution by rau--command-handler and schedule the command
@@ -866,7 +887,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (rau--focus-invalidate rau--state window-wl)
 
     ;; Reset fullscreen on output if window was fullscreen.
-    (rau--do 'river-output-v1 (_ out rau--state)
+    (rau--do 'river-output-v1 (output-wl out rau--state)
       (when (eq (rau--fs-window (rau-output-fullscreen out)) window-wl)
         (setf (rau-output-fullscreen out) (rau-fs))))
 
@@ -948,7 +969,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                          :previous previous)))))))
 
 (defun rau-on-river-window-v1-exit-fullscreen-requested (window-wl _)
-  (rau--do 'river-output-v1 (_ out rau--state)
+  (rau--do 'river-output-v1 (output-wl out rau--state)
     (let ((fs (rau-output-fullscreen out)))
       (when (and (member (rau-fs-state fs)
                          '(requested fullscreen))
@@ -1001,12 +1022,12 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;;;; river-output-v1 listeners
 (defun rau-on-river-output-v1-removed (output-wl _)
   (let ((client (rau-state-client rau--state)))
-    (rau--do rau--tag-frame (_ f rau--state)
-      (when (eq (rau-frame-output-wl f) output-wl)
-        (setf (rau-frame-output-wl f) nil)
+    (rau--do rau--tag-frame (frame-wl frame rau--state)
+      (when (eq (rau-frame-output-wl frame) output-wl)
+        (setf (rau-frame-output-wl frame) nil)
         (rau--enqueue
          (lambda ()
-           (when-let* ((emacs-frame (rau-frame-emacs-frame f))
+           (when-let* ((emacs-frame (rau-frame-emacs-frame frame))
                        ((frame-live-p emacs-frame)))
              (delete-frame emacs-frame))))))
     (when-let* ((out (ewc-object-data output-wl))
@@ -1388,3 +1409,4 @@ starting Emacs inside of river."
   (run-hooks 'rau-enable-hook))
 
 (provide 'rau)
+;;; rau.el ends here
