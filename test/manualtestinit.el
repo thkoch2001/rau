@@ -28,13 +28,13 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
 (setq server-name "test")
 (server-start)
 
-(print "require reka" #'external-debugging-output)
-(require 'reka)
+(print "require rau" #'external-debugging-output)
+(require 'rau)
 
-(print "reka enable" #'external-debugging-output)
-(setq reka-debug t)
+(print "rau enable" #'external-debugging-output)
+(setq rau-debug t)
 ;; (setq ewc-debug t)
-(reka-enable)
+(rau-enable)
 (print "done with init" #'external-debugging-output)
 (switch-to-buffer "*Messages*")
 
