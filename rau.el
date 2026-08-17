@@ -9,7 +9,7 @@
 ;; Package-Requires: ((emacs "30.2"))
 
 ;;; Commentary:
-;; Rau is a Wayland Window Manager based on Emacs and River in pure Elisp. The
+;; Rau is a Wayland Window Manager based on Emacs and River in pure Elisp.  The
 ;; heavy lifting is provided by River, written in Zig and thus fast while the
 ;; opinionated parts like Window placement, Keybindings and Focus management
 ;; are written in Elisp and are thus easy to customize.
@@ -31,7 +31,7 @@
 (require 'subr-x)
 
 (defgroup rau nil
-  "Rau - Emacs swimming in the river"
+  "Rau - Emacs swimming in the river."
   :group 'environment
   :prefix "rau-")
 
@@ -175,16 +175,19 @@ within BODY."
          ,@body))))
 
 (defun rau--set-frame-name (emacs-frame)
+  "Name EMACS-FRAME to be a Rau frame if not yet done so."
   (unless (string-prefix-p "rau-frame-"
                            (frame-parameter emacs-frame 'name))
     (set-frame-parameter emacs-frame 'name (make-temp-name "rau-frame-"))))
 
 (defun rau--find-buffer-for-window (window-wl)
+  "Return Emacs buffer associated with WINDOW-WL."
   (seq-find (lambda (buf)
               (eq (buffer-local-value 'rau--window-wl buf) window-wl))
             (buffer-list)))
 
 (defun rau--make-buffer-name (app-id title)
+  "Return a buffer name string using APP-ID and TITLE."
   (let ((title-trunc (if (> (length title) 40)
                          (format "%s…" (substring title 0 40))
                        title)))
@@ -192,6 +195,7 @@ within BODY."
       title-trunc)))
 
 (defun rau--handle-commands (state &optional no-focus-update)
+  "Execute commands enqueed by event listeners."
   (unless rau--handling-commands
     (let ((rau--handling-commands t))
       ;; Update WM window parameters from the current Emacs window layout.
@@ -241,7 +245,7 @@ within BODY."
 
 ;; Major mode for rau-managed buffers
 (defvar-local rau--window-wl nil
-  "Window object for this rau-mode buffer.")
+  "Window object for this `rau-mode' buffer.")
 
 (defun rau--buffer-killed ()
   "Request closing of the associated Wayland surface when a rau buffer is killed."
@@ -325,7 +329,7 @@ hook run can retry."
     (meta    . 8)
     (super   . 64)
     (hyper   . 128))
-  "Modifier bits as per river_seat_v1.modifiers / XKB")
+  "Modifier bits as per river_seat_v1.modifiers / XKB.")
 
 (defun rau--key-to-xkb (key-string)
   "Decompose KEY-STRING into (EVENT KEY MODIFIERS)."
@@ -389,13 +393,12 @@ COMMAND may be `toggle-fullscreen'."
   (setq rau--last-focused nil))
 
 (defun rau--buffer-predicate (buffer)
-  "Buffer predicate to avoid accidentally showing the same rau buffer twice."
+  "Buffer predicate to avoid accidentally showing the same rau BUFFER twice."
   (or (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))
       (not (get-buffer-window buffer t))))
 
 (defun rau--split-window-advice (new-window)
-  "Advice window splits to always display another buffer, if a rau buffer
-was split."
+  "Advice window splits to always display another buffer."
   (with-selected-window new-window
     (with-current-buffer (window-buffer)
       (when (derived-mode-p 'rau-mode)
@@ -403,9 +406,9 @@ was split."
   new-window)
 
 (defun rau--set-window-buffer-advice (orig win buf &rest r)
-  "Avoid double-display of rau buffers, by stealing them if they are
-visible elsewhere. Note that displaying the same buffer in two different
-tabs, for example, is completely valid."
+  "Avoid double-display of rau buffers, by stealing them.
+Note that displaying the same buffer in two different tabs, for example,
+is completely valid."
   (with-current-buffer buf
     (when (derived-mode-p 'rau-mode)
       (dolist (other (get-buffer-window-list buf nil 'visible))
@@ -450,7 +453,7 @@ when used from other files (e.g. tests)."
              ;; on the load path.
              (t
               (or (locate-file "rau" load-path '(".el" ".elc"))
-                  (error "rau: cannot locate rau.el; add its directory to `load-path'")))))
+                  (error "Rau: cannot locate rau.el; add its directory to `load-path'")))))
            (rau-dir (file-name-directory (expand-file-name rau-file))))
       (expand-file-name "protocol" rau-dir)))
 
@@ -481,7 +484,7 @@ when used from other files (e.g. tests)."
 ;;; Basic helpers
 
 (defun rau--request (object-wl request &optional arguments)
-  "Send REQUEST on OBJECT using the current rau Wayland connection."
+  "Send REQUEST on OBJECT-WL using the current rau Wayland connection."
   (ewc-request (rau-state-connection rau--state)
                object-wl
                request
@@ -516,7 +519,7 @@ Return nil if S is nil or empty."
     (frame-parameter emacs-frame 'rau-frame-wl)))
 
 (defun rau--frame-for-output (state output-wl)
-  "Return frame associated to OUTPUT or nil."
+  "Return frame associated to OUTPUT-WL or nil."
   (rau--frame-by-cond state (lambda (f) (eq (rau-frame-output-wl f) output-wl))))
 
 (defun rau--frame-without-output (state)
@@ -546,8 +549,9 @@ Return nil if S is nil or empty."
              rau--state)))))
 
 (defun rau--enqueue (fn)
-  "Queue FN for execution by rau--command-handler and schedule the command
-handler timer. Only to be used in event listeners."
+  "Queue FN for execution by rau--command-handler.
+Also schedule the command handler timer if not yet done so.  Only to be
+used in event listeners."
   (setf (rau-state-command-queue rau--state)
         (append (rau-state-command-queue rau--state) (list fn)))
   (rau--schedule-command-handler))
@@ -616,8 +620,8 @@ Return non-nil if the focus state changed."
   )
 
 (defun rau--focus-current (state)
-  "Return current focus as (TARGET-WL . FRAME-WL), if any. TARGET-WL is
-either a WINDOW-WL or FRAME-WL."
+  "Return current focus as (TARGET-WL . FRAME-WL), if any.
+TARGET-WL is either a WINDOW-WL or FRAME-WL."
   (pcase (rau-state-focus-state state)
     ('window
      (when-let* ((window-wl (rau-state-focused-window state))
@@ -1359,13 +1363,13 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;; would result in an unresponsive user environment.
 ;;;###autoload
 (defun rau-enable ()
-  "Enable the rau window manager for river. Call this function once when
-starting Emacs inside of river."
+  "Enable the rau window manager for river.
+Call this function once when starting Emacs inside of river."
   (when rau--state
-    (user-error "rau is already running"))
+    (user-error "Rau is already running"))
 
   (unless (eq window-system 'pgtk)
-    (user-error "rau requires a pgtk Emacs on Wayland"))
+    (user-error "Rau requires a pgtk Emacs on Wayland"))
 
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)

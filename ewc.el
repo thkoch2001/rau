@@ -220,9 +220,9 @@ Untagging an object that does not carry TAG is a no-op."
   (inline-quote (memq ,tag (ewc-object-tags ,object))))
 
 (defun ewc-first-object (client tag)
-  "Fetch the first ewc-object in CLIENT for TAG. This is meant to be used
-for TAGs that should only be attached to one object, e.g. global
-interfaces."
+  "Fetch the first ewc-object in CLIENT for TAG.
+This is meant to be used
+for TAGs that should only be attached to one object, e.g. global interfaces."
   (car (ewc-objects client tag)))
 
 (defun ewc-objects (client tag)
@@ -251,7 +251,7 @@ Returns the newly created object."
          (protocol-def (alist-get protocol protocols))
          (interface-def (alist-get interface protocol-def)))
     (unless interface-def
-      (error "ewc: unknown interface %s/%s" protocol interface))
+      (error "ewc: Unknown interface %s/%s" protocol interface))
 
     (pcase-let* ((`(,_version ,events ,requests) interface-def)
                  (id (or id (cl-incf (ewc-client-new-id client))))
@@ -273,7 +273,7 @@ Returns the newly created object."
            for i from 0
            when (eq (car spec) event)
            return i
-           finally (error "ewc: unknown event %s for interface %s"
+           finally (error "ewc: Unknown event %s for interface %s"
                           event
                           (ewc-object-interface object))))
 
@@ -329,7 +329,7 @@ Returns the newly created object."
 
   (let ((entry (assq request (ewc-object-requests object))))
     (unless entry
-      (error "ewc: interface %s has no request %s"
+      (error "ewc: Interface %s has no request %s"
              (ewc-object-interface object) request))
     (pcase-let* ((`(,_ ,opcode ,le . ,pe) entry)
                 (bindat-idx 0)
@@ -441,7 +441,7 @@ typos at startup rather than silently dropping events."
            (unless found
              (push sym unmatched))))))
     (when unmatched
-      (error "ewc: listener(s) match no known interface/event: %s"
+      (error "ewc: Listener(s) match no known interface/event: %s"
              (mapconcat #'symbol-name unmatched ", ")))
     (setf (ewc-client-listeners client) table)
     table))
@@ -477,7 +477,7 @@ Returns a network client process."
 (defun ewc-request (connection object request &optional arguments)
   "Issue REQUEST with ARGUMENTS on OBJECT using CONNECTION."
   (unless (and connection (process-live-p connection))
-    (error "ewc: no live Wayland connection for request %S" request))
+    (error "ewc: No live Wayland connection for request %S" request))
 
   (process-send-string connection
                        (ewc-pack object request arguments)))
