@@ -81,16 +81,6 @@ This is the Elisp version of wayland-scanner."
   (inline-quote
    (intern (string-replace "_" "-" (dom-attr ,node 'name)))))
 
-;; TODO: Add a table of all interfaces and eliminate this function
-(defun ewc-find-protocol (protocols interface)
-  "Find the protocol defining INTERFACE in PROTOCOLS.
-PROTOCOLS is a list of protocols as returned by `ewc-read-protocol'."
-  (cl-loop for protocol-def in protocols
-           thereis (when (cl-find-if (lambda (iface-def)
-                                       (eq (car iface-def) interface))
-                                     (cdr protocol-def))
-                     (car protocol-def))))
-
 (defun ewc-read-protocol (protocol &rest select-interfaces)
   "Read one Wayland protocol XML file PROTOCOL.
 If SELECT-INTERFACES is non-nil, only read those interfaces."
@@ -168,7 +158,6 @@ OPCODE is the request opcode."
   "A client-side object implementing a Wayland interface.
 
 The DATA slot is free to use for arbitrary data about this object."
-  (protocol nil :type symbol :read-only t)
   (interface nil :type symbol :read-only t)
   (id nil :type integer :read-only t)
   (events nil :type list :read-only t)
@@ -184,15 +173,20 @@ The DATA slot is free to use for arbitrary data about this object."
 NEW-ID is the next client-allocated object id.
 TABLE maps object ids to `ewc-object' structs.
 TAGS maps tag symbols to lists of ewc-object structs.
-PROTOCOLS is an alist as returned by `ewc-read'.
+INTERFACES is a hash table of Wayland interfaces.
 RX holds incomplete incoming Wayland bytes."
   (new-id 0 :type integer)
   (connection)
   (table (make-hash-table) :type hash-table :read-only t)
   (tags (make-hash-table :test 'eq) :type hash-table :read-only t)
-  (protocols nil :type list :read-only t)
+  (interfaces nil :type hash-table :read-only t)
   (listeners nil :type list)
   (rx "" :type string))
+
+(defun ewc-interface-version (client interface)
+  "Return the XML-declared version of INTERFACE in CLIENT."
+  (when-let ((def (gethash interface (ewc-client-interfaces client))))
+    (car def)))
 
 (define-inline ewc-object-get (client id)
   "Get object with ID from CLIENT, an `ewc-client' struct."
@@ -249,17 +243,13 @@ removed) is a no-op."
 If no ID is provided, a client initiated id is generated.
 
 Returns the newly created object."
-  (let* ((protocols (ewc-client-protocols client))
-         (protocol (ewc-find-protocol protocols interface))
-         (protocol-def (alist-get protocol protocols))
-         (interface-def (alist-get interface protocol-def)))
+  (let* ((interface-def (gethash interface (ewc-client-interfaces client))))
     (unless interface-def
-      (error "ewc: Unknown interface %s/%s" protocol interface))
+      (error "ewc: Unknown interface %s" interface))
 
     (pcase-let* ((`(,_version ,events ,requests) interface-def)
                  (id (or id (cl-incf (ewc-client-new-id client))))
                  (object (ewc-object-make
-                          :protocol protocol
                           :interface interface
                           :id id
                           :events events
@@ -324,8 +314,7 @@ Returns the newly created object."
 
 (defun ewc-pack (object request arguments)
   "Return Wayland REQUEST wire message for OBJECT with ARGUMENTS."
-  (ewc-log "ewc: pack %s::%s::%s nr args=%d"
-           (ewc-object-protocol object)
+  (ewc-log "ewc: pack %s::%s nr args=%d"
            (ewc-object-interface object)
            request
            (length arguments))
@@ -385,14 +374,6 @@ complete ones."
                       (ewc-event client msg len 0)
                     (error (message "ewc: dispatch error: %S" err)))))))))))))
 
-(defun ewc--interfaces-events (client)
-  "Return an alist of (INTERFACE . EVENT-NAMES) from CLIENT.
-INTERFACE is a symbol.  EVENT-NAMES is a list of event symbols
-in opcode order, as declared in the protocol XML."
-  (cl-loop for (_protocol . interfaces) in (ewc-client-protocols client)
-           append (cl-loop for (iface _version events _requests) in interfaces
-                           collect (cons iface (mapcar #'car events)))))
-
 (defun ewc-build-listeners (client prefix)
   "Populate the `listeners' slot of CLIENT by scanning the obarray.
 
@@ -406,7 +387,7 @@ for example
     reka-on-river-window-v1-title
 
 The name is decomposed by matching INTERFACE against the
-interfaces declared in CLIENT's protocols.  EVENT must be a known
+interfaces declared in CLIENT's interfaces.  EVENT must be a known
 event of that interface; the function symbol is then stored at
 the event's opcode index in a per-interface vector.
 
@@ -417,7 +398,10 @@ no registered listeners get an all-nil vector.
 Signals an error listing every function matching PREFIX that does
 not correspond to a known (interface event) pair.  This catches
 typos at startup rather than silently dropping events."
-  (let* ((iface-events (ewc--interfaces-events client))
+  (let* ((interfaces (ewc-client-interfaces client))
+         (iface-events (cl-loop for iface being the hash-keys of interfaces
+                                using (hash-values v)
+                                collect (cons iface (mapcar #'car (cl-second v)))))
          (table (mapcar (lambda (entry)
                           (cons (car entry)
                                 (make-vector (length (cdr entry)) nil)))
@@ -429,6 +413,7 @@ typos at startup rather than silently dropping events."
                   (string-prefix-p prefix (symbol-name sym)))
          (let ((rest (substring (symbol-name sym) (length prefix)))
                (found nil))
+           ;; TODO: Use cl-loop with "until found"
            (dolist (entry iface-events)
              (when-let* (((not found))
                          (iface      (car entry))
@@ -486,12 +471,22 @@ The network process is set in the CONNECTION slot of CLIENT."
     (process-send-string connection
                          (ewc-pack object request arguments))))
 
+(defun ewc--flatten-protocols (protocols)
+  (let ((ifaces (make-hash-table :test 'eq)))
+    (dolist (protocol-def protocols)
+      (dolist (iface-def (cdr protocol-def))
+        (let ((name (car iface-def)))
+          (puthash name (cdr iface-def) ifaces))))
+    (message "found %d interfaces" (hash-table-count ifaces))
+    ifaces
+    ))
+
 (defun ewc-start (protocols listener-prefix)
   "Setup ewc-client, send get-registry request and return the client.
 PROTOCOLS are the protocols as read by ewc-read. LISTENER-PREFIX is the
 prefix string of event listener functions to be registered with the
 client."
-  (let ((client (ewc-client-make :protocols protocols)))
+  (let ((client (ewc-client-make :interfaces (ewc--flatten-protocols protocols))))
     (ewc-build-listeners client listener-prefix)
     (ewc-connect client)
     (let ((display-wl (ewc-object-add client 'wl-display))

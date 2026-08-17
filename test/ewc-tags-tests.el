@@ -5,9 +5,9 @@
 
 (defun ewc-test-client ()
   "Return an `ewc-client' carrying one fake protocol/interface."
-  (ewc-client-make
-   :protocols '((test-protocol
-                  (test-iface 1 ((test-event)) ((test-request 0 8)))))))
+  (let ((ifs (make-hash-table)))
+    (puthash 'test-iface '(1 (test-event) (test-request 0 8)) ifs)
+    (ewc-client-make :interfaces ifs)))
 
 (defun ewc-test-add (client)
   "Add one new `test-iface' object to CLIENT."
@@ -17,7 +17,7 @@
   (let* ((client (ewc-test-client))
          (obj (ewc-test-add client)))
     ;; Protocol is derived from the interface by `ewc-find-protocol'.
-    (should (eq (ewc-object-protocol obj) 'test-protocol))
+    (should (eq (ewc-object-interface obj) 'test-iface))
     (should (memq 'test-iface (ewc-object-tags obj)))
     (should (equal (ewc-objects client 'test-iface) (list obj)))
     (should (eq obj (ewc-object-get client (ewc-object-id obj))))))

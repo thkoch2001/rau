@@ -21,15 +21,15 @@
   "How many times the command handler was scheduled.")
 (defvar rau-test-server-object-id nil
   "new_id for objects created by mocked river server.")
-(defvar rau-test--protocols-cache nil)
+(defvar rau-test--interfaces-cache nil)
 
-(defun rau-test--protocols ()
-  (or rau-test--protocols-cache
-      (setq rau-test--protocols-cache (rau--read-protocols))))
+(defun rau-test--interfaces ()
+  (or rau-test--interfaces-cache
+      (setq rau-test--interfaces-cache (ewc--flatten-protocols (rau--read-protocols)))))
 
 (defun rau-test-make-state ()
   "Build a fresh `rau-state' with no live connection."
-  (let ((client (ewc-client-make :protocols (rau-test--protocols))))
+  (let ((client (ewc-client-make :interfaces (rau-test--interfaces))))
     (ewc-build-listeners client "rau-on-")
     (let ((display-wl (ewc-object-add client 'wl-display))
           (registry-wl (ewc-object-add client 'wl-registry)))

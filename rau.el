@@ -489,14 +489,6 @@ when used from other files (e.g. tests)."
                request
                arguments))
 
-(defun rau--interface-version (client protocol interface)
-  "Return XML-declared version of INTERFACE in PROTOCOL."
-  (when-let* ((protocol-def (alist-get protocol
-                                       (ewc-client-protocols client)))
-              (interface-def (alist-get interface protocol-def)))
-    ;; interface-def is: (version events requests)
-    (car interface-def)))
-
 ;; TODO consider moving to ewc.el
 (defun rau--decode-string (s)
   "Decode a Wayland string S as UTF-8.
@@ -800,11 +792,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (pcase-let (((map name interface version) args))
     (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
                 (client (rau-state-client rau--state))
-                (protocols (ewc-client-protocols client))
-                (protocol (ewc-find-protocol protocols ifsym))
                 ((member interface rau--global-binds))
                 (new-id (cl-incf (ewc-client-new-id client)))
-                (xml-version (rau--interface-version client protocol ifsym))
+                (xml-version (ewc-interface-version client ifsym))
                 (bind-version
                  (if xml-version (min version xml-version) version)))
       (ewc-object-add client ifsym new-id)
