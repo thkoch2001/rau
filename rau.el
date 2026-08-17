@@ -116,7 +116,6 @@ Not instantiated directly; windows and frames include it."
 
 (cl-defstruct (rau-state (:constructor rau-state-make))
   "Holds the state of the rau Wayland client."
-  (connection nil)
   (client nil :type ewc-client)
   (pid (emacs-pid))
 
@@ -484,8 +483,8 @@ when used from other files (e.g. tests)."
 ;;; Basic helpers
 
 (defun rau--request (object-wl request &optional arguments)
-  "Send REQUEST on OBJECT-WL using the current rau Wayland connection."
-  (ewc-request (rau-state-connection rau--state)
+  "Send REQUEST on OBJECT-WL using the current rau Wayland client."
+  (ewc-request (rau-state-client rau--state)
                object-wl
                request
                arguments))
@@ -1343,21 +1342,6 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (message "Fullscreen requested, but nothing is focused"))
 
 ;;; Startup
-
-(defun rau--start-wm ()
-  "Connect to Wayland and initialize the rau state."
-  (let ((client (ewc-client-make :protocols (rau--read-protocols))))
-    (ewc-build-listeners client "rau-on-")
-    (let ((connection (ewc-connect client))
-          (display-wl (ewc-object-add client 'wl-display))
-          (registry-wl (ewc-object-add client 'wl-registry)))
-
-    (setq rau--state (rau-state-make :connection connection
-                                       :client client))
-
-    (rau--request display-wl 'get-registry
-                   `((registry . ,(ewc-object-id registry-wl)))))))
-
 ;; NOTE: No need for rau-disable since this Emacs process is serving as a
 ;; Window Manager and disabling rau while keeping the Emacs process running
 ;; would result in an unresponsive user environment.
@@ -1392,7 +1376,10 @@ Call this function once when starting Emacs inside of river."
            do (rau--set-frame-name emacs-frame))
   (add-to-list 'after-make-frame-functions #'rau--set-frame-name)
 
-  (rau--start-wm)
+  (let* ((protocols (rau--read-protocols))
+         (client (ewc-start protocols "rau-on-")))
+    (setq rau--state (rau-state-make :client client)))
+
   (rau-push-intercept-prefixes)
 
   ;; Layout signals

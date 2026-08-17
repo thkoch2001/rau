@@ -29,9 +29,13 @@
 
 (defun rau-test-make-state ()
   "Build a fresh `rau-state' with no live connection."
-  (rau-state-make
-   :connection nil
-   :client (ewc-client-make :protocols (rau-test--protocols))))
+  (let ((client (ewc-client-make :protocols (rau-test--protocols))))
+    (ewc-build-listeners client "rau-on-")
+    (let ((display-wl (ewc-object-add client 'wl-display))
+          (registry-wl (ewc-object-add client 'wl-registry)))
+
+      )
+    (rau-state-make :client client)))
 
 (defun rau-test-server-object-id ()
   "Return and increment a server new_id."
@@ -153,7 +157,7 @@ its id in rau--state client table."
         (should (length= rau-test-captured 1))
         (rau-test-last-request-should 'river-window-v1 'close)
         ;; No real connection was ever made.
-        (should (null (rau-state-connection rau--state)))))))
+        (should (null (ewc-client-connection (rau-state-client rau--state))))))))
 
 (ert-deftest rau-manage-dirty-is-captured ()
   (rau-test-with-mock
@@ -178,23 +182,16 @@ its id in rau--state client table."
       (should ran)
       (should (null (rau-state-command-queue rau--state))))))
 
-;; ---- Startup
-(ert-deftest rau-start-wm-requests-registry ()
-  (rau-test-with-mock
-    (rau--start-wm)
-    (should rau--state)
-    (rau-test-last-request-should 'wl-display 'get-registry)))
-
 ;; ---- Output
 (ert-deftest rau-setup-one-output ()
   (rau-test-with-mock
-   (rau--start-wm)
-   (rau-test-find-call-listener rau--state
-                             'wl-registry 'global
-                             '((name . 1)
-                               (interface . "river_window_manager_v1")
-                               (version . 1)))
-   (let* ((client (rau-state-client rau--state))
+   (let* ((rau--state (rau-test-make-state))
+          (_ (rau-test-find-call-listener rau--state
+                                          'wl-registry 'global
+                                          '((name . 1)
+                                            (interface . "river_window_manager_v1")
+                                            (version . 1))))
+          (client (rau-state-client rau--state))
           (wm-wl (ewc-first-object client 'river-window-manager-v1))
           (_ (rau-test-last-request-should 'wl-registry 'bind))
           (output-id (rau-test-server-object-id))

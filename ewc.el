@@ -31,9 +31,11 @@
 ;;
 ;; Main entry points:
 ;;
-;;   (ewc-connect client) -> connection
-;;   (ewc-object-add ...)    -> ewc-object
-;;   (ewc-request connection object request args)
+;; - Event listener functions with common PREFIX, e.g. "YOURAPP-on-"
+;; - Protocol XML parsing via ewc-read
+;; - ewc-start to connect and send initial get-registry request
+;; - ewc-object-add to create new wayland objects
+;; - ewc-request
 
 ;;; Code:
 
@@ -185,6 +187,7 @@ TAGS maps tag symbols to lists of ewc-object structs.
 PROTOCOLS is an alist as returned by `ewc-read'.
 RX holds incomplete incoming Wayland bytes."
   (new-id 0 :type integer)
+  (connection)
   (table (make-hash-table) :type hash-table :read-only t)
   (tags (make-hash-table :test 'eq) :type hash-table :read-only t)
   (protocols nil :type list :read-only t)
@@ -450,7 +453,7 @@ typos at startup rather than silently dropping events."
   "Connect to Wayland SOCKET using CLIENT for event dispatch.
 SOCKET defaults to the value of WAYLAND_DISPLAY.
 
-Returns a network client process."
+The network process is set in the CONNECTION slot of CLIENT."
   (when-let* ((old (get-process "emacs-wayland-client")))
     (delete-process old))
 
@@ -462,25 +465,41 @@ Returns a network client process."
                    (file-name-concat
                     (or (getenv "XDG_RUNTIME_DIR")
                         (error "XDG_RUNTIME_DIR is not set"))
-                    display))))
+                    display)))
+         (connection (make-network-process
+                      :name "emacs-wayland-client"
+                      :remote remote
+                      :service nil ;silence warning: "called without required keyword argument :service"
+                      :coding 'binary
+                      :noquery t
+                      :filter (ewc-filter client)
+                      :sentinel (lambda (_proc msg)
+                                  (message "ewc: connection sentinel: %s" msg)))))
+    (setf (ewc-client-connection client) connection)))
 
-    (make-network-process
-     :name "emacs-wayland-client"
-     :remote remote
-     :service nil ;silence warning: "called without required keyword argument :service"
-     :coding 'binary
-     :noquery t
-     :filter (ewc-filter client)
-     :sentinel (lambda (_proc msg)
-                 (message "ewc: connection sentinel: %s" msg)))))
+(defun ewc-request (client object request &optional arguments)
+  "Issue REQUEST with ARGUMENTS on OBJECT using CLIENT."
+  (let ((connection (ewc-client-connection client)))
+    (unless (and connection (process-live-p connection))
+      (error "ewc: No live Wayland connection for request %S" request))
 
-(defun ewc-request (connection object request &optional arguments)
-  "Issue REQUEST with ARGUMENTS on OBJECT using CONNECTION."
-  (unless (and connection (process-live-p connection))
-    (error "ewc: No live Wayland connection for request %S" request))
+    (process-send-string connection
+                         (ewc-pack object request arguments))))
 
-  (process-send-string connection
-                       (ewc-pack object request arguments)))
+(defun ewc-start (protocols listener-prefix)
+  "Setup ewc-client, send get-registry request and return the client.
+PROTOCOLS are the protocols as read by ewc-read. LISTENER-PREFIX is the
+prefix string of event listener functions to be registered with the
+client."
+  (let ((client (ewc-client-make :protocols protocols)))
+    (ewc-build-listeners client listener-prefix)
+    (ewc-connect client)
+    (let ((display-wl (ewc-object-add client 'wl-display))
+          (registry-wl (ewc-object-add client 'wl-registry)))
+
+      (ewc-request client display-wl 'get-registry
+                   `((registry . ,(ewc-object-id registry-wl)))))
+    client))
 
 (provide 'ewc)
 
