@@ -89,40 +89,6 @@
            ,@body)
        (rau-test-remove-advice))))
 
-;;; Inbound-event simulation helpers
-
-(defun rau-test-find-object (state interface)
-  "Find first object of INTERFACE in STATE."
-  (or (cl-find-if
-               (lambda (o) (eq (ewc-object-interface o) interface))
-               (hash-table-values (ewc-client-table
-                                   (rau-state-client state))))
-      (ert-fail (format "Did not find object of %s in state" interface))))
-
-(defun rau-test-find-listener (state interface event)
-  "Return cons (OBJECT . LISTENER) for listener of EVENT for first object
-of interface INTERFACE in STATE."
-  (if-let* ((object (rau-test-find-object state interface))
-            (listener (ewc-listener object event)))
-      (cons object listener)
-    (ert-fail (format "Did not find listener for event %s in first object of interface %s." event interface))))
-
-(defun rau-test-find-call-listener (state interface event &optional args)
-  "Find EVENT listener of first object of INTERFACE in STATE and call
-it with optional ARGS."
-  (let* ((listener-cons (rau-test-find-listener state interface event))
-         (object (car listener-cons))
-         (listener (cdr listener-cons)))
-    (funcall listener object args)))
-
-(defun rau-test-call-listener (proxy event &optional args)
-  "Call EVENT on PROXY with optional ARGS. PROXY can be an ewc-object or
-its id in rau--state client table."
-  (let ((proxy-obj (if (integerp proxy)
-                       (ewc-object-get (rau-state-client rau--state) proxy)
-                     proxy)))
-    (funcall (should (ewc-listener proxy-obj event)) proxy-obj args)))
-
 ;;; Request helpers
 
 (defun rau-test-request-equal (captured interface request &optional args)
@@ -186,38 +152,39 @@ its id in rau--state client table."
 (ert-deftest rau-setup-one-output ()
   (rau-test-with-mock
    (let* ((rau--state (rau-test-make-state))
-          (_ (rau-test-find-call-listener rau--state
-                                          'wl-registry 'global
-                                          '((name . 1)
-                                            (interface . "river_window_manager_v1")
-                                            (version . 1))))
           (client (rau-state-client rau--state))
+          (registry-wl (ewc-first-object client 'wl-registry))
+          (_ (rau-on-wl-registry-global registry-wl
+                                        '((name . 1)
+                                          (interface . "river_window_manager_v1")
+                                          (version . 1))))
           (wm-wl (ewc-first-object client 'river-window-manager-v1))
           (_ (rau-test-last-request-should 'wl-registry 'bind))
           (output-id (rau-test-server-object-id))
-          (_ (rau-test-call-listener wm-wl 'output `((id . ,output-id))))
+          (_ (rau-on-river-window-manager-v1-output wm-wl `((id . ,output-id))))
           (output-wl (should (car (ewc-objects client 'river-output-v1))))
           (_ (should (= rau-test-dirty-count 0)))
           (_ (should (length= (frame-list) 1)))
-          (_ (rau-test-call-listener output-wl 'position '((x . 42) (y . 43))))
-          (_ (rau-test-call-listener output-wl 'dimensions '((width . 44) (height . 45))))
-          (_ (rau-test-call-listener wm-wl 'manage-start))
+          (_ (rau-on-river-output-v1-position output-wl '((x . 42) (y . 43))))
+          (_ (rau-on-river-output-v1-dimensions output-wl '((width . 44) (height . 45))))
+          (_ (rau-on-river-window-manager-v1-manage-start wm-wl ()))
           (_ (rau-test-last-request-should 'river-window-manager-v1 'manage-finish))
-          (_ (rau-test-call-listener wm-wl 'render-start))
+          (_ (rau-on-river-window-manager-v1-render-start wm-wl ()))
           (_ (rau-test-last-request-should 'river-window-manager-v1 'render-finish))
           ;; emacs frame
           (win-id (rau-test-server-object-id))
-          (_ (rau-test-call-listener wm-wl 'window `((id . ,win-id))))
-          (_ (rau-test-call-listener win-id 'unreliable-pid `((unreliable-pid . ,(emacs-pid)))))
+          (_ (rau-on-river-window-manager-v1-window wm-wl `((id . ,win-id))))
+          (window-wl (should (car (ewc-objects client 'river-window-v1))))
+          (_ (rau-on-river-window-v1-unreliable-pid window-wl `((unreliable-pid . ,(emacs-pid)))))
           (_ (rau-test-last-request-should 'river-window-v1 'get-node))
           (_ (should (length= (ewc-objects client rau--tag-frame) 1)))
           (_ (should (ewc-object-get client win-id)))
-          (_ (rau-test-call-listener wm-wl 'manage-start))
+          (_ (rau-on-river-window-manager-v1-manage-start wm-wl ()))
           (_ (rau-test-last-request-should 'river-window-manager-v1 'manage-finish))
           (_ (should (rau-test-some-request 'river-window-v1 'set-tiled)))
           (_ (should (rau-test-some-request 'river-window-v1 'inform-maximized)))
           (_ (should (rau-test-some-request 'river-window-v1 'propose-dimensions '((width . 44) (height . 45)))))
-          (_ (rau-test-call-listener wm-wl 'render-start))))))
+          (_ (rau-on-river-window-manager-v1-render-start wm-wl ()))))))
 
 ;; ---- Reconciliation
 (ert-deftest rau-reconcile-closes-killed-window ()

@@ -276,11 +276,6 @@ Returns the newly created object."
                           event
                           (ewc-object-interface object))))
 
-(defun ewc-listener (object event)
-  "Return listener for EVENT on OBJECT."
-  (aref (ewc-object-listeners object)
-        (ewc--event-index object event)))
-
 ;;; Wire messages
 
 (defvar ewc-msg-head
