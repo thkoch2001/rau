@@ -191,7 +191,7 @@ RX holds incomplete incoming Wayland bytes."
 
 (defun ewc-interface-version (client interface)
   "Return the XML-declared version of INTERFACE in CLIENT."
-  (when-let ((def (gethash interface (ewc-client-interfaces client))))
+  (when-let* ((def (gethash interface (ewc-client-interfaces client))))
     (car def)))
 
 (define-inline ewc-object-get (client id)
