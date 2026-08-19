@@ -287,8 +287,7 @@ within BODY."
 Return non-nil if the focus state changed.  Return nil without
 changing state when the window has no parameters yet, so a later
 hook run can retry."
-  (if-let* ((win (ewc-object-data window-wl))
-            (frame-wl (rau--frame-displaying-win win)))
+  (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl)))
       (rau--focus-window state window-wl frame-wl)
     (rau-log "rau: cannot focus window that is not displayed")
     nil))
@@ -490,10 +489,10 @@ Return nil if S is nil or empty."
            for f = (ewc-object-data frame-wl)
            thereis (and f (funcall predicate f) frame-wl)))
 
-(defun rau--frame-displaying-win (win)
-  "Return the ewc frame object displaying window WIN."
-  (when-let* ((p (rau-window-params win))
-              (emacs-frame (rau-window-parameters-emacs-frame p))
+(defun rau--frame-wl-for-window-wl (window-wl)
+  "Return the ewc frame object displaying WINDOW-WL."
+  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
+              (emacs-frame (window-frame emacs-window))
               ((frame-live-p emacs-frame)))
     (frame-parameter emacs-frame 'rau-frame-wl)))
 
@@ -926,7 +925,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                          (ewc-object-get (rau-state-client rau--state) output))
                     (when-let* ((w (ewc-object-data window-wl))
                                 ((rau-window-p w))
-                                (frame-wl (rau--frame-displaying-win w))
+                                (frame-wl (rau--frame-wl-for-window-wl window-wl))
                                 (frame (ewc-object-data frame-wl)))
                       (rau-frame-output-wl frame))
                     (when-let* ((cur (rau--focus-current rau--state))
@@ -1052,8 +1051,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (when (rau--focus-frame rau--state window-wl)
           (setf (rau-state-focus-dirty rau--state) t)))
        ((ewc-object-tagged-p window-wl rau--tag-window)
-        (if-let* ((w (ewc-object-data window-wl))
-                  (frame-wl (rau--frame-displaying-win w)))
+        (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl)))
             (when (rau--focus-window rau--state window-wl frame-wl)
               (setf (rau-state-focus-dirty rau--state) t))
           (message "Window interaction for window without frame")))))))
@@ -1267,7 +1265,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (if (not (eq (rau-window-state win) 'active))
           (rau--request window-wl 'hide)
 
-        (if-let* ((frame-wl (rau--frame-displaying-win win))
+        (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
                   (frame (ewc-object-data frame-wl))
                   (output-wl (rau-frame-output-wl frame))
                   (out (ewc-object-data output-wl))
