@@ -805,22 +805,26 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (message "rau: WM event finished"))
 
 (defun rau-on-river-window-manager-v1-manage-start (wm-wl _)
-  (unwind-protect
-      (condition-case err
-          (rau--reconcile rau--state)
-        (error
-         (message "rau reconcile error: %S" err)))
-    (rau--request wm-wl 'manage-finish)))
+  (rau--enqueue
+   (lambda ()
+     (unwind-protect
+         (condition-case err
+             (rau--reconcile rau--state)
+           (error
+            (message "rau reconcile error: %S" err)))
+       (rau--request wm-wl 'manage-finish)))))
 
 (defun rau-on-river-window-manager-v1-render-start (wm-wl _)
-  (unwind-protect
-      (condition-case err
-          (progn
-            (rau--render-frames rau--state)
-            (rau--render-windows rau--state))
-        (error
-         (message "rau render error: %S" err)))
-    (rau--request wm-wl 'render-finish)))
+  (rau--enqueue
+   (lambda ()
+     (unwind-protect
+         (condition-case err
+             (progn
+               (rau--render-frames rau--state)
+               (rau--render-windows rau--state))
+           (error
+            (message "rau render error: %S" err)))
+       (rau--request wm-wl 'render-finish)))))
 
 (defun rau-on-river-window-manager-v1-session-locked (_wm-wl _)
   (message "rau: WM event session-locked"))
