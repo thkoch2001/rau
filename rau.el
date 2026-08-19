@@ -86,6 +86,7 @@ Not instantiated directly; windows and frames include it."
                            (:include rau-surface))
   "State for a regular external window."
   (state 'starting) ;; 'active 'killed
+  buffer
   params
   actual-width
   actual-height
@@ -179,11 +180,15 @@ within BODY."
                            (frame-parameter emacs-frame 'name))
     (set-frame-parameter emacs-frame 'name (make-temp-name "rau-frame-"))))
 
-(defun rau--find-buffer-for-window (window-wl)
+(defun rau--buffer-for-window-wl (window-wl)
   "Return Emacs buffer associated with WINDOW-WL."
-  (seq-find (lambda (buf)
-              (eq (buffer-local-value 'rau--window-wl buf) window-wl))
-            (buffer-list)))
+  (when-let* ((window (ewc-object-data window-wl)))
+    (rau-window-buffer window)))
+
+(defun rau--emacs-window-for-window-wl (window-wl)
+  "Return Emacs window associated with WINDOW-WL."
+  (when-let ((buffer (rau--buffer-for-window-wl window-wl)))
+    (get-buffer-window buffer t)))
 
 (defun rau--make-buffer-name (app-id title)
   "Return a buffer name string using APP-ID and TITLE."
@@ -265,23 +270,6 @@ within BODY."
 (defun rau--is-rau-buffer (buf)
   "Return non-nil if BUF is a rau buffer."
   (eq (buffer-local-value 'major-mode buf) 'rau-mode))
-
-;; TODO: Consider showing something useful in rau buffers
-;; (title/app-id/dimensions) instead of an empty read-only buffer — it makes
-;; debugging focus/placement much easier.
-;;
-;; TODO: consider (set-window-dedicated-p win t) on the window showing a rau
-;; buffer, so an accidental C-x b doesn't silently detach the external surface
-;; (as it stands the surface just hides, which is confusing).
-(defun rau--create-buffer (window-wl)
-  "Create and display a rau buffer for Wayland WINDOW-WL."
-  (or (rau--find-buffer-for-window window-wl)
-      (let ((buffer (get-buffer-create (make-temp-name "rau-window-"))))
-        (with-current-buffer buffer
-          (rau-mode)
-          (setq-local rau--window-wl window-wl))
-        (display-buffer buffer)
-        buffer)))
 
 (defvar rau--last-focused nil
   "Last buffer for which a focus request was sent.")
@@ -646,12 +634,6 @@ TARGET-WL is either a WINDOW-WL or FRAME-WL."
     ((or 'fullscreen 'exiting) (rau-fs-window fs))
     (_ nil)))
 
-(defun rau--select-buffer-for-window (window-wl)
-  "Select the Emacs window displaying Wayland WINDOW-WL, if visible."
-  (when-let* ((buf (rau--find-buffer-for-window window-wl))
-              (emacs-window (get-buffer-window buf t)))
-    (select-window emacs-window 'norecord)))
-
 ;;; XKB keysym resolution
 
 (defvar rau--xkb-keysym-alist
@@ -875,7 +857,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (when (ewc-object-tagged-p window-wl rau--tag-window)
       (rau--enqueue
        (lambda ()
-         (when-let* ((buf (rau--find-buffer-for-window window-wl)))
+         (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
            (kill-buffer buf)))))
     (rau--focus-invalidate rau--state window-wl)
 
@@ -914,7 +896,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (when (rau-window-p data)
         (rau--enqueue
          (lambda ()
-           (when-let* ((buf (rau--find-buffer-for-window window-wl)))
+           (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
              (with-current-buffer buf
                (rename-buffer
                 (rau--make-buffer-name
@@ -976,7 +958,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
               ((rau-window-p data)))
     (rau--enqueue
      (lambda ()
-       (when-let* ((buf (rau--find-buffer-for-window window-wl)))
+       (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
          (with-current-buffer buf
            (bury-buffer)))))))
 
@@ -1007,10 +989,23 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (rau--enqueue
        (lambda ()
          ;; Confirm that the Emacs-side buffer for the window was created.
-         (when-let* ((win (ewc-object-data window-wl)))
-           (rau--create-buffer window-wl)
-           (setf (rau-window-state win) 'active)
-           (rau--mark-manage-dirty rau--state)))))))
+         ;; TODO: Consider showing something useful in rau buffers
+         ;; (title/app-id/dimensions) instead of an empty read-only buffer — it makes
+         ;; debugging focus/placement much easier.
+         ;;
+         ;; TODO: consider (set-window-dedicated-p win t) on the window showing a rau
+         ;; buffer, so an accidental C-x b doesn't silently detach the external surface
+         ;; (as it stands the surface just hides, which is confusing).
+         (let* ((win (ewc-object-data window-wl)))
+           (unless (rau--buffer-for-window-wl window-wl)
+             (let ((buffer (get-buffer-create (make-temp-name "rau-window-"))))
+               (with-current-buffer buffer
+                 (rau-mode)
+                 (setq-local rau--window-wl window-wl))
+               (display-buffer buffer)
+               (setf (rau-window-buffer win) buffer)))
+
+           (setf (rau-window-state win) 'active)))))))
 
 ;;;; river-output-v1 listeners
 (defun rau-on-river-output-v1-removed (output-wl _)
@@ -1132,16 +1127,17 @@ KEY may be an integer codepoint, a symbol, or a string key name."
             (pcase (rau-window-state win)
               ;; nothing to do for window-state 'starting
               ('active
-               (when-let* ((params (rau-window-params win)))
-                 ;; TODO: This gets sent on every loop for all windows?
-                 (rau--request window-wl
-                                'set-tiled
-                                `((edges . ,rau--edges-all)))
-
-                 (rau--request window-wl
-                                'propose-dimensions
-                                `((width . ,(rau-window-parameters-w params))
-                                  (height . ,(rau-window-parameters-h params))))))
+               ;; TODO: This gets sent on every loop for all windows?
+               (rau--request window-wl
+                             'set-tiled
+                             `((edges . ,rau--edges-all)))
+               (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl)))
+                 (pcase-let ((`(,left ,top ,right ,bottom)
+                               (window-inside-absolute-pixel-edges emacs-window)))
+                   (rau--request window-wl
+                                 'propose-dimensions
+                                 `((width . ,(- right left))
+                                   (height . ,(- bottom top)))))))
               ('killed
                (rau--request window-wl 'close)))))
 
@@ -1223,7 +1219,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (unless (and frame-wl target-wl (eq target-wl frame-wl))
           (rau--enqueue
            (lambda ()
-             (rau--select-buffer-for-window target-wl))))
+             (when-let* ((emacs-window (rau--emacs-window-for-window-wl target-wl)))
+               (select-window emacs-window 'norecord)))))
 
         (setf (rau-state-focus-dirty state) nil)))))
 
@@ -1266,27 +1263,26 @@ KEY may be an integer codepoint, a symbol, or a string key name."
       (if (not (eq (rau-window-state win) 'active))
           (rau--request window-wl 'hide)
 
-        (if-let* ((params (rau-window-params win))
-                  (frame-wl (rau--frame-displaying-win win))
+        (if-let* ((frame-wl (rau--frame-displaying-win win))
                   (frame (ewc-object-data frame-wl))
                   (output-wl (rau-frame-output-wl frame))
-                  (out (ewc-object-data output-wl)))
-            (progn
+                  (out (ewc-object-data output-wl))
+                  (emacs-window (rau--emacs-window-for-window-wl window-wl)))
+            (pcase-let ((`(,left ,top ,right ,bottom)
+                        (window-inside-absolute-pixel-edges emacs-window)))
               (rau--request window-wl 'show)
 
               (when node-wl
                 (rau--request node-wl 'set-position
-                             `((x . ,(+ (rau-window-parameters-x params)
-                                        (rau-output-x out)))
-                               (y . ,(+ (rau-window-parameters-y params)
-                                        (rau-output-y out)))))
+                             `((x . ,(+ left (rau-output-x out)))
+                               (y . ,(+ top (rau-output-y out)))))
 
                 (rau--request node-wl 'place-top))
 
               (let ((clip-w (or (rau-window-actual-width win)
-                                (rau-window-parameters-w params)))
+                                (- right left)))
                     (clip-h (or (rau-window-actual-height win)
-                                (rau-window-parameters-h params))))
+                                (- bottom top))))
                 (rau--request window-wl 'set-clip-box
                              `((x . 0)
                                (y . 0)
