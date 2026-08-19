@@ -58,15 +58,6 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   (previous nil   :type ewc-object :read-only t)
   (window   nil   :type ewc-object :read-only t))
 
-(cl-defstruct (rau-window-parameters
-               (:constructor rau-window-parameters-make))
-  "Window parameters describing where an external surface should be placed."
-  emacs-frame
-  x
-  y
-  w
-  h)
-
 (cl-defstruct (rau-output (:constructor rau-output-make))
   "State for a River output."
   (ls-output-wl nil :type ewc-object)
@@ -87,7 +78,6 @@ Not instantiated directly; windows and frames include it."
   "State for a regular external window."
   (state 'starting) ;; 'active 'killed
   buffer
-  params
   actual-width
   actual-height
   app-id)
@@ -202,38 +192,6 @@ within BODY."
   "Execute commands enqueed by event listeners."
   (unless rau--handling-commands
     (let ((rau--handling-commands t))
-      ;; Update WM window parameters from the current Emacs window layout.
-      (condition-case err
-          ;; TODO consider adding back? Was lost in refactoring.
-          ;; (setq rau--last-focused nil)
-          (let ((params (make-hash-table :test 'eql))
-                (changed nil))
-            (dolist (emacs-frame (frame-list))
-              (dolist (emacs-window (window-list emacs-frame))
-                (when-let* ((buffer (window-buffer emacs-window))
-                            ((rau--is-rau-buffer buffer))
-                            (window-wl (buffer-local-value 'rau--window-wl buffer)))
-                  (pcase-let ((`(,left ,top ,right ,bottom)
-                               (window-inside-absolute-pixel-edges emacs-window)))
-                    (puthash (ewc-object-id window-wl)
-                             (rau-window-parameters-make
-                              :emacs-frame emacs-frame
-                              :x left
-                              :y top
-                              :w (- right left)
-                              :h (- bottom top))
-                             params)))))
-            (rau--do rau--tag-window (window-wl win state)
-              (let* ((id (ewc-object-id window-wl))
-                     (new (gethash id params))
-                    (old (rau-window-params win)))
-                (unless (equal old new)
-                  (setf (rau-window-params win) new)
-                  (setq changed t))))
-            (when changed
-              (rau--mark-manage-dirty state)))
-        (error
-         (message "rau update window parameters error: %S" err)))
       ;; Drain the command queue.
       (while-let ((cmd (pop (rau-state-command-queue state))))
         (condition-case err
@@ -284,9 +242,7 @@ within BODY."
 
 (defun rau--update-focus-for-window (state window-wl)
   "Focus external window WINDOW-WL in STATE if it is displayed.
-Return non-nil if the focus state changed.  Return nil without
-changing state when the window has no parameters yet, so a later
-hook run can retry."
+Return non-nil if the focus state changed."
   (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl)))
       (rau--focus-window state window-wl frame-wl)
     (rau-log "rau: cannot focus window that is not displayed")
