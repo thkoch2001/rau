@@ -1,0 +1,97 @@
+* Râu - Wayland Window Manager in Emacs
+
+Râu is written entirely in Elisp, even the communication with the wayland
+socket. External (to Emacs) Wayland Windows feel like Emacs buffers. Thus an
+Emacs user can use the already known keybindings and mechanisms from Emacs
+to manage windows.
+
+** How does it work?
+
+Every output (screen, monitor) gets one fullscreen Emacs frame assigned that
+stays in the background. Every external Wayland Window gets one Emacs buffer
+assigned. When this buffer is displayed, the external Wayland Window for this
+buffer gets displayed exactly on top of the buffer.
+
+** Status
+
+I already use Râu however there are still some ~minor~ issues:
+
+- It takes some clicking until all focus and window states "normalize" after I
+  dock my laptop and two additional outputs appear.
+- An Emacs context menu (e.g. from flyspell) blocks rau.
+- Every other day there is an endless loop of keypresses and I have to switch
+  to a tty and back to stop it.
+  - This seems to happen in alacritty which sends a new window title after
+    each return even if the title did not change. River then triggers a manage
+    cycle and if the repeat key of the return keypress triggers this could
+    quickly lead into an avalange of a seemingly endless stream of manage
+    cycles.
+- No support for floating windows.
+- XDG key bindings still go to Emacs when the session is locked.
+- No protection against accidental closing of Emacs, just one C-x C-c away.
+- Tab titles don't get updated when in background.
+- Clicking on a x-popup-menu or x-popup-dialog freezes Râu and Emacs needs to
+  be restarted.
+
+** Installation
+
+(TODO: more details needed...)
+
+This is how I do it:
+
+1. Install [[https://isaacfreund.com/software/river/][River]] and have it start as the desktop session leader.
+2. Put this in river's init file, assuming you use systemd:
+
+#+BEGIN_SRC sh
+#!/bin/sh
+
+systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP WAYLAND_DISPLAY DISPLAY REKA_LOGLEVEL
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --all
+fi
+
+exec systemctl --user --wait start rau-emacs.service
+#+END_SRC
+
+3. Install the rau emacs package.
+4. Provide a rau-emacs.service unit that starts emacs and e.g. additionally
+   loads a rau.el file:
+
+#+BEGIN_SRC emacs-lisp
+  (require 'rau)
+  (rau-enable) ; must be called after changes to rau-intercept-prefixes
+#+END_SRC
+
+Check my [[https://github.com/thkoch2001/general-config][dotfiles]] for the time being for further details.
+
+** Bugreports, development
+
+I'm looking for a better place for this code than Github.
+
+** Name
+
+"Râu" means "River" in Romanian and is not to be confused with "rău" meaning
+"bad", "vile" or "vicious" nor with the German word "rau" meaning "rough", "harsh" or "raw".
+
+** Acknowledgements
+
+- Michael Bauer for the [[http://perma-curious.eu/repo-ewx/][Emacs Wayland Client]], presented at [[https://emacsconf.org/2022/talks/wayland/][EmacsConf 2022]].
+- Tazjin for [[https://codeberg.org/tazjin/reka][Reka]], predecessor of Râu, which however used Rust to bind to libwayland.
+- Isaac Freund for [[https://isaacfreund.com/software/river/][River]], which makes writing a Wayland WM very easy.
+
+I used Qwen AI to review my commits, analyze errors and provide me with
+step-by-step instructions for major refactorings of this code. Every line of
+code was written or carefully reviewed by me.
+
+** Alternatives
+
+Check the category [[https://www.emacswiki.org/emacs/CategoryWindowManager][Window Manager]] in the Emacs Wiki for alternatives to Râu.
+
+** TODO
+- avoid user accidentally closing emacs, e.g. with confirm-kill-emacs
+- smaller reconcile functions that check whether requests should be sent
+- remove bindings reconciliation and leave it to the user to call bindings
+  after reka-enable
+*** Ideas
+- https://joshblais.com/blog/i-built-a-launcher-in-emacs/
+- Try filechooser.el https://codeberg.org/rahguzar/filechooser/pulls/23
