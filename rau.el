@@ -707,14 +707,12 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;; Emacs handler functions for hooks
 
-(defun rau--external-window-change-handler ()
-  ;; TODO: mark the dirty window and skip unmarked windows during reconcile
-  ;; (let* ((emacs-window (selected-window))
-  ;;        (buffer (window-buffer emacs-window))
-  ;;        (window-wl (buffer-local-value 'rau--window-wl buffer))
-  ;;        (window (ewc-object-data window-wl))
-  ;;        (title (rau-surface-title window)))
-  ;;   (message "change handler for %s" title))
+(defun rau--window-configuration-change-handler ()
+  "Schedule a river manage cycle and thus a reconciliation cycle.
+This needs to be added to the global hook since local hooks don't get
+called for windows that disappear.  Also window-size-change-functions
+does not get called when minibuffer expands and thus minibuffer ends up
+below external window."
   (rau--mark-manage-dirty rau--state))
 
 ;;; Listeners
@@ -970,17 +968,11 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                (with-current-buffer buffer
                  (rau-mode)
                  (setq-local rau--window-wl window-wl)
-                 (if-let* ((emacs-window (display-buffer buffer)))
-                     (progn
-                       ;; Tried 'window-size-change-functions but it does not
-                       ;; fire when minibuffer expands and thus minibuffer ends
-                       ;; up below external window.
-                       ;; TODO: consider (set-window-dedicated-p win t) on the window showing a rau
-                       ;; buffer, so an accidental C-x b doesn't silently detach the external surface
-                       ;; (as it stands the surface just hides, which is confusing).
-                       ;; (set-window-dedicated-p emacs-window 1)
-                       (add-hook 'window-configuration-change-hook
-                                 #'rau--external-window-change-handler 0 t))
+                 (unless (display-buffer buffer)
+                   ;; TODO: consider (set-window-dedicated-p win t) on the window showing a rau
+                   ;; buffer, so an accidental C-x b doesn't silently detach the external surface
+                   ;; (as it stands the surface just hides, which is confusing).
+                   ;; (set-window-dedicated-p emacs-window 1)
                    (error "display-buffer failed for window-wl %S buffer %S." window-wl buffer)))
                (setf (rau-window-buffer win) buffer)))
 
@@ -1345,6 +1337,9 @@ Call this function once when starting Emacs inside of river."
     (setq rau--state (rau-state-make :client client)))
 
   (rau-push-intercept-prefixes)
+
+  ;; Layout signals
+  (add-hook 'window-configuration-change-hook #'rau--window-configuration-change-handler)
 
   ;; Focus signals
   (add-hook 'window-selection-change-functions #'rau--update-focus-request)
