@@ -114,10 +114,7 @@ Not instantiated directly; windows and frames include it."
   (bindings (make-hash-table :test 'equal))
 
   ;;; Focus tracking.
-  ;; one of 'lost 'window 'frame
-  (focus-state 'lost :type symbol)
-  (focused-window nil :type ewc-object)
-  (focused-frame nil :type ewc-object)
+  (focused-surface-id -1)
   ;; set only by window_interaction event
   (focus-dirty nil)
 
@@ -125,7 +122,8 @@ Not instantiated directly; windows and frames include it."
   (pending-frames 0)
 
   ;; Lambda command queue: list of LAMBDA.
-  (command-queue nil))
+  (command-queue nil)
+  (command-queue-after-manage nil))
 
 
 ;;; Surface tags
@@ -201,14 +199,14 @@ within BODY."
       (when (or rau--pending-handler
                 (rau-state-command-queue state))
         (setq rau--pending-handler nil)
-        (rau--schedule-command-handler))
-      (unless no-focus-update
-        (run-at-time nil nil #'rau--update-focus-request)))))
+        (rau--schedule-command-handler)))))
 
 ;; Major mode for rau-managed buffers
 (defvar-local rau--window-wl nil
   "Window object for this `rau-mode' buffer.")
 
+
+;; TODO: move to handler section
 (defun rau--buffer-killed ()
   "Request closing of the associated Wayland surface when a rau buffer is killed."
   (when-let* ((rau--window-wl)
@@ -225,9 +223,6 @@ within BODY."
   (setq-local left-fringe-width 0
               right-fringe-width 0))
 
-(defun rau--is-rau-buffer (buf)
-  "Return non-nil if BUF is a rau buffer."
-  (eq (buffer-local-value 'major-mode buf) 'rau-mode))
 
 (defvar rau--last-focused nil
   "Last buffer for which a focus request was sent.")
@@ -240,30 +235,37 @@ within BODY."
        (zerop (minibuffer-depth))
        (zerop (recursion-depth))))
 
-(defun rau--update-focus-for-window (state window-wl)
-  "Focus external window WINDOW-WL in STATE if it is displayed.
-Return non-nil if the focus state changed."
-  (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl)))
-      (rau--focus-window state window-wl frame-wl)
-    (rau-log "rau: cannot focus window that is not displayed")
-    nil))
-
-(defun rau--update-focus-request (&rest _)
+;; TODO move to hook handlers section
+(defun rau--update-focus-request (&rest args)
   "Reconcile Wayland focus with the selected window."
-  (when-let* ((state rau--state))
-    (let ((buf (window-buffer (selected-window)))
-          changed)
-      (unless (eq buf rau--last-focused)
-        (setq changed
-              (cond
-               ((and (rau--is-rau-buffer buf) (rau--focus-change-allowed-p))
-                (when-let* ((window-wl (buffer-local-value 'rau--window-wl buf)))
-                  (rau--update-focus-for-window state window-wl)))
-               (t (rau--focus-switch-to-frame state))))
-        (when changed
-          (setq rau--last-focused buf)
-          (rau--mark-manage-dirty state)))
-      changed)))
+  (rau-log "update-focus-request %S" args)
+  (when-let* ((_ (rau--focus-change-allowed-p))
+              (state rau--state)
+              (emacs-window (selected-window))
+              (buffer (window-buffer emacs-window))
+              (_ (not (eq buffer rau--last-focused))))
+
+    ;; TODO: refactor because the bodies are equal
+    ;; switch to external window
+    (if-let* ((window-wl (buffer-local-value 'rau--window-wl buffer))
+              (object-id (ewc-object-id window-wl)))
+        (progn
+          (rau-log "update-focus-request: external window")
+          (setf (rau-state-focus-dirty state) t
+                (rau-state-focused-surface-id state) object-id)
+          (rau--mark-manage-dirty state))
+      ;; switching to emacs buffer, focus request only needed if we were on
+      ;; external window before
+      (when-let* ((_ rau--last-focused)
+                  (_ (null (buffer-local-value 'rau--window-wl rau--last-focused)))
+                  (emacs-frame (window-frame emacs-window))
+                  (frame-wl (frame-parameter emacs-frame 'rau-frame-wl))
+                  (object-id (ewc-object-id frame-wl)))
+        (rau-log "update-focus-request: emacs buffer")
+        (setf (rau-state-focus-dirty state) t
+              (rau-state-focused-surface-id state) object-id)
+        (rau--mark-manage-dirty state)))
+    (setf rau--last-focused buffer)))
 
 (defconst rau--modifier-bits
   '((shift   . 1)
@@ -490,6 +492,10 @@ used in event listeners."
         (append (rau-state-command-queue rau--state) (list fn)))
   (rau--schedule-command-handler))
 
+(defun rau--enqueue-after-manage (fn)
+  (setf (rau-state-command-queue-after-manage rau--state)
+        (append (rau-state-command-queue-after-manage rau--state) (list fn))))
+
 ;;; manage-dirty coalescing
 
 (defun rau--mark-manage-dirty (state)
@@ -511,74 +517,34 @@ used in event listeners."
 
 ;;; Focus helpers
 
-(defun rau--focus-frame (state frame-wl)
-  "Focus FRAME-WL in STATE.
-Return non-nil if the focus state changed."
-  (let ((changed
-         (not (and (eq (rau-state-focus-state state) 'frame)
-                   (eq
-                    (rau-state-focused-frame state)
-                    frame-wl)))))
-    (setf (rau-state-focus-state state) 'frame
-          (rau-state-focused-frame state) frame-wl
-          (rau-state-focused-window state) nil)
-    changed))
-
-(defun rau--focus-window (state window-wl frame-wl)
-  "Focus WINDOW-WL on FRAME-WL in STATE.
-Return non-nil if the focus state changed."
-  (let ((changed
-         (not (and (eq (rau-state-focus-state state) 'window)
-                   (eq
-                    (rau-state-focused-window state)
-                    window-wl)
-                   (eq
-                    (rau-state-focused-frame state)
-                    frame-wl)))))
-    (setf (rau-state-focus-state state) 'window
-          (rau-state-focused-window state) window-wl
-          (rau-state-focused-frame state) frame-wl)
-    changed))
-
 (defun rau--focus-switch-to-frame (state)
-  "Switch focus from an external window back to its Emacs frame.
-Return non-nil if the focus state changed."
-  (when (eq (rau-state-focus-state state) 'window)
-    (if (rau-state-focused-frame state)
-        (setf (rau-state-focus-state state) 'frame
-              (rau-state-focused-window state) nil)
-      (setf (rau-state-focus-state state) 'lost
-            (rau-state-focused-window state) nil
-            (rau-state-focused-frame state) nil))
-    t) ;; TODO: Why this t here? Is it needed?
-  )
+  "Switch focus from an external window back to its Emacs frame."
+  (when-let* ((surface-id (rau-state-focused-surface-id state))
+              (client (rau-state-client state))
+              (surface-wl (ewc-object-get client surface-id))
+              (ewc-object-tagged-p surface-wl rau--tag-window)
+              (frame-wl (rau--frame-wl-for-window-wl surface-wl))
+              (frame-id (ewc-object-id frame-wl)))
+    (rau-log "switch to frame")
+    (setf (rau-state-focus-dirty state) t
+          (rau-state-focused-surface-id state) frame-id)))
 
 (defun rau--focus-current (state)
   "Return current focus as (TARGET-WL . FRAME-WL), if any.
 TARGET-WL is either a WINDOW-WL or FRAME-WL."
-  (pcase (rau-state-focus-state state)
-    ('window
-     (when-let* ((window-wl (rau-state-focused-window state))
-                (frame-wl (rau-state-focused-frame state)))
-       (cons window-wl frame-wl)))
-    ('frame
-     (when-let* ((frame-wl (rau-state-focused-frame state)))
-       (cons frame-wl frame-wl)))
-    (_ nil)))
+  (let* ((client (rau-state-client state))
+         (surface-id (rau-state-focused-surface-id state))
+         (surface-wl (ewc-object-get client surface-id)))
+    (cond
+     ((ewc-object-tagged-p surface-wl rau--tag-frame)
+      (cons surface-wl surface-wl))
 
-(defun rau--focus-invalidate (state target-wl)
-  "Invalidate TARGET-WL in STATE's focus tracking, e.g. after close."
-  (cond
-   ((and (rau-state-focused-frame state)
-         (eq (rau-state-focused-frame state) target-wl))
-    (setf (rau-state-focus-state state) 'lost
-          (rau-state-focused-frame state) nil
-          (rau-state-focused-window state) nil))
+     ((ewc-object-tagged-p surface-wl rau--tag-window)
+      (cons
+       surface-wl
+       (rau--frame-wl-for-window-wl surface-wl)))
 
-   ((and (rau-state-focused-window state)
-         (eq (rau-state-focused-window state) target-wl))
-    (setf (rau-state-focus-state state) 'frame
-          (rau-state-focused-window state) nil))))
+     (t (error "surface is neither frame nor window: %S" (ewc-object-interface surface-wl))))))
 
 ;;; Fullscreen helpers
 
@@ -723,6 +689,7 @@ below external window."
 ;;;; wl-display listeners
 ;; TODO handle individual args and decode the message string with
 ;; rau--decode-string
+;; TODO Make all handlers private: rau--on-...
 (defun rau-on-wl-display-error (_display-wl args)
   (message "wl_display error: %S" args))
 
@@ -777,7 +744,11 @@ below external window."
              (rau--reconcile rau--state)
            (error
             (message "rau reconcile error: %S" err)))
-       (rau--request wm-wl 'manage-finish)))))
+       (rau--request wm-wl 'manage-finish)
+
+       (setf (rau-state-command-queue rau--state)
+             (append (rau-state-command-queue rau--state) (rau-state-command-queue-after-manage rau--state))
+             (rau-state-command-queue-after-manage rau--state) nil)))))
 
 (defun rau-on-river-window-manager-v1-render-start (wm-wl _)
   (rau--enqueue
@@ -795,6 +766,7 @@ below external window."
   (message "rau: WM event session-locked"))
 
 (defun rau-on-river-window-manager-v1-session-unlocked (_wm-wl _)
+  ;; TODO: mark focus dirty
   (message "rau: WM event session-unlocked"))
 
 (defun rau-on-river-window-manager-v1-window (_wm-wl args)
@@ -827,10 +799,20 @@ below external window."
       (rau--enqueue
        (lambda ()
          (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
-           (kill-buffer buf)))))
-    (rau--focus-invalidate rau--state window-wl)
+           (kill-buffer buf)
+           ;; give focus to emacs unless the new buffer is also an external
+           ;; window
+           (unless (buffer-local-value 'rau--window-wl (current-buffer))
+             (when-let* ((emacs-frame (selected-frame))
+                         (frame-wl (frame-parameter emacs-frame 'rau-frame-wl))
+                         (frame-id (ewc-object-id frame-wl)))
+               (setf (rau-state-focus-dirty rau--state) t
+                     (rau-state-focused-surface-id rau--state) frame-id)))))))
 
     ;; Reset fullscreen on output if window was fullscreen.
+    ;;
+    ;; TODO: This only makes sense if the closed surface was a window, so move
+    ;; in the above when?
     (rau--do 'river-output-v1 (output-wl out rau--state)
       (when (eq (rau--fs-window (rau-output-fullscreen out)) window-wl)
         (setf (rau-output-fullscreen out) (rau-fs))))
@@ -889,8 +871,7 @@ below external window."
                 (or (and (integerp output)
                          (not (zerop output))
                          (ewc-object-get (rau-state-client rau--state) output))
-                    (when-let* ((w (ewc-object-data window-wl))
-                                ((rau-window-p w))
+                    (when-let* (((ewc-object-tagged-p window-wl rau--tag-window))
                                 (frame-wl (rau--frame-wl-for-window-wl window-wl))
                                 (frame (ewc-object-data frame-wl)))
                       (rau-frame-output-wl frame))
@@ -909,22 +890,21 @@ below external window."
                   (_ nil))))
           (setf (rau-output-fullscreen out)
                 (rau-fs :state 'requested
-                         :new window-wl
-                         :previous previous)))))))
+                        :new window-wl
+                        :previous previous)))))))
 
 (defun rau-on-river-window-v1-exit-fullscreen-requested (window-wl _)
   (rau--do 'river-output-v1 (output-wl out rau--state)
-    (let ((fs (rau-output-fullscreen out)))
-      (when (and (member (rau-fs-state fs)
-                         '(requested fullscreen))
-                 (eq (rau--fs-window fs) window-wl))
-        (setf (rau-output-fullscreen out)
-              (rau-fs :state 'exiting
-                       :window (rau--fs-window fs)))))))
+           (let ((fs (rau-output-fullscreen out)))
+             (when (and (member (rau-fs-state fs)
+                                '(requested fullscreen))
+                        (eq (rau--fs-window fs) window-wl))
+               (setf (rau-output-fullscreen out)
+                     (rau-fs :state 'exiting
+                             :window (rau--fs-window fs)))))))
 
 (defun rau-on-river-window-v1-minimize-requested (window-wl _)
-  (when-let* ((data (ewc-object-data window-wl))
-              ((rau-window-p data)))
+  (when (ewc-object-tagged-p window-wl rau--tag-window)
     (rau--enqueue
      (lambda ()
        (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
@@ -980,6 +960,7 @@ below external window."
 
 ;;;; river-output-v1 listeners
 (defun rau-on-river-output-v1-removed (output-wl _)
+  ;; TODO: check whether we lost focus
   (let ((client (rau-state-client rau--state)))
     (rau--do rau--tag-frame (frame-wl frame rau--state)
       (when (eq (rau-frame-output-wl frame) output-wl)
@@ -1013,16 +994,11 @@ below external window."
 ;;;; river-seat-v1 listener
 (defun rau-on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
-    (when-let* ((window-wl (ewc-object-get (rau-state-client rau--state) window)))
-      (cond
-       ((ewc-object-tagged-p window-wl rau--tag-frame)
-        (when (rau--focus-frame rau--state window-wl)
-          (setf (rau-state-focus-dirty rau--state) t)))
-       ((ewc-object-tagged-p window-wl rau--tag-window)
-        (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl)))
-            (when (rau--focus-window rau--state window-wl frame-wl)
-              (setf (rau-state-focus-dirty rau--state) t))
-          (message "Window interaction for window without frame")))))))
+    (rau-log "last focused surface id: %d" (rau-state-focused-surface-id rau--state) )
+    (unless (equal window (rau-state-focused-surface-id rau--state))
+      (rau-log "window interaction with %d" window)
+      (setf (rau-state-focus-dirty rau--state) t
+            (rau-state-focused-surface-id rau--state) window))))
 
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
@@ -1031,7 +1007,7 @@ below external window."
               (command (rau-binding-command binding)))
     (if (eq command 'toggle-fullscreen)
         (rau--toggle-fullscreen rau--state)
-      (rau--enqueue
+      (rau--enqueue-after-manage
        (lambda ()
          (push (cons t command) unread-command-events)))
       (rau--focus-switch-to-frame rau--state))))
@@ -1159,40 +1135,34 @@ below external window."
 
 (defun rau--reconcile-focus (state)
   "Update the seat focus based on STATE."
-  (unless (rau--focus-current state)
-    (setf (rau-state-focus-state state) 'lost))
-
-  (when (eq (rau-state-focus-state state) 'lost)
-    (when-let* ((frame-wl (rau--frame-with-any-output state)))
-      (rau--focus-frame state frame-wl)))
-
-  (when-let* ((client (rau-state-client state))
+  (when-let* ((_ (rau-state-focus-dirty state))
+              (client (rau-state-client state))
               (seat-wl (ewc-first-object client 'river-seat-v1))
-              (cur (rau--focus-current state)))
-    (let* ((target-wl (car cur))
-           (frame-wl (cdr cur))
-           (dirty (rau-state-focus-dirty state)))
+              (cur (rau--focus-current state))
+              (target-wl (car cur))
+              (frame-wl (cdr cur)))
 
-      (when (and target-wl (ewc-object-p target-wl))
-        (rau--request seat-wl
-                       'focus-window
-                       `((window . ,(ewc-object-id target-wl)))))
+    (rau-log "request focus-window id=%d title=%s"
+             (ewc-object-id target-wl)
+             (rau-surface-title (ewc-object-data target-wl)))
+    (rau--request seat-wl
+                  'focus-window
+                  `((window . ,(ewc-object-id target-wl))))
 
-      (when dirty
-        (when-let* ((frame-data (and frame-wl
-                                    (ewc-object-data frame-wl)))
-                    (output-wl (rau-frame-output-wl frame-data))
-                    (out (ewc-object-data output-wl))
-                    (ls-output-wl (rau-output-ls-output-wl out)))
-          (rau--request ls-output-wl 'set-default))
+    (when-let* ((frame-data (ewc-object-data frame-wl))
+                (output-wl (rau-frame-output-wl frame-data))
+                (output-data (ewc-object-data output-wl))
+                (ls-output-wl (rau-output-ls-output-wl output-data)))
+      (rau--request ls-output-wl 'set-default))
 
-        (unless (and frame-wl target-wl (eq target-wl frame-wl))
-          (rau--enqueue
-           (lambda ()
-             (when-let* ((emacs-window (rau--emacs-window-for-window-wl target-wl)))
-               (select-window emacs-window 'norecord)))))
+    ;; Let Emacs select the underlying emacs-window for the external window
+    (when-let* (((ewc-object-tagged-p target-wl rau--tag-window))
+                (emacs-window (rau--emacs-window-for-window-wl target-wl)))
+      (rau-log "select underlying window")
+      (setq rau--last-focused (window-buffer emacs-window))
+      (select-window emacs-window 'norecord))
 
-        (setf (rau-state-focus-dirty state) nil)))))
+    (setf (rau-state-focus-dirty state) nil)))
 
 (defun rau--reconcile (state)
   "Run the manage-sequence reconciliation for STATE."
@@ -1281,13 +1251,13 @@ below external window."
                 ('none
                  (setf (rau-output-fullscreen out)
                        (rau-fs :state 'requested
-                                :new target-wl))
+                               :new target-wl))
                  (rau--mark-manage-dirty state))
 
                 ('fullscreen
                  (setf (rau-output-fullscreen out)
                        (rau-fs :state 'exiting
-                                :window (rau-fs-window fs)))
+                               :window (rau-fs-window fs)))
                  (rau--mark-manage-dirty state))
 
                 (_
@@ -1346,7 +1316,6 @@ Call this function once when starting Emacs inside of river."
   (add-hook 'window-buffer-change-functions    #'rau--update-focus-request)
   (add-hook 'minibuffer-setup-hook             #'rau--update-focus-request)
   (add-hook 'minibuffer-exit-hook              #'rau--update-focus-request)
-  (add-hook 'post-command-hook                 #'rau--update-focus-request)
 
   ;; Suppress pgtk focus feedback loop (as does EXWM)
   ;; TODO: figure out if/how this breaks multi-frame focus changes ...
