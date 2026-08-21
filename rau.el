@@ -299,6 +299,8 @@ COMMAND may be `toggle-fullscreen'."
          (modifiers (nth 2 data))
          (keysym (rau--resolve-keysym key))
          (cmd (if (eq command 'toggle-fullscreen)
+                  ;; TODO: Make toggle-fullscreen an interactive public
+                  ;; function and let the user bind it to a key.
                   'toggle-fullscreen
                 event))
          (binding-key (cons keysym modifiers)))
@@ -860,6 +862,10 @@ below external window."
 (defun rau-on-river-window-v1-fullscreen-requested (window-wl args)
   (pcase-let* (((map output) args)
                (output-wl
+                ;; Find output for fullscreen window
+                ;; 1. optional event arg output
+                ;; 2. output showing window-wl
+                ;; 3. output currently having focus
                 (or (and (integerp output)
                          (not (zerop output))
                          (ewc-object-get (rau-state-client rau--state) output))
@@ -1242,7 +1248,7 @@ below external window."
   (if-let* ((cur (rau--focus-current state))
             (target-wl (car cur))
             (frame-wl (cdr cur)))
-      (if (eq target-wl frame-wl)
+      (if (ewc-object-tagged-p target-wl rau--tag-frame)
           (rau--enqueue
            (lambda ()
              (message "rau: can not fullscreen Emacs even more!")))
@@ -1267,9 +1273,9 @@ below external window."
                 (_
              (message "Invalid output state for fullscreen toggle"))))
 
-          (message "Selected frame for fullscreen is not displayed"))))
+          (message "Selected frame for fullscreen is not displayed")))
 
-  (message "Fullscreen requested, but nothing is focused"))
+    (message "Fullscreen requested, but nothing is focused")))
 
 ;;; Startup
 ;; NOTE: No need for rau-disable since this Emacs process is serving as a
