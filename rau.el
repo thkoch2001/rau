@@ -134,6 +134,10 @@ Not instantiated directly; windows and frames include it."
 (defconst rau--tag-window :rau-window
   "Tag for `river-window-v1' objects that are external windows.")
 
+(defconst rau--focus-to-emacs :rau-focus-to-emacs
+  "Special focus-dirty flag to signal that focus should go to the
+underlying emacs frame of the focused external window.")
+
 (defvar rau--command-timer nil
   "Timer used to drain the rau command queue.")
 
@@ -517,18 +521,6 @@ used in event listeners."
 
 ;;; Focus helpers
 
-(defun rau--focus-switch-to-frame (state)
-  "Switch focus from an external window back to its Emacs frame."
-  (when-let* ((surface-id (rau-state-focused-surface-id state))
-              (client (rau-state-client state))
-              (surface-wl (ewc-object-get client surface-id))
-              (ewc-object-tagged-p surface-wl rau--tag-window)
-              (frame-wl (rau--frame-wl-for-window-wl surface-wl))
-              (frame-id (ewc-object-id frame-wl)))
-    (rau-log "switch to frame")
-    (setf (rau-state-focus-dirty state) t
-          (rau-state-focused-surface-id state) frame-id)))
-
 (defun rau--focus-current (state)
   "Return current focus as (TARGET-WL . FRAME-WL), if any.
 TARGET-WL is either a WINDOW-WL or FRAME-WL."
@@ -766,8 +758,8 @@ below external window."
   (message "rau: WM event session-locked"))
 
 (defun rau-on-river-window-manager-v1-session-unlocked (_wm-wl _)
-  ;; TODO: mark focus dirty
-  (message "rau: WM event session-unlocked"))
+  ;; mark focus dirty and let reconcile-focus decide what to focus
+  (setf (rau-state-focus-dirty rau--state) t))
 
 (defun rau-on-river-window-manager-v1-window (_wm-wl args)
   (pcase-let* (((map id) args))
@@ -1010,7 +1002,15 @@ below external window."
       (rau--enqueue-after-manage
        (lambda ()
          (push (cons t command) unread-command-events)))
-      (rau--focus-switch-to-frame rau--state))))
+
+      ;; If focus is with external window then switch to underlying emacs
+      ;; frame such that following keypresses go to emacs
+      (when-let* ((surface-id (rau-state-focused-surface-id rau--state))
+                  (client (rau-state-client rau--state))
+                  (surface-wl (ewc-object-get client surface-id))
+                  ((ewc-object-tagged-p surface-wl rau--tag-window)))
+        (rau-log "switch focus to emacs frame for key pressed.")
+        (setf (rau-state-focus-dirty rau--state) rau--focus-to-emacs)))))
 
 ;;;; river-layer-shell-v1 protocol
 ;;;; river-layer-shell-output-v1 listeners
@@ -1135,14 +1135,18 @@ below external window."
 
 (defun rau--reconcile-focus (state)
   "Update the seat focus based on STATE."
-  (when-let* ((_ (rau-state-focus-dirty state))
+  (when-let* ((dirty-flag (rau-state-focus-dirty state))
               (client (rau-state-client state))
               (seat-wl (ewc-first-object client 'river-seat-v1))
               (cur (rau--focus-current state))
-              (target-wl (car cur))
+              (target-wl
+               (cond
+                ((eq dirty-flag rau--focus-to-emacs) (rau--frame-wl-for-window-wl (car cur)))
+                (t (car cur))))
               (frame-wl (cdr cur)))
 
-    (rau-log "request focus-window id=%d title=%s"
+    (rau-log "request focus-window dirty-flag=%S id=%d title=%s"
+             dirty-flag
              (ewc-object-id target-wl)
              (rau-surface-title (ewc-object-data target-wl)))
     (rau--request seat-wl
