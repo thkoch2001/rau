@@ -38,4 +38,23 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
 (print "done with init" #'external-debugging-output)
 (switch-to-buffer "*Messages*")
 
+(easy-menu-define words-menu global-map
+       "Menu for word navigation commands."
+       '("Words"
+          ["Forward word" forward-word]
+          ["Backward word" backward-word]))
+
+;; TODO: find a way to disable the below functions when rau is running since
+;; they freeze Emacs. Advincing does not seem to work. Maybe redefining?
+;(x-popup-menu t words-menu)
+(define-advice display-popup-menus-p (:override (&rest _))
+  "Always return nil to force text-based fallbacks instead of GUI popups."
+  nil)
+(define-advice x-popup-menu (:override (&rest _))
+  "Always return nil to force text-based fallbacks instead of GUI popups."
+  nil)
+(define-advice x-popup-dialog (:override (&rest _))
+  "Always return nil to force text-based fallbacks instead of GUI popups."
+  nil)
+(toggle-debug-on-error)
 
