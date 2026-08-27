@@ -336,10 +336,11 @@ COMMAND may be `toggle-fullscreen'."
   (dolist (prefix rau-intercept-prefixes)
     (rau-push-intercept-prefix prefix)))
 
-(defun rau--suppress-focus-event (_orig-fn _event)
+(defun rau--suppress-focus-event (orig-fn event)
   "No-op for suppressing certain focus events in advice."
   (interactive "e")
   ;; okay, *almost* no-op ...
+  (rau-log "focus-event orig-fn=%S event=%S" orig-fn event)
   (setq rau--last-focused nil))
 
 (defun rau--buffer-predicate (buffer)
