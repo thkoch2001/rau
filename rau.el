@@ -1142,12 +1142,14 @@ See also focus relevant slots in rau STATE."
     (setf (rau-state-focus-last-id state) target-id
           (rau-state-focus-next-id state) -1)
 
-    ;; TODO
-    ;; (when-let* ((frame-data (ewc-object-data frame-wl))
-    ;;             (output-wl (rau-frame-output-wl frame-data))
-    ;;             (output-data (ewc-object-data output-wl))
-    ;;             (ls-output-wl (rau-output-ls-output-wl output-data)))
-    ;;   (rau--request ls-output-wl 'set-default))
+    (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-window)
+                              (rau--frame-wl-for-window-wl target-wl)
+                            target-wl))
+                (frame-data (ewc-object-data frame-wl))
+                (output-wl (rau-frame-output-wl frame-data))
+                (output-data (ewc-object-data output-wl))
+                (ls-output-wl (rau-output-ls-output-wl output-data)))
+      (rau--request ls-output-wl 'set-default))
 
     ;; Let Emacs select the underlying emacs-window for the external window
     (when-let* (((ewc-object-tagged-p target-wl rau--tag-window))
