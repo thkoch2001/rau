@@ -1,5 +1,8 @@
 (setq inhibit-message t)
 (print "running init" #'external-debugging-output)
+
+(setq message-log-max t)
+
 (defun my-dump-buffer-to-fd (buffer-name fd-path)
   "Write the contents of BUFFER-NAME to FD-PATH (e.g., /dev/stdout).
 Suppresses the 'Wrote file' message to keep the output clean."
