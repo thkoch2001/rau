@@ -110,7 +110,6 @@ Not instantiated directly; windows and frames include it."
   "State for one global XKB binding."
   keysym
   modifiers
-  command
   event
   (state 'requested))
 
@@ -292,32 +291,24 @@ within BODY."
          (key (if (characterp basic) basic (symbol-name basic))))
     (list event key (apply #'logior mods))))
 
-(defun rau-push-intercept-prefix (prefix &optional command)
+(defun rau-push-intercept-prefix (prefix)
   "Register PREFIX as an intercept key binding.
-PREFIX is a key string suitable for `kbd'.
-COMMAND may be `toggle-fullscreen'."
+PREFIX is a key string suitable for `kbd'."
   (let* ((data (rau--key-to-xkb prefix))
          (event (nth 0 data))
          (key (nth 1 data))
          (modifiers (nth 2 data))
          (keysym (rau--resolve-keysym key))
-         (cmd (if (eq command 'toggle-fullscreen)
-                  ;; TODO: Make toggle-fullscreen an interactive public
-                  ;; function and let the user bind it to a key.
-                  'toggle-fullscreen
-                event))
          (binding-key (cons keysym modifiers)))
     (if (= keysym 0)
         (message "rau: could not resolve XKB keysym for %S" key)
       (let ((existing (gethash binding-key (rau-state-bindings rau--state))))
         (if existing
-            (setf (rau-binding-command existing) cmd
-                  (rau-binding-event existing) event)
+            (setf (rau-binding-event existing) event)
           (puthash binding-key
                    (rau-binding-make
                     :keysym keysym
                     :modifiers modifiers
-                    :command cmd
                     :event event
                     :state 'requested)
                    (rau-state-bindings rau--state))))
@@ -966,25 +957,22 @@ below external window."
 ;;;; river-xkb-binding-v1 listeners
 (defun rau-on-river-xkb-binding-v1-pressed (binding-wl _)
   (when-let* ((binding (ewc-object-data binding-wl))
-              (command (rau-binding-command binding)))
-    (rau-log "binding pressed. Command=%S" command)
-    (if (eq command 'toggle-fullscreen)
-        (rau--toggle-fullscreen rau--state)
-      (rau-log "enqueue-after-manage")
-      (rau--enqueue-after-manage
-       (lambda ()
-         (push (cons t command) unread-command-events)))
+              (event (rau-binding-event binding)))
+    (rau-log "enqueue-after-manage")
+    (rau--enqueue-after-manage
+     (lambda ()
+       (push (cons t event) unread-command-events)))
 
-      ;; If focus is with external window then switch to underlying emacs
-      ;; frame such that following keypresses go to emacs
-      (when-let* ((surface-id (rau-state-focus-last-id rau--state))
-                  (client (rau-state-client rau--state))
-                  (surface-wl (ewc-object-get client surface-id))
-                  ((ewc-object-tagged-p surface-wl rau--tag-window))
-                  (target-wl (rau--frame-wl-for-window-wl surface-wl))
-                  (target-id (ewc-object-id target-wl)))
-        (rau-log "switch focus to emacs frame for key pressed.")
-        (setf (rau-state-focus-next-id rau--state) target-id)))))
+    ;; If focus is with external window then switch to underlying emacs
+    ;; frame such that following keypresses go to emacs
+    (when-let* ((surface-id (rau-state-focus-last-id rau--state))
+                (client (rau-state-client rau--state))
+                (surface-wl (ewc-object-get client surface-id))
+                ((ewc-object-tagged-p surface-wl rau--tag-window))
+                (target-wl (rau--frame-wl-for-window-wl surface-wl))
+                (target-id (ewc-object-id target-wl)))
+      (rau-log "switch focus to emacs frame for key pressed.")
+      (setf (rau-state-focus-next-id rau--state) target-id))))
 
 ;;;; river-layer-shell-v1 protocol
 ;;;; river-layer-shell-output-v1 listeners
@@ -1213,36 +1201,30 @@ See also focus relevant slots in rau STATE."
 
 ;;; Fullscreen toggle
 
-(defun rau--toggle-fullscreen (state)
+(defun rau-toggle-fullscreen ()
   "Toggle fullscreen for the currently focused external window."
-  (if-let* ((target-id (rau-state-focus-last-id state))
-            (client (rau-state-client state))
-            (target-wl (ewc-object-get client target-id)))
-      (if (ewc-object-tagged-p target-wl rau--tag-frame)
-          (rau--enqueue
-           (lambda ()
-             (message "rau: can not fullscreen Emacs even more!")))
+  (interactive)
+  (if-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
+            (frame-wl (rau--frame-wl-for-window-wl window-wl))
+            (frame-data (ewc-object-data frame-wl))
+            (output-wl (rau-frame-output-wl frame-data))
+            (out (ewc-object-data output-wl))
+            (fs (rau-output-fullscreen out)))
+      (pcase (rau-fs-state fs)
+        ('none
+         (setf (rau-output-fullscreen out)
+               (rau-fs :state 'requested
+                       :new window-wl))
+         (rau--mark-manage-dirty rau--state))
 
-        (let* ((frame-wl (rau--frame-wl-for-window-wl target-wl))
-               (frame-data (ewc-object-data frame-wl))
-               (output-wl (rau-frame-output-wl frame-data))
-               (out (ewc-object-data output-wl))
-               (fs (rau-output-fullscreen out)))
-          (pcase (rau-fs-state fs)
-            ('none
-             (setf (rau-output-fullscreen out)
-                   (rau-fs :state 'requested
-                           :new target-wl))
-             (rau--mark-manage-dirty state))
+        ('fullscreen
+         (setf (rau-output-fullscreen out)
+               (rau-fs :state 'exiting
+                       :window (rau-fs-window fs)))
+         (rau--mark-manage-dirty rau--state))
 
-            ('fullscreen
-             (setf (rau-output-fullscreen out)
-                   (rau-fs :state 'exiting
-                           :window (rau-fs-window fs)))
-             (rau--mark-manage-dirty state))
-
-            (_
-             (message "Invalid output state for fullscreen toggle")))))
+        (_
+         (message "Invalid output state for fullscreen toggle")))
     (message "Fullscreen requested, but nothing is focused")))
 
 ;;; Startup
