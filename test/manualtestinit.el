@@ -37,6 +37,8 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
 (print "rau enable" #'external-debugging-output)
 (setq rau-debug t)
 ;; (setq ewc-debug t)
+(customize-set-variable 'rau-intercept-prefixes '("s-z"))
+(keymap-global-set "s-z" #'rau-toggle-fullscreen)
 (rau-enable)
 (print "done with init" #'external-debugging-output)
 (switch-to-buffer "*Messages*")

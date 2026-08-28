@@ -489,7 +489,6 @@ used in event listeners."
         (append (rau-state-command-queue rau--state) (list fn)))
   (rau--schedule-command-handler))
 
-;; TODO: also rau-schedule-command-handler here?
 (defun rau--enqueue-after-manage (fn)
   (setf (rau-state-command-queue-after-manage rau--state)
         (append (rau-state-command-queue-after-manage rau--state) (list fn))))
@@ -640,12 +639,37 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 ;;; Emacs handler functions for hooks
 
+(defun rau--recover-focus-after-binding-pressed ()
+  "Give focus back to external window after it was given to Emacs to handle
+a keybinding pressed event. This function is meant to be bound to
+post-command-hook in the enqueued command of the pressed event handler."
+  (rau-log "recover focus. not t-c=%S u-c-e=%d t-s-c-k=%d m-d=%d r-d=%d"
+           (not this-command)
+           (length unread-command-events)
+           (length (this-single-command-keys))
+           (minibuffer-depth)
+           (recursion-depth))
+  (when (and (length= unread-command-events 0)
+             (zerop (minibuffer-depth))
+             (zerop (recursion-depth)))
+    (rau-log "recover focus. removing post-command-hook.")
+    (remove-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)
+    (when-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
+                (window-id (ewc-object-id window-wl))
+                ((/= window-id (rau-state-focus-last-id rau--state))))
+      (rau-log "recover focus. focusing window-id=%d title=%s"
+               window-id
+               (rau-surface-title (ewc-object-data window-wl)))
+      (setf (rau-state-focus-next-id rau--state) window-id)
+      (rau--mark-manage-dirty rau--state))))
+
 (defun rau--window-configuration-change-handler ()
   "Schedule a river manage cycle and thus a reconciliation cycle.
-This needs to be added to the global hook since local hooks don't get
-called for windows that disappear.  Also window-size-change-functions
-does not get called when minibuffer expands and thus minibuffer ends up
-below external window."
+This is necessary for external windows to resize when the minibuffer
+expands.  This needs to be added to the global hook since local hooks
+don't get called for windows that disappear.  Also
+window-size-change-functions does not get called when minibuffer expands
+and thus minibuffer ends up below external window."
   (rau--mark-manage-dirty rau--state))
 
 ;;; Listeners
@@ -961,7 +985,8 @@ below external window."
     (rau-log "enqueue-after-manage")
     (rau--enqueue-after-manage
      (lambda ()
-       (push (cons t event) unread-command-events)))
+       (push (cons t event) unread-command-events)
+       (add-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)))
 
     ;; If focus is with external window then switch to underlying emacs
     ;; frame such that following keypresses go to emacs
