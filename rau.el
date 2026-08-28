@@ -1015,6 +1015,12 @@ and thus minibuffer ends up below external window."
             (rau-output-width out) width
             (rau-output-height out) height))))
 
+;;;; river-layer-shell-seat-v1 listeners
+(defun rau-on-river-layer-shell-seat-v1-focus-none (_ls-seat-wl _)
+  "Give focus back to the last surface that had it."
+  (setf (rau-state-focus-next-id rau--state) (rau-state-focus-last-id rau--state)
+        (rau-state-focus-last-id rau--state) -1))
+
 ;;; Reconciliation
 
 (defun rau--reconcile-frames (state)
