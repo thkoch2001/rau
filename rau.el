@@ -330,12 +330,6 @@ PREFIX is a key string suitable for `kbd'."
   (dolist (prefix rau-intercept-prefixes)
     (rau-push-intercept-prefix prefix)))
 
-(defun rau--suppress-focus-event (orig-fn event)
-  "No-op for suppressing certain focus events in advice."
-  (interactive "e")
-  ;; okay, *almost* no-op ...
-  (rau-log "focus-event"));" orig-fn=%S event=%S" orig-fn event))
-
 (defun rau--buffer-predicate (buffer)
   "Buffer predicate to avoid accidentally showing the same rau BUFFER twice."
   (or (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))
@@ -1309,11 +1303,6 @@ Call this function once when starting Emacs inside of river."
   (add-hook 'window-buffer-change-functions    #'rau--update-focus-request)
   (add-hook 'minibuffer-setup-hook             #'rau--update-focus-request)
   (add-hook 'minibuffer-exit-hook              #'rau--update-focus-request)
-
-  ;; Suppress pgtk focus feedback loop (as does EXWM)
-  ;; TODO: figure out if/how this breaks multi-frame focus changes ...
-  (advice-add 'handle-focus-in  :around #'rau--suppress-focus-event)
-  (advice-add 'handle-focus-out :around #'rau--suppress-focus-event)
 
   (run-hooks 'rau-enable-hook))
 
