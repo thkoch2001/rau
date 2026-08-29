@@ -234,15 +234,25 @@ The result is a copy, so callers may mutate it and may remove
 objects from CLIENT while iterating over it."
   (copy-sequence (gethash tag (ewc-client-tags client))))
 
+(defun ewc-object-remove-id (client id)
+  "Shorthand to get object with ID and call ewc-object-remove."
+  (if-let* ((object (ewc-object-get client id)))
+      (ewc-object-remove client object)
+    (message "ewc: no object to remove with id %d." id)))
+
 (defun ewc-object-remove (client object)
   "Remove OBJECT from CLIENT's table and from all of its tag lists.
 Idempotent: removing an object that was never added (or was already
 removed) is a no-op."
-  (let ((index (ewc-client-tags client)))
+  (let ((index (ewc-client-tags client))
+        (id (ewc-object-id object)))
+    (ewc-log "removing object: id=%d, interface=%s"
+             id
+             (ewc-object-interface object))
     (dolist (tag (ewc-object-tags object))
-      (puthash tag (delq object (gethash tag index)) index)))
-  (setf (ewc-object-tags object) nil)
-  (remhash (ewc-object-id object) (ewc-client-table client)))
+      (puthash tag (delq object (gethash tag index)) index))
+    (setf (ewc-object-tags object) nil)
+    (remhash id (ewc-client-table client))))
 
 (defun ewc-object-add (client interface &optional id)
   "Add a new object implementing INTERFACE to CLIENT.

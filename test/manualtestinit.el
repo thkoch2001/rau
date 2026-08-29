@@ -1,3 +1,4 @@
+;; -*- lexical-binding: t; -*-
 (setq inhibit-message t)
 (print "running init" #'external-debugging-output)
 
@@ -37,7 +38,8 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
 (print "rau enable" #'external-debugging-output)
 (setq rau-debug t)
 ;; (setq ewc-debug t)
-(customize-set-variable 'rau-intercept-prefixes '("s-z"))
+(customize-set-variable 'rau-intercept-prefixes
+                        '("s-z" "C-x" "C-u" "C-h" "M-x"))
 (keymap-global-set "s-z" #'rau-toggle-fullscreen)
 (rau-enable)
 (print "done with init" #'external-debugging-output)

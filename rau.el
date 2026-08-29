@@ -85,7 +85,7 @@ Not instantiated directly; windows and frames include it."
 (cl-defstruct (rau-window (:constructor rau-window-make)
                            (:include rau-surface))
   "State for a regular external window."
-  (state 'starting) ;; 'active 'killed
+  (state 'starting) ;; 'active 'killed 'destroyed
   buffer
   actual-width
   actual-height
@@ -202,8 +202,8 @@ within BODY."
 
 (defun rau--emacs-window-for-window-wl (window-wl)
   "Return Emacs window associated with WINDOW-WL."
-  (when-let ((buffer (rau--buffer-for-window-wl window-wl)))
-    (get-buffer-window buffer t)))
+  (when-let* ((buffer (rau--buffer-for-window-wl window-wl)))
+    (get-buffer-window buffer t))) ;; TODO: review t argument
 
 (defun rau--make-buffer-name (app-id title)
   "Return a buffer name string using APP-ID and TITLE."
@@ -237,7 +237,10 @@ within BODY."
 (defun rau--buffer-killed ()
   "Request closing of the associated Wayland surface when a rau buffer is killed."
   (when-let* ((rau--window-wl)
-              (data (ewc-object-data rau--window-wl)))
+              (data (ewc-object-data rau--window-wl))
+              ;; avoid sending close request in response to closed event
+              ;; and don't send closed for already destroyed windows!
+              ((eq 'active (rau-window-state data))))
     (setf (rau-window-state data) 'killed)
     (rau--mark-manage-dirty rau--state)))
 
@@ -420,6 +423,11 @@ when used from other files (e.g. tests)."
   "River Edges::all() bitmask.")
 
 ;;; Basic helpers
+
+(defun rau--remove (object-wl)
+  "Remove object from ewc objects table.
+See also `rau-on-wl-display-delete-id'."
+  (ewc-object-remove (rau-state-client rau--state) object-wl))
 
 (defun rau--request (object-wl request &optional arguments)
   "Send REQUEST on OBJECT-WL using the current rau Wayland client."
@@ -679,12 +687,13 @@ and thus minibuffer ends up below external window."
   (message "wl_display error: %S" args))
 
 (defun rau-on-wl-display-delete-id (_display-wl args)
-  (pcase-let (((map id) args))
-    (when-let* ((client (rau-state-client rau--state))
-                (table (ewc-client-table client))
-                (object-wl (gethash id table)))
-      (message "delete-id for object %d, interface=%s" id (ewc-object-interface object-wl))
-      (ewc-object-remove client object-wl))))
+  "Server acknowledges deletion of object created by client.
+Note that server does not send this event for objects created by
+server (e.g. window, output). Thus object removal must be done at the
+point where also the destroy request is sent."
+  (pcase-let (((map id) args)
+              (client (rau-state-client rau--state)))
+    (ewc-object-remove-id client id)))
 
 ;;;; wl-registry listeners
 (defun rau-on-wl-registry-global (registry-wl args)
@@ -775,29 +784,22 @@ and thus minibuffer ends up below external window."
 
 ;;;; river-window-v1 listeners
 (defun rau-on-river-window-v1-closed (window-wl _)
-  (let ((client (rau-state-client rau--state)))
-    (when (ewc-object-tagged-p window-wl rau--tag-window)
-      (rau--enqueue
-       (lambda ()
-         (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
-           ;; TODO anything else to do?
-           (kill-buffer buf)))))
+  (rau--enqueue
+   (lambda ()
+     (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
+       (kill-buffer buf))
+     (let ((data (ewc-object-data window-wl)))
+       (when-let* ((node-wl (rau-surface-node-wl data)))
+         (rau--request node-wl 'destroy))
+       (rau--request window-wl 'destroy)
+       (rau--remove window-wl)
+       (setf (rau-window-state data) 'destroyed))))
 
-    ;; Reset fullscreen on output if window was fullscreen.
-    ;;
-    ;; TODO: This only makes sense if the closed surface was a window, so move
-    ;; in the above when?
+  ;; Reset fullscreen on output if window was fullscreen.
+  (when (ewc-object-tagged-p window-wl rau--tag-window)
     (rau--do 'river-output-v1 (output-wl out rau--state)
-      (when (eq (rau--fs-window (rau-output-fullscreen out)) window-wl)
-        (setf (rau-output-fullscreen out) (rau-fs))))
-
-    (when-let* ((data (ewc-object-data window-wl))
-                (node-wl (rau-surface-node-wl data)))
-      (rau--request node-wl 'destroy)
-      (ewc-object-remove client node-wl))
-
-    (rau--request window-wl 'destroy)
-    (ewc-object-remove client window-wl)))
+             (when (eq (rau--fs-window (rau-output-fullscreen out)) window-wl)
+               (setf (rau-output-fullscreen out) (rau-fs))))))
 
 (defun rau-on-river-window-v1-dimensions (window-wl args)
   (pcase-let (((map width height) args))
@@ -966,7 +968,7 @@ and thus minibuffer ends up below external window."
 ;;;; river-seat-v1 listener
 (defun rau-on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
-    (rau-log "last focused surface id: %d" (rau-state-focus-last-id rau--state) )
+    (rau-log "last focused surface id: %d" (rau-state-focus-last-id rau--state))
     (unless (equal window (rau-state-focus-last-id rau--state))
       (rau-log "window interaction with %d" window)
       (setf (rau-state-focus-next-id rau--state) window))))
@@ -1194,37 +1196,34 @@ See also focus relevant slots in rau STATE."
 (defun rau--render-windows (state)
   "Run the render-sequence reconciliation for windows on STATE."
   (rau--do rau--tag-window (window-wl win state)
-    (let ((node-wl (rau-surface-node-wl win)))
-      (if (not (eq (rau-window-state win) 'active))
-          (rau--request window-wl 'hide)
+    (when-let* ((node-wl (rau-surface-node-wl win))
+                ((eq (rau-window-state win) 'active)))
+      (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
+                (frame (ewc-object-data frame-wl))
+                (output-wl (rau-frame-output-wl frame))
+                (out (ewc-object-data output-wl))
+                (emacs-window (rau--emacs-window-for-window-wl window-wl)))
+          (pcase-let ((`(,left ,top ,right ,bottom)
+                       (window-inside-absolute-pixel-edges emacs-window)))
+            (rau--request window-wl 'show)
 
-        (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
-                  (frame (ewc-object-data frame-wl))
-                  (output-wl (rau-frame-output-wl frame))
-                  (out (ewc-object-data output-wl))
-                  (emacs-window (rau--emacs-window-for-window-wl window-wl)))
-            (pcase-let ((`(,left ,top ,right ,bottom)
-                        (window-inside-absolute-pixel-edges emacs-window)))
-              (rau--request window-wl 'show)
+            (rau--request node-wl 'set-position
+                          `((x . ,(+ left (rau-output-x out)))
+                            (y . ,(+ top (rau-output-y out)))))
 
-              (when node-wl
-                (rau--request node-wl 'set-position
-                             `((x . ,(+ left (rau-output-x out)))
-                               (y . ,(+ top (rau-output-y out)))))
+            (rau--request node-wl 'place-top)
 
-                (rau--request node-wl 'place-top))
+            (let ((clip-w (or (rau-window-actual-width win)
+                              (- right left)))
+                  (clip-h (or (rau-window-actual-height win)
+                              (- bottom top))))
+              (rau--request window-wl 'set-clip-box
+                            `((x . 0)
+                              (y . 0)
+                              (width . ,clip-w)
+                              (height . ,clip-h)))))
 
-              (let ((clip-w (or (rau-window-actual-width win)
-                                (- right left)))
-                    (clip-h (or (rau-window-actual-height win)
-                                (- bottom top))))
-                (rau--request window-wl 'set-clip-box
-                             `((x . 0)
-                               (y . 0)
-                               (width . ,clip-w)
-                               (height . ,clip-h)))))
-
-          (rau--request window-wl 'hide))))))
+        (rau--request window-wl 'hide)))))
 
 ;;; Fullscreen toggle
 
