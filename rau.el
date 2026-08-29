@@ -747,8 +747,8 @@ and thus minibuffer ends up below external window."
   (message "rau: WM event session-locked"))
 
 (defun rau-on-river-window-manager-v1-session-unlocked (_wm-wl _)
-  ;; TODO
-  )
+  (setf (rau-state-focus-next-id rau--state) (rau-state-focus-last-id rau--state)
+        (rau-state-focus-last-id rau--state) -1))
 
 (defun rau-on-river-window-manager-v1-window (_wm-wl args)
   (pcase-let* (((map id) args))
