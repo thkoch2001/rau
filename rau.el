@@ -85,7 +85,7 @@ Not instantiated directly; windows and frames include it."
 (cl-defstruct (rau-window (:constructor rau-window-make)
                            (:include rau-surface))
   "State for a regular external window."
-  (state 'starting) ;; 'active 'killed 'destroyed
+  (state 'starting) ;; 'active 'killed
   buffer
   actual-width
   actual-height
@@ -239,7 +239,6 @@ within BODY."
   (when-let* ((rau--window-wl)
               (data (ewc-object-data rau--window-wl))
               ;; avoid sending close request in response to closed event
-              ;; and don't send closed for already destroyed windows!
               ((eq 'active (rau-window-state data))))
     (setf (rau-window-state data) 'killed)
     (rau--mark-manage-dirty rau--state)))
@@ -792,8 +791,7 @@ point where also the destroy request is sent."
        (when-let* ((node-wl (rau-surface-node-wl data)))
          (rau--request node-wl 'destroy))
        (rau--request window-wl 'destroy)
-       (rau--remove window-wl)
-       (setf (rau-window-state data) 'destroyed))))
+       (rau--remove window-wl))))
 
   ;; Reset fullscreen on output if window was fullscreen.
   (when (ewc-object-tagged-p window-wl rau--tag-window)
