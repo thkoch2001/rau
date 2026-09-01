@@ -842,7 +842,6 @@ point where also the destroy request is sent."
                 ;; 1. optional event arg output
                 ;; 2. output showing window-wl
                 ;; 3. output currently having focusc
-                ;; TODO review
                 (or (and (integerp output)
                          (not (zerop output))
                          (ewc-object-get (rau--state-client rau--state) output))
@@ -850,7 +849,7 @@ point where also the destroy request is sent."
                                 (frame-wl (rau--frame-wl-for-window-wl window-wl))
                                 (frame (ewc-object-data frame-wl)))
                       (rau--outputframe-output-wl frame))
-                    (rau--outputframe-output-wl (selected-frame)))))
+                    (rau--outputframe-output-wl (frame-parameter (selected-frame) 'rau-frame-wl)))))
     (if (not output-wl)
         (message "Fullscreen requested, but no output found")
       (when-let* ((out (ewc-object-data output-wl)))
