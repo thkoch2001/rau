@@ -50,7 +50,7 @@
 (defvar ewc-debug nil
   "When non-nil, enable verbose ewc debugging messages.")
 
-(defun ewc-log (&rest args)
+(defun ewc--log (&rest args)
   "Log ARGS with `message' when `ewc-debug' is non-nil."
   (when ewc-debug
     (apply #'message args)))
@@ -82,57 +82,57 @@ This is the Elisp version of wayland-scanner."
                    all-interfaces)
          table))))
 
-(define-inline ewc-node-name (node)
+(define-inline ewc--node-name (node)
   "Return the Elisp symbol name for DOM NODE."
   (inline-quote
    (intern (string-replace "_" "-" (dom-attr ,node 'name)))))
 
 (defun ewc-read-protocol (protocol &rest select-interfaces)
   "Read one Wayland protocol XML file PROTOCOL.
-Return a list of interface forms as produced by `ewc-read-interface'.
+Return a list of interface forms as produced by `ewc--read-interface'.
 If SELECT-INTERFACES is non-nil, only read those interfaces."
   (let ((protocol (with-temp-buffer
                     (insert-file-contents protocol)
                     (libxml-parse-xml-region (point-min) (point-max)))))
-    (mapcar #'ewc-read-interface
+    (mapcar #'ewc--read-interface
             (let ((interfaces (dom-by-tag protocol 'interface)))
               (if select-interfaces
                   (seq-filter
                    (lambda (interface)
-                     (member (ewc-node-name interface)
+                     (member (ewc--node-name interface)
                              select-interfaces))
                    interfaces)
                 interfaces)))))
 
-(defun ewc-read-interface (interface)
+(defun ewc--read-interface (interface)
   "Translate one Wayland INTERFACE dom node into Elisp."
   `(list
-    ',(ewc-node-name interface)
+    ',(ewc--node-name interface)
     ,(string-to-number (dom-attr interface 'version))
-    (list ,@(mapcar #'ewc-read-event (dom-by-tag interface 'event)))
-    (list ,@(seq-map-indexed #'ewc-read-request
+    (list ,@(mapcar #'ewc--read-event (dom-by-tag interface 'event)))
+    (list ,@(seq-map-indexed #'ewc--read-request
                              (dom-by-tag interface 'request)))))
 
-(defun ewc-read-event (event)
+(defun ewc--read-event (event)
   "Translate one Wayland EVENT dom node into Elisp."
-  `(cons ',(ewc-node-name event)
+  `(cons ',(ewc--node-name event)
          ,(bindat--toplevel 'unpack
-                            (mapcan #'ewc-read-arg
+                            (mapcan #'ewc--read-arg
                                     (dom-by-tag event 'arg)))))
 
-(defun ewc-read-request (request opcode)
+(defun ewc--read-request (request opcode)
   "Translate one Wayland REQUEST dom node into Elisp.
 OPCODE is the request opcode."
-  (let ((spec (mapcan #'ewc-read-arg (dom-by-tag request 'arg))))
-    `(cons ',(ewc-node-name request)
+  (let ((spec (mapcan #'ewc--read-arg (dom-by-tag request 'arg))))
+    `(cons ',(ewc--node-name request)
            (cons ,opcode
                  (cons ,(bindat--toplevel 'length spec)
                        ,(bindat--toplevel 'pack spec))))))
 
 ;; TODO: Wayland uses cpu endianess. Detect it or make it configurable.
-(defun ewc-read-arg (node)
+(defun ewc--read-arg (node)
   "Translate one Wayland argument dom NODE into a bindat spec fragment."
-  (let ((name (ewc-node-name node)))
+  (let ((name (ewc--node-name node)))
     (pcase (dom-attr node 'type)
       ((and "new_id" (guard (not (dom-attr node 'interface))))
        `((interface-len uint 32 t)
@@ -248,7 +248,7 @@ Idempotent: removing an object that was never added (or was already
 removed) is a no-op."
   (let ((index (ewc-client-tags client))
         (id (ewc-object-id object)))
-    (ewc-log "removing object: id=%d, interface=%s"
+    (ewc--log "removing object: id=%d, interface=%s"
              id
              (ewc-object-interface object))
     (dolist (tag (ewc-object-tags object))
@@ -276,7 +276,7 @@ Returns the newly created object."
                           :listeners (cdr (assq interface (ewc-client-listeners client))))))
       (puthash id object (ewc-client-table client))
       (ewc-object-tag client object interface)
-      (ewc-log "ewc: added object id=%s interface=%s" id interface)
+      (ewc--log "ewc: added object id=%s interface=%s" id interface)
       object)))
 
 (defun ewc--event-index (object event)
@@ -298,22 +298,22 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
   (when (and s (not (string-empty-p s)))
     (decode-coding-string s 'utf-8 t)))
 
-(defvar ewc-msg-head
+(defvar ewc--msg-head
   (bindat-type (id uint 32 t)
                (opcode uint 16 t)
                (len uint 16 t))
   "Wayland message header.")
 
-(defun ewc-event (client str _str-len idx)
+(defun ewc--event (client str _str-len idx)
   "Parse one Wayland event message STR in CLIENT."
   (pcase-let* ((bindat-idx idx)
                (bindat-raw str)
                ((map id opcode _len)
-                (funcall (bindat--type-ue ewc-msg-head))))
+                (funcall (bindat--type-ue ewc--msg-head))))
     (if-let* ((object (ewc-object-get client id)))
         (let ((listeners (ewc-object-listeners object))
               (spec (nth opcode (ewc-object-events object))))
-          (ewc-log "ewc: event if=%s opcode=%s (%s)"
+          (ewc--log "ewc: event if=%s opcode=%s (%s)"
                    (ewc-object-interface object)
                    opcode
                    (car spec))
@@ -322,26 +322,26 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
               (let* ((listener (aref listeners opcode))
                      (ue (cdr spec))
                      (args (when ue (funcall ue))))
-                (when args (ewc-log "ewc: args %S" args))
+                (when args (ewc--log "ewc: args %S" args))
                 (condition-case err
                     (funcall listener object args)
                   (error (message "ewc: listener error for %s opcode %s: %S"
                             (ewc-object-interface object)
                             opcode
                             err))))
-            (ewc-log "ewc: no listener for %s opcode %s"
+            (ewc--log "ewc: no listener for %s opcode %s"
                      (ewc-object-interface object)
                      opcode)))
-      (ewc-log "ewc: event for unknown object id %s" id))))
+      (ewc--log "ewc: event for unknown object id %s" id))))
 
-(defun ewc-pack (object-id request-def arguments)
+(defun ewc--pack (object-id request-def arguments)
   "Return Wayland wire message for OBJECT-ID with ARGUMENTS."
   (pcase-let* ((`(,_ ,opcode ,le . ,pe) request-def)
                 (bindat-idx 0)
                 (len (+ 8 (if le (funcall le arguments) 0)))
                 (bindat-idx 0)
                 (bindat-raw (make-string len 0)))
-      (funcall (bindat--type-pe ewc-msg-head)
+      (funcall (bindat--type-pe ewc--msg-head)
                `((id . ,object-id)
                  (opcode . ,opcode)
                  (len . ,len)))
@@ -351,7 +351,7 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
 
 ;;; Connection and process filter
 
-(defun ewc-filter (client)
+(defun ewc--filter (client)
   "Return a process filter for CLIENT.
 The filter accumulates partial Wayland messages and dispatches
 complete ones."
@@ -368,10 +368,10 @@ complete ones."
             (pcase-let* ((bindat-raw buf)
                          (bindat-idx 0)
                          ((map _id _opcode len)
-                          (funcall (bindat--type-ue ewc-msg-head))))
+                          (funcall (bindat--type-ue ewc--msg-head))))
               (cond
                ((< len 8)
-                (ewc-log "ewc: invalid message length %s; dropping buffer" len)
+                (ewc--log "ewc: invalid message length %s; dropping buffer" len)
                 (setf (ewc-client-rx client) "")
                 (setq progress nil))
 
@@ -384,7 +384,7 @@ complete ones."
                   (setf (ewc-client-rx client)
                         (substring buf len))
                   (condition-case err
-                      (ewc-event client msg len 0)
+                      (ewc--event client msg len 0)
                     (error (message "ewc: dispatch error: %S" err)))))))))))))
 
 (defun ewc-build-listeners (client prefix)
@@ -470,7 +470,7 @@ The network process is set in the CONNECTION slot of CLIENT."
                       :service nil ;silence warning: "called without required keyword argument :service"
                       :coding 'binary
                       :noquery t
-                      :filter (ewc-filter client)
+                      :filter (ewc--filter client)
                       :sentinel (lambda (_proc msg)
                                   (message "ewc: connection sentinel: %s" msg)))))
     (setf (ewc-client-connection client) connection)))
@@ -490,7 +490,7 @@ The network process is set in the CONNECTION slot of CLIENT."
       (when (or nocache
                 (null arguments)
                 (not (equal arguments (aref cache opcode))))
-        (ewc-log "ewc: rq %s::%s(%s)"
+        (ewc--log "ewc: rq %s::%s(%s)"
                  (ewc-object-interface object)
                  request
                  (mapconcat (lambda (arg)
@@ -498,7 +498,7 @@ The network process is set in the CONNECTION slot of CLIENT."
                             arguments
                             " "))
         (process-send-string connection
-                             (ewc-pack id request-def arguments))
+                             (ewc--pack id request-def arguments))
         (when arguments
           (aset cache opcode arguments))))))
 
