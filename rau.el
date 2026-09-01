@@ -814,7 +814,7 @@ point where also the destroy request is sent."
     (when-let* ((title (ewc-to-utf8 title))
                 (data (ewc-object-data window-wl)))
       (setf (rau--window-title data) title)
-      (when (rau--external-p data)
+      (when (ewc-object-tagged-p window-wl rau--tag-external)
         (rau--enqueue
          (lambda ()
            (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
@@ -824,7 +824,7 @@ point where also the destroy request is sent."
                  (rau--window-app-id data)
                  title)
                 t))))))
-      (when (rau--outputframe-p data)
+      (when (ewc-object-tagged-p window-wl rau--tag-outputframe)
         (when-let* ((emacs-frame
                      (cl-find title (frame-list)
                               :test #'equal
