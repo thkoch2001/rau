@@ -203,7 +203,7 @@ within BODY."
 (defun rau--emacs-window-for-window-wl (window-wl)
   "Return Emacs window associated with WINDOW-WL."
   (when-let* ((buffer (rau--buffer-for-window-wl window-wl)))
-    (get-buffer-window buffer t))) ;; TODO: review t argument
+    (get-buffer-window buffer 'visible)))
 
 (defun rau--make-buffer-name (app-id title)
   "Return a buffer name string using APP-ID and TITLE."
@@ -1063,22 +1063,21 @@ point where also the destroy request is sent."
 (defun rau--reconcile-windows (state)
   "Close killed windows and propose dimensions for active windows."
   (rau--do rau--tag-window (window-wl win state)
-            (pcase (rau-window-state win)
-              ;; nothing to do for window-state 'starting
-              ('active
-               ;; TODO: This gets sent on every loop for all windows?
-               (rau--request window-wl
-                             'set-tiled
-                             `((edges . ,rau--edges-all)))
-               (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl)))
-                 (pcase-let ((`(,left ,top ,right ,bottom)
-                               (window-inside-absolute-pixel-edges emacs-window)))
-                   (rau--request window-wl
-                                 'propose-dimensions
-                                 `((width . ,(- right left))
-                                   (height . ,(- bottom top)))))))
-              ('killed
-               (rau--request window-wl 'close)))))
+           (pcase (rau-window-state win)
+             ;; nothing to do for window-state 'starting
+             ('active
+              (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl)))
+                (rau--request window-wl
+                              'set-tiled
+                              `((edges . ,rau--edges-all)))
+                (pcase-let ((`(,left ,top ,right ,bottom)
+                             (window-inside-absolute-pixel-edges emacs-window)))
+                  (rau--request window-wl
+                                'propose-dimensions
+                                `((width . ,(- right left))
+                                  (height . ,(- bottom top)))))))
+             ('killed
+              (rau--request window-wl 'close)))))
 
 (defun rau--reconcile-bindings (state)
   "Create and enable XKB bindings."
