@@ -82,7 +82,7 @@ Not instantiated directly; windows and frames include it."
   (node-wl nil :type ewc-object)
   title)
 
-(cl-defstruct (rau-window (:constructor rau-window-make)
+(cl-defstruct (rau--external (:constructor rau--external-make)
                            (:include rau-surface))
   "State for a regular external window."
   (state 'starting) ;; 'active 'killed
@@ -145,7 +145,7 @@ Not instantiated directly; windows and frames include it."
 (defconst rau--tag-frame :rau-frame
   "Tag for `river-window-v1' objects that are Emacs frames.")
 
-(defconst rau--tag-window :rau-window
+(defconst rau--tag-window :rau-external
   "Tag for `river-window-v1' objects that are external windows.")
 
 (defvar rau--command-timer nil
@@ -185,7 +185,7 @@ within BODY."
 (defun rau--buffer-for-window-wl (window-wl)
   "Return Emacs buffer associated with WINDOW-WL."
   (when-let* ((window (ewc-object-data window-wl)))
-    (rau-window-buffer window)))
+    (rau--external-buffer window)))
 
 (defun rau--surface-wl-for-emacs-window (emacs-window)
   "Return either the emacs frame-wl or external window-wl for EMACS-WINDOW."
@@ -234,8 +234,8 @@ within BODY."
   (when-let* ((rau--window-wl)
               (data (ewc-object-data rau--window-wl))
               ;; avoid sending close request in response to closed event
-              ((eq 'active (rau-window-state data))))
-    (setf (rau-window-state data) 'killed)
+              ((eq 'active (rau--external-state data))))
+    (setf (rau--external-state data) 'killed)
     (rau--mark-manage-dirty rau--state)))
 
 (define-derived-mode rau-mode special-mode "Rau"
@@ -800,30 +800,30 @@ point where also the destroy request is sent."
 (defun rau--on-river-window-v1-dimensions (window-wl args)
   (pcase-let (((map width height) args))
     (when-let* ((data (ewc-object-data window-wl))
-                ((rau-window-p data)))
-      (setf (rau-window-actual-width data) width
-            (rau-window-actual-height data) height))))
+                ((rau--external-p data)))
+      (setf (rau--external-actual-width data) width
+            (rau--external-actual-height data) height))))
 
 (defun rau--on-river-window-v1-app-id (window-wl args)
   (pcase-let (((map app-id) args))
     (when-let* ((app-id (ewc-to-utf8 app-id))
                 (win (ewc-object-data window-wl))
-                ((rau-window-p win)))
-      (setf (rau-window-app-id win) app-id))))
+                ((rau--external-p win)))
+      (setf (rau--external-app-id win) app-id))))
 
 (defun rau--on-river-window-v1-title (window-wl args)
   (pcase-let (((map title) args))
     (when-let* ((title (ewc-to-utf8 title))
                 (data (ewc-object-data window-wl)))
       (setf (rau-surface-title data) title)
-      (when (rau-window-p data)
+      (when (rau--external-p data)
         (rau--enqueue
          (lambda ()
            (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
              (with-current-buffer buf
                (rename-buffer
                 (rau--make-buffer-name
-                 (rau-window-app-id data)
+                 (rau--external-app-id data)
                  title)
                 t))))))
       (when (rau-frame-p data)
@@ -905,7 +905,7 @@ point where also the destroy request is sent."
             (rau-log "New frame was not requested by WM")))
 
       (rau-log "Discovered new regular external window")
-      (let ((win (rau-window-make
+      (let ((win (rau--external-make
                   :node-wl node-wl)))
         (setf (ewc-object-data window-wl) win)
         (ewc-object-tag client window-wl rau--tag-window))
@@ -914,15 +914,15 @@ point where also the destroy request is sent."
          ;; Confirm that the Emacs-side buffer for the window was created.
          (let* ((win (ewc-object-data window-wl)))
            (unless (rau--buffer-for-window-wl window-wl)
-             (let ((buffer (get-buffer-create (make-temp-name "rau-window-"))))
+             (let ((buffer (get-buffer-create (make-temp-name "rau-external-"))))
                (with-current-buffer buffer
                  (rau-mode)
                  (setq-local rau--window-wl window-wl)
                  (unless (display-buffer buffer)
                    (error "display-buffer failed for window-wl %S buffer %S." window-wl buffer)))
-               (setf (rau-window-buffer win) buffer)))
+               (setf (rau--external-buffer win) buffer)))
 
-           (setf (rau-window-state win) 'active)))))))
+           (setf (rau--external-state win) 'active)))))))
 
 ;;;; river-output-v1 listeners
 (defun rau--on-river-output-v1-removed (output-wl _)
@@ -1049,7 +1049,7 @@ point where also the destroy request is sent."
 (defun rau--reconcile-windows (state)
   "Close killed windows and propose dimensions for active windows."
   (rau--do rau--tag-window (window-wl win state)
-           (pcase (rau-window-state win)
+           (pcase (rau--external-state win)
              ;; nothing to do for window-state 'starting
              ('active
               (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl)))
@@ -1177,7 +1177,7 @@ See also focus relevant slots in rau STATE."
   "Run the render-sequence reconciliation for windows on STATE."
   (rau--do rau--tag-window (window-wl win state)
     (when-let* ((node-wl (rau-surface-node-wl win))
-                ((eq (rau-window-state win) 'active)))
+                ((eq (rau--external-state win) 'active)))
       (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
                 (frame (ewc-object-data frame-wl))
                 (output-wl (rau-frame-output-wl frame))
@@ -1193,9 +1193,9 @@ See also focus relevant slots in rau STATE."
 
             (rau--request node-wl 'place-top)
 
-            (let ((clip-w (or (rau-window-actual-width win)
+            (let ((clip-w (or (rau--external-actual-width win)
                               (- right left)))
-                  (clip-h (or (rau-window-actual-height win)
+                  (clip-h (or (rau--external-actual-height win)
                               (- bottom top))))
               (rau--request window-wl 'set-clip-box
                             `((x . 0)
