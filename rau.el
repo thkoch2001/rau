@@ -80,6 +80,8 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   "Common state shared by windows and frames.
 Not instantiated directly; windows and frames include it."
   (node-wl nil :type ewc-object)
+  actual-width
+  actual-height
   app-id
   title)
 
@@ -87,9 +89,7 @@ Not instantiated directly; windows and frames include it."
                            (:include rau--window))
   "State for a regular external window."
   (state 'starting) ;; 'active 'killed
-  buffer
-  actual-width
-  actual-height)
+  buffer)
 
 (cl-defstruct (rau--outputframe (:constructor rau--outputframe-make)
                           (:include rau--window))
@@ -799,16 +799,15 @@ point where also the destroy request is sent."
 
 (defun rau--on-river-window-v1-dimensions (window-wl args)
   (pcase-let (((map width height) args))
-    (when-let* ((data (ewc-object-data window-wl))
-                ((rau--external-p data)))
-      (setf (rau--external-actual-width data) width
-            (rau--external-actual-height data) height))))
+    (when-let* ((data (ewc-object-data window-wl)))
+      (setf (rau--window-actual-width data) width
+            (rau--window-actual-height data) height))))
 
 (defun rau--on-river-window-v1-app-id (window-wl args)
   (pcase-let (((map app-id) args))
     (when-let* ((app-id (ewc-to-utf8 app-id))
-                (win (ewc-object-data window-wl)))
-      (setf (rau--window-app-id win) app-id))))
+                (data (ewc-object-data window-wl)))
+      (setf (rau--window-app-id data) app-id))))
 
 (defun rau--on-river-window-v1-title (window-wl args)
   (pcase-let (((map title) args))
@@ -1192,9 +1191,9 @@ See also focus relevant slots in rau STATE."
 
             (rau--request node-wl 'place-top)
 
-            (let ((clip-w (or (rau--external-actual-width win)
+            (let ((clip-w (or (rau--window-actual-width win)
                               (- right left)))
-                  (clip-h (or (rau--external-actual-height win)
+                  (clip-h (or (rau--window-actual-height win)
                               (- bottom top))))
               (rau--request window-wl 'set-clip-box
                             `((x . 0)
