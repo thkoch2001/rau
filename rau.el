@@ -57,7 +57,7 @@ is executed directly so errors drop into the debugger."
 
 ;;; State structs
 
-(cl-defstruct (rau-fs (:constructor rau-fs) (:copier nil))
+(cl-defstruct (rau--fs (:constructor rau--fs) (:copier nil))
   "Fullscreen state machine for one output.
 STATE is one of: `none', `requested', `fullscreen', `exiting'.
 NEW and PREVIOUS are meaningful only when STATE is `requested'.
@@ -74,7 +74,7 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   (y 0)
   (width 0)
   (height 0)
-  (fullscreen (rau-fs)))
+  (fullscreen (rau--fs)))
 
 (cl-defstruct (rau--window (:constructor nil))
   "Common state shared by windows and frames.
@@ -506,9 +506,9 @@ used in event listeners."
 
 (defun rau--fs-window (fs)
   "Return the window involved in fullscreen state FS, if any."
-  (pcase (rau-fs-state fs)
-    ('requested (rau-fs-new fs))
-    ((or 'fullscreen 'exiting) (rau-fs-window fs))
+  (pcase (rau--fs-state fs)
+    ('requested (rau--fs-new fs))
+    ((or 'fullscreen 'exiting) (rau--fs-window fs))
     (_ nil)))
 
 ;;; XKB keysym resolution
@@ -795,7 +795,7 @@ point where also the destroy request is sent."
   (when (ewc-object-tagged-p surface-wl rau--tag-window)
     (rau--do 'river-output-v1 (output-wl out rau--state)
              (when (eq (rau--fs-window (rau-output-fullscreen out)) surface-wl)
-               (setf (rau-output-fullscreen out) (rau-fs))))))
+               (setf (rau-output-fullscreen out) (rau--fs))))))
 
 (defun rau--on-river-window-v1-dimensions (window-wl args)
   (pcase-let (((map width height) args))
@@ -858,23 +858,23 @@ point where also the destroy request is sent."
       (when-let* ((out (ewc-object-data output-wl)))
         (let* ((fs (rau-output-fullscreen out))
                (previous
-                (pcase (rau-fs-state fs)
+                (pcase (rau--fs-state fs)
                   ((or 'fullscreen 'exiting)
-                   (rau-fs-window fs))
+                   (rau--fs-window fs))
                   (_ nil))))
           (setf (rau-output-fullscreen out)
-                (rau-fs :state 'requested
+                (rau--fs :state 'requested
                         :new window-wl
                         :previous previous)))))))
 
 (defun rau--on-river-window-v1-exit-fullscreen-requested (window-wl _)
   (rau--do 'river-output-v1 (output-wl out rau--state)
            (let ((fs (rau-output-fullscreen out)))
-             (when (and (member (rau-fs-state fs)
+             (when (and (member (rau--fs-state fs)
                                 '(requested fullscreen))
                         (eq (rau--fs-window fs) window-wl))
                (setf (rau-output-fullscreen out)
-                     (rau-fs :state 'exiting
+                     (rau--fs :state 'exiting
                              :window (rau--fs-window fs)))))))
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
@@ -1090,10 +1090,10 @@ point where also the destroy request is sent."
   "Advance fullscreen state machines."
   (rau--do 'river-output-v1 (output-wl out state)
     (let ((fs (rau-output-fullscreen out)))
-      (pcase (rau-fs-state fs)
+      (pcase (rau--fs-state fs)
         ('requested
-         (let ((new-wl (rau-fs-new fs))
-               (prev-wl (rau-fs-previous fs)))
+         (let ((new-wl (rau--fs-new fs))
+               (prev-wl (rau--fs-previous fs)))
            (when (and prev-wl (ewc-object-p prev-wl))
              (rau--request prev-wl 'inform-not-fullscreen)
              (rau--request prev-wl 'exit-fullscreen))
@@ -1102,13 +1102,13 @@ point where also the destroy request is sent."
              (rau--request new-wl 'fullscreen
                             `((output . ,(ewc-object-id output-wl)))))
            (setf (rau-output-fullscreen out)
-                 (rau-fs :state 'fullscreen :window new-wl))))
+                 (rau--fs :state 'fullscreen :window new-wl))))
         ('exiting
-         (let ((window-wl (rau-fs-window fs)))
+         (let ((window-wl (rau--fs-window fs)))
            (when (and window-wl (ewc-object-p window-wl))
              (rau--request window-wl 'inform-not-fullscreen)
              (rau--request window-wl 'exit-fullscreen))
-           (setf (rau-output-fullscreen out) (rau-fs))))
+           (setf (rau-output-fullscreen out) (rau--fs))))
         (_ nil)))))
 
 
@@ -1216,17 +1216,17 @@ See also focus relevant slots in rau STATE."
             (output-wl (rau--outputframe-output-wl frame-data))
             (out (ewc-object-data output-wl))
             (fs (rau-output-fullscreen out)))
-      (pcase (rau-fs-state fs)
+      (pcase (rau--fs-state fs)
         ('none
          (setf (rau-output-fullscreen out)
-               (rau-fs :state 'requested
+               (rau--fs :state 'requested
                        :new window-wl))
          (rau--mark-manage-dirty rau--state))
 
         ('fullscreen
          (setf (rau-output-fullscreen out)
-               (rau-fs :state 'exiting
-                       :window (rau-fs-window fs)))
+               (rau--fs :state 'exiting
+                       :window (rau--fs-window fs)))
          (rau--mark-manage-dirty rau--state))
 
         (_
