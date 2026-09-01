@@ -97,11 +97,11 @@ Not instantiated directly; windows and frames include it."
   emacs-frame
   (output-wl nil :type ewc-object :documentation "displaying this frame"))
 
-(cl-defstruct (rau-seat (:constructor rau-seat-make))
+(cl-defstruct (rau--seat (:constructor rau--seat-make))
   "State for a River seat."
   (ls-seat-wl nil :type ewc-object))
 
-(cl-defstruct (rau-binding (:constructor rau-binding-make))
+(cl-defstruct (rau--binding (:constructor rau--binding-make))
   "State for one global XKB binding."
   keysym
   modifiers
@@ -113,7 +113,7 @@ Not instantiated directly; windows and frames include it."
   (client nil :type ewc-client)
   (pid (emacs-pid))
 
-  ;; XKB bindings: (keysym . modifiers) -> rau-binding.
+  ;; XKB bindings: (keysym . modifiers) -> rau--binding.
   (bindings (make-hash-table :test 'equal))
 
   ;;; Focus tracking.
@@ -301,9 +301,9 @@ PREFIX is a key string suitable for `kbd'."
         (message "rau: could not resolve XKB keysym for %S" key)
       (let ((existing (gethash binding-key (rau-state-bindings rau--state))))
         (if existing
-            (setf (rau-binding-event existing) event)
+            (setf (rau--binding-event existing) event)
           (puthash binding-key
-                   (rau-binding-make
+                   (rau--binding-make
                     :keysym keysym
                     :modifiers modifiers
                     :event event
@@ -615,14 +615,14 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (when-let* ((client (rau-state-client state))
               (seat-wl (ewc-first-object client 'river-seat-v1))
               (seat (ewc-object-data seat-wl))
-              ((null (rau-seat-ls-seat-wl seat)))
+              ((null (rau--seat-ls-seat-wl seat)))
               (ls-wl (ewc-first-object client 'river-layer-shell-v1))
               (ls-seat-id (cl-incf (ewc-client-new-id client)))
               (ls-seat-wl
                (ewc-object-add client
                                'river-layer-shell-seat-v1
                                ls-seat-id)))
-    (setf (rau-seat-ls-seat-wl seat) ls-seat-wl)
+    (setf (rau--seat-ls-seat-wl seat) ls-seat-wl)
     (rau--request ls-wl 'get-seat
                    `((id . ,ls-seat-id)
                      (seat . ,(ewc-object-id seat-wl))))))
@@ -775,7 +775,7 @@ point where also the destroy request is sent."
     (if (ewc-first-object client 'river-seat-v1)
         (message "rau does not support multi-seat")
       (let* ((seat-wl (ewc-object-add client 'river-seat-v1 id)))
-        (setf (ewc-object-data seat-wl) (rau-seat-make))
+        (setf (ewc-object-data seat-wl) (rau--seat-make))
         (rau--ensure-ls-seat rau--state)))))
 
 ;;;; river-window-v1 listeners
@@ -968,7 +968,7 @@ point where also the destroy request is sent."
 ;;;; river-xkb-binding-v1 listeners
 (defun rau--on-river-xkb-binding-v1-pressed (binding-wl _)
   (when-let* ((binding (ewc-object-data binding-wl))
-              (event (rau-binding-event binding)))
+              (event (rau--binding-event binding)))
     (rau-log "enqueue-after-manage")
     (rau--enqueue-after-manage
      (lambda ()
@@ -1072,18 +1072,18 @@ point where also the destroy request is sent."
               (seat-wl (ewc-first-object client 'river-seat-v1)))
     (maphash
      (lambda (_key binding)
-       (when (eq (rau-binding-state binding) 'requested)
+       (when (eq (rau--binding-state binding) 'requested)
          (let* ((id (cl-incf (ewc-client-new-id client)))
                 (binding-wl (ewc-object-add client 'river-xkb-binding-v1 id)))
            (rau--request xkb-bindings-wl 'get-xkb-binding
                           `((seat . ,(ewc-object-id seat-wl))
-                            (keysym . ,(rau-binding-keysym binding))
-                            (modifiers . ,(rau-binding-modifiers binding))
+                            (keysym . ,(rau--binding-keysym binding))
+                            (modifiers . ,(rau--binding-modifiers binding))
                             (id . ,id)))
            (setf (ewc-object-data binding-wl) binding
-                 (rau-binding-state binding) 'registered)
+                 (rau--binding-state binding) 'registered)
            (rau--request binding-wl 'enable)
-           (setf (rau-binding-state binding) 'enabled))))
+           (setf (rau--binding-state binding) 'enabled))))
      (rau-state-bindings state))))
 
 (defun rau--reconcile-fullscreen (state)
