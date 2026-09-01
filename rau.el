@@ -737,7 +737,9 @@ point where also the destroy request is sent."
        (rau--request wm-wl 'manage-finish)
        (setf (rau-state-command-queue rau--state)
              (append (rau-state-command-queue rau--state) (rau-state-command-queue-after-manage rau--state))
-             (rau-state-command-queue-after-manage rau--state) nil)))))
+             (rau-state-command-queue-after-manage rau--state) nil)
+       (when (rau-state-command-queue rau--state)
+         (rau--schedule-command-handler))))))
 
 (defun rau-on-river-window-manager-v1-render-start (wm-wl _)
   (rau--enqueue
