@@ -325,10 +325,13 @@ Returns the newly created object."
 
 (defun ewc-pack (object request arguments)
   "Return Wayland REQUEST wire message for OBJECT with ARGUMENTS."
-  (ewc-log "ewc: pack %s::%s nr args=%d"
+  (ewc-log "ewc: pack %s::%s(%s)"
            (ewc-object-interface object)
            request
-           (length arguments))
+           (mapconcat (lambda (arg)
+                        (format "%s=%S" (car arg) (cdr arg)))
+                      arguments
+                      " "))
 
   (let ((entry (assq request (ewc-object-requests object))))
     (unless entry
