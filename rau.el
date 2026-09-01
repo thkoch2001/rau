@@ -76,14 +76,14 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   (height 0)
   (fullscreen (rau-fs)))
 
-(cl-defstruct (rau-surface (:constructor nil))
+(cl-defstruct (rau--window (:constructor nil))
   "Common state shared by windows and frames.
 Not instantiated directly; windows and frames include it."
   (node-wl nil :type ewc-object)
   title)
 
 (cl-defstruct (rau--external (:constructor rau--external-make)
-                           (:include rau-surface))
+                           (:include rau--window))
   "State for a regular external window."
   (state 'starting) ;; 'active 'killed
   buffer
@@ -92,7 +92,7 @@ Not instantiated directly; windows and frames include it."
   app-id)
 
 (cl-defstruct (rau-frame (:constructor rau-frame-make)
-                          (:include rau-surface))
+                          (:include rau--window))
   "State for an Emacs frame managed by rau."
   emacs-frame
   (output-wl nil :type ewc-object :documentation "displaying this frame"))
@@ -649,7 +649,7 @@ post-command-hook in the enqueued command of the pressed event handler."
                 ((/= window-id (rau-state-focus-last-id rau--state))))
       (rau-log "recover focus. focusing window-id=%d title=%s"
                window-id
-               (rau-surface-title (ewc-object-data window-wl)))
+               (rau--window-title (ewc-object-data window-wl)))
       (setf (rau-state-focus-next-id rau--state) window-id)
       (rau--mark-manage-dirty rau--state))))
 
@@ -786,7 +786,7 @@ point where also the destroy request is sent."
                  (buf (rau--buffer-for-window-wl surface-wl)))
        (kill-buffer buf))
      (let ((data (ewc-object-data surface-wl)))
-       (when-let* ((node-wl (rau-surface-node-wl data)))
+       (when-let* ((node-wl (rau--window-node-wl data)))
          (rau--request node-wl 'destroy))
        (rau--request surface-wl 'destroy)
        (rau--remove surface-wl))))
@@ -815,7 +815,7 @@ point where also the destroy request is sent."
   (pcase-let (((map title) args))
     (when-let* ((title (ewc-to-utf8 title))
                 (data (ewc-object-data window-wl)))
-      (setf (rau-surface-title data) title)
+      (setf (rau--window-title data) title)
       (when (rau--external-p data)
         (rau--enqueue
          (lambda ()
@@ -1126,7 +1126,7 @@ See also focus relevant slots in rau STATE."
 
     (rau-log "request focus-window id=%d title=%s"
              target-id
-             (rau-surface-title (ewc-object-data target-wl)))
+             (rau--window-title (ewc-object-data target-wl)))
     (rau--request seat-wl
                   'focus-window
                   `((window . ,target-id))
@@ -1162,7 +1162,7 @@ See also focus relevant slots in rau STATE."
 (defun rau--render-frames (state)
   "Run the render-sequence reconciliation for frames on STATE."
   (rau--do rau--tag-frame (frame-wl frame state)
-           (when-let* ((node-wl (rau-surface-node-wl frame))
+           (when-let* ((node-wl (rau--window-node-wl frame))
                        (output-wl (rau-frame-output-wl frame))
                        (out (ewc-object-data output-wl)))
              (rau-log "render frame %d for output %d."
@@ -1176,7 +1176,7 @@ See also focus relevant slots in rau STATE."
 (defun rau--render-windows (state)
   "Run the render-sequence reconciliation for windows on STATE."
   (rau--do rau--tag-window (window-wl win state)
-    (when-let* ((node-wl (rau-surface-node-wl win))
+    (when-let* ((node-wl (rau--window-node-wl win))
                 ((eq (rau--external-state win) 'active)))
       (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
                 (frame (ewc-object-data frame-wl))
