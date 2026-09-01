@@ -95,12 +95,7 @@ Not instantiated directly; windows and frames include it."
                           (:include rau-surface))
   "State for an Emacs frame managed by rau."
   emacs-frame
-  (output-wl nil :type ewc-object :documentation "displaying this frame")
-  (proposed-width 0)
-  (proposed-height 0)
-  visible
-  (last-x 0)
-  (last-y 0))
+  (output-wl nil :type ewc-object :documentation "displaying this frame"))
 
 (cl-defstruct (rau-seat (:constructor rau-seat-make))
   "State for a River seat."
@@ -428,12 +423,13 @@ when used from other files (e.g. tests)."
 See also `rau-on-wl-display-delete-id'."
   (ewc-object-remove (rau-state-client rau--state) object-wl))
 
-(defun rau--request (object-wl request &optional arguments)
+(defun rau--request (object-wl request &optional arguments nocache)
   "Send REQUEST on OBJECT-WL using the current rau Wayland client."
   (ewc-request (rau-state-client rau--state)
                object-wl
                request
-               arguments))
+               arguments
+               nocache))
 
 (defun rau--frame-by-cond (state predicate)
   "Return the first frame ewc-object in STATE matching PREDICATE."
@@ -923,10 +919,6 @@ point where also the destroy request is sent."
                  (rau-mode)
                  (setq-local rau--window-wl window-wl)
                  (unless (display-buffer buffer)
-                   ;; TODO: consider (set-window-dedicated-p win t) on the window showing a rau
-                   ;; buffer, so an accidental C-x b doesn't silently detach the external surface
-                   ;; (as it stands the surface just hides, which is confusing).
-                   ;; (set-window-dedicated-p emacs-window 1)
                    (error "display-buffer failed for window-wl %S buffer %S." window-wl buffer)))
                (setf (rau-window-buffer win) buffer)))
 
@@ -1028,22 +1020,16 @@ point where also the destroy request is sent."
                  (progn
                    (rau-log "frame found: id=%d." (ewc-object-id frame-wl))
                    ;; Frame already assigned: only re-propose if size changed.
-                   (unless (and (eq (rau-frame-proposed-width f) (rau-output-width out))
-                                (eq (rau-frame-proposed-height f) (rau-output-height out)))
-                     (setf (rau-frame-proposed-width f) (rau-output-width out)
-                           (rau-frame-proposed-height f) (rau-output-height out))
-                     (rau--request frame-wl
-                                   'propose-dimensions
-                                   `((width . ,(rau-output-width out))
-                                     (height . ,(rau-output-height out))))))
+                   (rau--request frame-wl
+                                 'propose-dimensions
+                                 `((width . ,(rau-output-width out))
+                                   (height . ,(rau-output-height out)))))
 
                (rau-log "no frame found for output.")
                (if-let* ((frame-wl (rau--frame-without-output state))
                           (f (ewc-object-data frame-wl)))
                     (progn
-                      (setf (rau-frame-output-wl f) output-wl
-                            (rau-frame-proposed-width f) (rau-output-width out)
-                            (rau-frame-proposed-height f) (rau-output-height out))
+                      (setf (rau-frame-output-wl f) output-wl)
                       (rau--request frame-wl
                                      'propose-dimensions
                                      `((width . ,(rau-output-width out))
@@ -1143,7 +1129,8 @@ See also focus relevant slots in rau STATE."
              (rau-surface-title (ewc-object-data target-wl)))
     (rau--request seat-wl
                   'focus-window
-                  `((window . ,target-id)))
+                  `((window . ,target-id))
+                  t)
     (setf (rau-state-focus-last-id state) target-id
           (rau-state-focus-next-id state) -1)
 
@@ -1175,30 +1162,16 @@ See also focus relevant slots in rau STATE."
 (defun rau--render-frames (state)
   "Run the render-sequence reconciliation for frames on STATE."
   (rau--do rau--tag-frame (frame-wl frame state)
-            (let ((node-wl (rau-surface-node-wl frame))
-                  (output-wl (rau-frame-output-wl frame)))
-              (if (not output-wl)
-                  (when (rau-frame-visible frame)
-                    (setf (rau-frame-visible frame) nil)
-                    (rau--request frame-wl 'hide))
-                (rau-log "render frame %d for output %d."
-                         (ewc-object-id frame-wl)
-                         (ewc-object-id output-wl))
-                (unless (rau-frame-visible frame)
-                  (rau-log "show frame.")
-                  (setf (rau-frame-visible frame) t)
-                  (rau--request frame-wl 'show))
-                (when node-wl
-                  (rau--request node-wl 'place-bottom))
-                (when-let* ((out (ewc-object-data output-wl))
-                            (node-wl)
-                            ((not (and (eq (rau-frame-last-x frame) (rau-output-x out))
-                                       (eq (rau-frame-last-y frame) (rau-output-y out))))))
-                  (setf (rau-frame-last-x frame) (rau-output-x out)
-                        (rau-frame-last-y frame) (rau-output-y out))
-                  (rau--request node-wl 'set-position
-                                 `((x . ,(rau-output-x out))
-                                   (y . ,(rau-output-y out)))))))))
+           (when-let* ((node-wl (rau-surface-node-wl frame))
+                       (output-wl (rau-frame-output-wl frame))
+                       (out (ewc-object-data output-wl)))
+             (rau-log "render frame %d for output %d."
+                      (ewc-object-id frame-wl)
+                      (ewc-object-id output-wl))
+             (rau--request node-wl 'place-bottom)
+             (rau--request node-wl 'set-position
+                           `((x . ,(rau-output-x out))
+                             (y . ,(rau-output-y out)))))))
 
 (defun rau--render-windows (state)
   "Run the render-sequence reconciliation for windows on STATE."
