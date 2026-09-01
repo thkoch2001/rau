@@ -142,10 +142,10 @@ Not instantiated directly; windows and frames include it."
 
 ;;; Surface tags
 
-(defconst rau--tag-frame :rau-frame
+(defconst rau--tag-outputframe :rau-frame
   "Tag for `river-window-v1' objects that are Emacs frames.")
 
-(defconst rau--tag-window :rau-external
+(defconst rau--tag-external :rau-external
   "Tag for `river-window-v1' objects that are external windows.")
 
 (defvar rau--command-timer nil
@@ -163,7 +163,7 @@ Not instantiated directly; windows and frames include it."
 (cl-defmacro rau--do (tag (obj val state) &body body)
   "Iterate over the ewc objects in STATE tagged with TAG.
 TAG is a form that evaluates to or is an ewc-object tag, for example
-`rau--tag-window', `rau--tag-frame', or `'river-output-v1'.
+`rau--tag-external', `rau--tag-outputframe', or `'river-output-v1'.
 
 OBJ is bound to the ewc-object and VAL to its data for each
 element.  STATE is evaluated once and bound to that same name
@@ -433,7 +433,7 @@ See also `rau-on-wl-display-delete-id'."
 
 (defun rau--frame-by-cond (state predicate)
   "Return the first frame ewc-object in STATE matching PREDICATE."
-  (cl-loop for frame-wl in (ewc-objects (rau--state-client state) rau--tag-frame)
+  (cl-loop for frame-wl in (ewc-objects (rau--state-client state) rau--tag-outputframe)
            for f = (ewc-object-data frame-wl)
            thereis (and f (funcall predicate f) frame-wl)))
 
@@ -782,7 +782,7 @@ point where also the destroy request is sent."
 (defun rau--on-river-window-v1-closed (surface-wl _)
   (rau--enqueue
    (lambda ()
-     (when-let* (((ewc-object-tagged-p surface-wl rau--tag-window))
+     (when-let* (((ewc-object-tagged-p surface-wl rau--tag-external))
                  (buf (rau--buffer-for-window-wl surface-wl)))
        (kill-buffer buf))
      (let ((data (ewc-object-data surface-wl)))
@@ -792,7 +792,7 @@ point where also the destroy request is sent."
        (rau--remove surface-wl))))
 
   ;; Reset fullscreen on output if window was fullscreen.
-  (when (ewc-object-tagged-p surface-wl rau--tag-window)
+  (when (ewc-object-tagged-p surface-wl rau--tag-external)
     (rau--do 'river-output-v1 (output-wl out rau--state)
              (when (eq (rau--fs-window (rau--output-fullscreen out)) surface-wl)
                (setf (rau--output-fullscreen out) (rau--fs))))))
@@ -847,7 +847,7 @@ point where also the destroy request is sent."
                 (or (and (integerp output)
                          (not (zerop output))
                          (ewc-object-get (rau--state-client rau--state) output))
-                    (when-let* (((ewc-object-tagged-p window-wl rau--tag-window))
+                    (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
                                 (frame-wl (rau--frame-wl-for-window-wl window-wl))
                                 (frame (ewc-object-data frame-wl)))
                       (rau--outputframe-output-wl frame))
@@ -877,7 +877,7 @@ point where also the destroy request is sent."
                              :window (rau--fs-window fs)))))))
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
-  (when (ewc-object-tagged-p window-wl rau--tag-window)
+  (when (ewc-object-tagged-p window-wl rau--tag-external)
     (rau--enqueue
      (lambda ()
        (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
@@ -898,7 +898,7 @@ point where also the destroy request is sent."
           (let ((frame (rau--outputframe-make
                         :node-wl node-wl)))
             (setf (ewc-object-data window-wl) frame)
-            (ewc-object-tag client window-wl rau--tag-frame))
+            (ewc-object-tag client window-wl rau--tag-outputframe))
           (if (> (rau--state-pending-frames rau--state) 0)
               (cl-decf (rau--state-pending-frames rau--state))
             (rau--log "New frame was not requested by WM")))
@@ -907,7 +907,7 @@ point where also the destroy request is sent."
       (let ((win (rau--external-make
                   :node-wl node-wl)))
         (setf (ewc-object-data window-wl) win)
-        (ewc-object-tag client window-wl rau--tag-window))
+        (ewc-object-tag client window-wl rau--tag-external))
       (rau--enqueue
        (lambda ()
          ;; Confirm that the Emacs-side buffer for the window was created.
@@ -927,7 +927,7 @@ point where also the destroy request is sent."
 (defun rau--on-river-output-v1-removed (output-wl _)
   ;; TODO: check whether we lost focus
   (let ((client (rau--state-client rau--state)))
-    (rau--do rau--tag-frame (frame-wl frame rau--state)
+    (rau--do rau--tag-outputframe (frame-wl frame rau--state)
       (when (eq (rau--outputframe-output-wl frame) output-wl)
         (setf (rau--outputframe-output-wl frame) nil)
         (rau--enqueue
@@ -979,7 +979,7 @@ point where also the destroy request is sent."
     (when-let* ((surface-id (rau--state-focus-last-id rau--state))
                 (client (rau--state-client rau--state))
                 (surface-wl (ewc-object-get client surface-id))
-                ((ewc-object-tagged-p surface-wl rau--tag-window))
+                ((ewc-object-tagged-p surface-wl rau--tag-external))
                 (target-wl (rau--frame-wl-for-window-wl surface-wl))
                 (target-id (ewc-object-id target-wl)))
       (rau--log "switch focus to emacs frame for key pressed.")
@@ -1047,7 +1047,7 @@ point where also the destroy request is sent."
 
 (defun rau--reconcile-windows (state)
   "Close killed windows and propose dimensions for active windows."
-  (rau--do rau--tag-window (window-wl win state)
+  (rau--do rau--tag-external (window-wl win state)
            (pcase (rau--external-state win)
              ;; nothing to do for window-state 'starting
              ('active
@@ -1133,7 +1133,7 @@ See also focus relevant slots in rau STATE."
     (setf (rau--state-focus-last-id state) target-id
           (rau--state-focus-next-id state) -1)
 
-    (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-window)
+    (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-external)
                               (rau--frame-wl-for-window-wl target-wl)
                             target-wl))
                 (frame-data (ewc-object-data frame-wl))
@@ -1143,7 +1143,7 @@ See also focus relevant slots in rau STATE."
       (rau--request ls-output-wl 'set-default))
 
     ;; Let Emacs select the underlying emacs-window for the external window
-    (when-let* (((ewc-object-tagged-p target-wl rau--tag-window))
+    (when-let* (((ewc-object-tagged-p target-wl rau--tag-external))
                 (emacs-window (rau--emacs-window-for-window-wl target-wl)))
       (rau--log "select underlying window")
       (setf (rau--state-focus-inhibit-update state) t)
@@ -1160,7 +1160,7 @@ See also focus relevant slots in rau STATE."
 
 (defun rau--render-frames (state)
   "Run the render-sequence reconciliation for frames on STATE."
-  (rau--do rau--tag-frame (frame-wl frame state)
+  (rau--do rau--tag-outputframe (frame-wl frame state)
            (when-let* ((node-wl (rau--window-node-wl frame))
                        (output-wl (rau--outputframe-output-wl frame))
                        (out (ewc-object-data output-wl)))
@@ -1174,7 +1174,7 @@ See also focus relevant slots in rau STATE."
 
 (defun rau--render-windows (state)
   "Run the render-sequence reconciliation for windows on STATE."
-  (rau--do rau--tag-window (window-wl win state)
+  (rau--do rau--tag-external (window-wl win state)
     (when-let* ((node-wl (rau--window-node-wl win))
                 ((eq (rau--external-state win) 'active)))
       (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
