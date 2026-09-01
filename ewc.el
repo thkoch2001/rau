@@ -148,11 +148,12 @@ OPCODE is the request opcode."
        `((,name sint 32 t)))
 
       ("string"
-       `((,(intern (format "%s-len" name)) uint 32 t)
-         (,name strz)
-         ;; Hack: If not constructed with list this leads to circular lists due to nconc.
-         ;; Have a look at the expansion of this backquote and (elisp) Repeated Expansion.
-         ,(list '_ 'align 4)))
+       (let ((len-field (intern (format "%s-len" name))))
+        `((,len-field uint 32 t)
+          (,name strz ,len-field)
+          ;; Hack: If not constructed with list this leads to circular lists due to nconc.
+          ;; Have a look at the expansion of this backquote and (elisp) Repeated Expansion.
+          ,(list '_ 'align 4))))
 
       ((or "fixed" "array" "fd")
        `((,name not-implemented))))))
@@ -312,6 +313,7 @@ Returns the newly created object."
               (let* ((listener (aref listeners opcode))
                      (ue (cdr spec))
                      (args (when ue (funcall ue))))
+                (ewc-log "ewc: args %S" args)
                 (condition-case err
                     (funcall listener object args)
                   (error (message "ewc: listener error for %s opcode %s: %S"
