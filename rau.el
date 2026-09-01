@@ -945,8 +945,7 @@ point where also the destroy request is sent."
              (delete-frame emacs-frame))))))
     (when-let* ((out (ewc-object-data output-wl))
                 (ls-output-wl (rau-output-ls-output-wl out)))
-      (rau--request ls-output-wl 'destroy)
-      (ewc-object-remove client ls-output-wl))
+      (rau--request ls-output-wl 'destroy))
     (rau--request output-wl 'destroy)
     (ewc-object-remove client output-wl)))
 
