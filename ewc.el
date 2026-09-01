@@ -320,7 +320,7 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
               (let* ((listener (aref listeners opcode))
                      (ue (cdr spec))
                      (args (when ue (funcall ue))))
-                (ewc-log "ewc: args %S" args)
+                (when args (ewc-log "ewc: args %S" args))
                 (condition-case err
                     (funcall listener object args)
                   (error (message "ewc: listener error for %s opcode %s: %S"
