@@ -782,21 +782,22 @@ point where also the destroy request is sent."
         (rau--ensure-ls-seat rau--state)))))
 
 ;;;; river-window-v1 listeners
-(defun rau-on-river-window-v1-closed (window-wl _)
+(defun rau-on-river-window-v1-closed (surface-wl _)
   (rau--enqueue
    (lambda ()
-     (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
+     (when-let* (((ewc-object-tagged-p surface-wl rau--tag-window))
+                 (buf (rau--buffer-for-window-wl surface-wl)))
        (kill-buffer buf))
-     (let ((data (ewc-object-data window-wl)))
+     (let ((data (ewc-object-data surface-wl)))
        (when-let* ((node-wl (rau-surface-node-wl data)))
          (rau--request node-wl 'destroy))
-       (rau--request window-wl 'destroy)
-       (rau--remove window-wl))))
+       (rau--request surface-wl 'destroy)
+       (rau--remove surface-wl))))
 
   ;; Reset fullscreen on output if window was fullscreen.
-  (when (ewc-object-tagged-p window-wl rau--tag-window)
+  (when (ewc-object-tagged-p surface-wl rau--tag-window)
     (rau--do 'river-output-v1 (output-wl out rau--state)
-             (when (eq (rau--fs-window (rau-output-fullscreen out)) window-wl)
+             (when (eq (rau--fs-window (rau-output-fullscreen out)) surface-wl)
                (setf (rau-output-fullscreen out) (rau-fs))))))
 
 (defun rau-on-river-window-v1-dimensions (window-wl args)
