@@ -1023,19 +1023,23 @@ point where also the destroy request is sent."
   "Ensure each output gets one maximized Emacs frame."
   (let ((frame-requests 0))
     (rau--do 'river-output-v1 (output-wl out state)
-              (if-let* ((frame-wl (rau--frame-for-output state output-wl))
-                        (f (ewc-object-data frame-wl)))
-                  ;; Frame already assigned: only re-propose if size changed.
-                  (unless (and (eq (rau-frame-proposed-width f) (rau-output-width out))
-                               (eq (rau-frame-proposed-height f) (rau-output-height out)))
-                    (setf (rau-frame-proposed-width f) (rau-output-width out)
-                          (rau-frame-proposed-height f) (rau-output-height out))
-                    (rau--request frame-wl
+             (rau-log "reconcile output: id=%d." (ewc-object-id output-wl))
+             (if-let* ((frame-wl (rau--frame-for-output state output-wl))
+                       (f (ewc-object-data frame-wl)))
+                 (progn
+                   (rau-log "frame found: id=%d." (ewc-object-id frame-wl))
+                   ;; Frame already assigned: only re-propose if size changed.
+                   (unless (and (eq (rau-frame-proposed-width f) (rau-output-width out))
+                                (eq (rau-frame-proposed-height f) (rau-output-height out)))
+                     (setf (rau-frame-proposed-width f) (rau-output-width out)
+                           (rau-frame-proposed-height f) (rau-output-height out))
+                     (rau--request frame-wl
                                    'propose-dimensions
                                    `((width . ,(rau-output-width out))
-                                     (height . ,(rau-output-height out)))))
+                                     (height . ,(rau-output-height out))))))
 
-                (if-let* ((frame-wl (rau--frame-without-output state))
+               (rau-log "no frame found for output.")
+               (if-let* ((frame-wl (rau--frame-without-output state))
                           (f (ewc-object-data frame-wl)))
                     (progn
                       (setf (rau-frame-output-wl f) output-wl
@@ -1051,6 +1055,7 @@ point where also the destroy request is sent."
                                      'set-tiled
                                      `((edges . ,rau--edges-all))))
                   ;; No frame on this output yet: request one.
+                  (rau-log "request frame.")
                   (cl-incf frame-requests))))
     (dotimes (_ (- frame-requests (rau-state-pending-frames state)))
       (rau--enqueue (lambda () (make-frame)))
@@ -1178,7 +1183,11 @@ See also focus relevant slots in rau STATE."
                   (when (rau-frame-visible frame)
                     (setf (rau-frame-visible frame) nil)
                     (rau--request frame-wl 'hide))
+                (rau-log "render frame %d for output %d."
+                         (ewc-object-id frame-wl)
+                         (ewc-object-id output-wl))
                 (unless (rau-frame-visible frame)
+                  (rau-log "show frame.")
                   (setf (rau-frame-visible frame) t)
                   (rau--request frame-wl 'show))
                 (when node-wl
