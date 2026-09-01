@@ -108,7 +108,7 @@ Not instantiated directly; windows and frames include it."
   event
   (state 'requested))
 
-(cl-defstruct (rau-state (:constructor rau-state-make))
+(cl-defstruct (rau--state (:constructor rau--state-make))
   "Holds the state of the rau Wayland client."
   (client nil :type ewc-client)
   (pid (emacs-pid))
@@ -172,7 +172,7 @@ within BODY."
   (unless (symbolp state)
     (error "rau--do: STATE slot must be a symbol, got: %S" state))
   `(let ((,state ,state))
-     (dolist (,obj (ewc-objects (rau-state-client ,state) ,tag))
+     (dolist (,obj (ewc-objects (rau--state-client ,state) ,tag))
        (let ((,val (ewc-object-data ,obj)))
          ,@body))))
 
@@ -213,13 +213,13 @@ within BODY."
   (unless rau--handling-commands
     (let ((rau--handling-commands t))
       ;; Drain the command queue.
-      (while-let ((cmd (pop (rau-state-command-queue state))))
+      (while-let ((cmd (pop (rau--state-command-queue state))))
         (rau--condition-case
          "handle-command"
          (funcall cmd)))
 
       (when (or rau--pending-handler
-                (rau-state-command-queue state))
+                (rau--state-command-queue state))
         (setq rau--pending-handler nil)
         (rau--schedule-command-handler)))))
 
@@ -261,13 +261,13 @@ within BODY."
   (rau-log "update-focus-request %S" args)
   (when-let* (((rau--focus-change-allowed-p))
               (state rau--state)
-              ((null (rau-state-focus-inhibit-update state)))
+              ((null (rau--state-focus-inhibit-update state)))
               (emacs-window (selected-window))
               (target-wl (rau--surface-wl-for-emacs-window emacs-window))
               (target-id (ewc-object-id target-wl))
-              ((not (eq target-id (rau-state-focus-last-id state)))))
+              ((not (eq target-id (rau--state-focus-last-id state)))))
 
-    (setf (rau-state-focus-next-id state) target-id)
+    (setf (rau--state-focus-next-id state) target-id)
     (rau--mark-manage-dirty state)))
 
 (defconst rau--modifier-bits
@@ -299,7 +299,7 @@ PREFIX is a key string suitable for `kbd'."
          (binding-key (cons keysym modifiers)))
     (if (= keysym 0)
         (message "rau: could not resolve XKB keysym for %S" key)
-      (let ((existing (gethash binding-key (rau-state-bindings rau--state))))
+      (let ((existing (gethash binding-key (rau--state-bindings rau--state))))
         (if existing
             (setf (rau--binding-event existing) event)
           (puthash binding-key
@@ -308,7 +308,7 @@ PREFIX is a key string suitable for `kbd'."
                     :modifiers modifiers
                     :event event
                     :state 'requested)
-                   (rau-state-bindings rau--state))))
+                   (rau--state-bindings rau--state))))
       (rau--mark-manage-dirty rau--state))))
 
 (defcustom rau-intercept-prefixes
@@ -421,11 +421,11 @@ when used from other files (e.g. tests)."
 (defun rau--remove (object-wl)
   "Remove object from ewc objects table.
 See also `rau-on-wl-display-delete-id'."
-  (ewc-object-remove (rau-state-client rau--state) object-wl))
+  (ewc-object-remove (rau--state-client rau--state) object-wl))
 
 (defun rau--request (object-wl request &optional arguments nocache)
   "Send REQUEST on OBJECT-WL using the current rau Wayland client."
-  (ewc-request (rau-state-client rau--state)
+  (ewc-request (rau--state-client rau--state)
                object-wl
                request
                arguments
@@ -433,7 +433,7 @@ See also `rau-on-wl-display-delete-id'."
 
 (defun rau--frame-by-cond (state predicate)
   "Return the first frame ewc-object in STATE matching PREDICATE."
-  (cl-loop for frame-wl in (ewc-objects (rau-state-client state) rau--tag-frame)
+  (cl-loop for frame-wl in (ewc-objects (rau--state-client state) rau--tag-frame)
            for f = (ewc-object-data frame-wl)
            thereis (and f (funcall predicate f) frame-wl)))
 
@@ -475,13 +475,13 @@ See also `rau-on-wl-display-delete-id'."
   "Queue FN for execution by rau--command-handler.
 Also schedule the command handler timer if not yet done so.  Only to be
 used in event listeners."
-  (setf (rau-state-command-queue rau--state)
-        (append (rau-state-command-queue rau--state) (list fn)))
+  (setf (rau--state-command-queue rau--state)
+        (append (rau--state-command-queue rau--state) (list fn)))
   (rau--schedule-command-handler))
 
 (defun rau--enqueue-after-manage (fn)
-  (setf (rau-state-command-queue-after-manage rau--state)
-        (append (rau-state-command-queue-after-manage rau--state) (list fn))))
+  (setf (rau--state-command-queue-after-manage rau--state)
+        (append (rau--state-command-queue-after-manage rau--state) (list fn))))
 
 ;;; manage-dirty coalescing
 
@@ -494,7 +494,7 @@ used in event listeners."
            (lambda (state)
              (setq rau--manage-timer nil)
              (condition-case err
-                 (when-let* ((client (rau-state-client state))
+                 (when-let* ((client (rau--state-client state))
                              (wm-wl (ewc-first-object client
                                                    'river-window-manager-v1)))
                    (rau--request wm-wl 'manage-dirty))
@@ -599,7 +599,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   "Create a layer-shell output object for OUTPUT-WL if possible."
   (when-let* ((out (ewc-object-data output-wl))
               ((null (rau--output-ls-output-wl out)))
-              (client (rau-state-client state))
+              (client (rau--state-client state))
               (ls-wl (ewc-first-object client 'river-layer-shell-v1))
               (ls-output-id (cl-incf (ewc-client-new-id client)))
               (ls-output-wl
@@ -612,7 +612,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 ;; TODO: this ls-seat is never used ATM.
 (defun rau--ensure-ls-seat (state)
   "Create a layer-shell seat object for the current seat if possible."
-  (when-let* ((client (rau-state-client state))
+  (when-let* ((client (rau--state-client state))
               (seat-wl (ewc-first-object client 'river-seat-v1))
               (seat (ewc-object-data seat-wl))
               ((null (rau--seat-ls-seat-wl seat)))
@@ -646,11 +646,11 @@ post-command-hook in the enqueued command of the pressed event handler."
     (remove-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)
     (when-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
                 (window-id (ewc-object-id window-wl))
-                ((/= window-id (rau-state-focus-last-id rau--state))))
+                ((/= window-id (rau--state-focus-last-id rau--state))))
       (rau-log "recover focus. focusing window-id=%d title=%s"
                window-id
                (rau--window-title (ewc-object-data window-wl)))
-      (setf (rau-state-focus-next-id rau--state) window-id)
+      (setf (rau--state-focus-next-id rau--state) window-id)
       (rau--mark-manage-dirty rau--state))))
 
 (defun rau--window-configuration-change-handler ()
@@ -686,14 +686,14 @@ Note that server does not send this event for objects created by
 server (e.g. window, output). Thus object removal must be done at the
 point where also the destroy request is sent."
   (pcase-let (((map id) args)
-              (client (rau-state-client rau--state)))
+              (client (rau--state-client rau--state)))
     (ewc-object-remove-id client id)))
 
 ;;;; wl-registry listeners
 (defun rau--on-wl-registry-global (registry-wl args)
   (pcase-let (((map name interface version) args))
     (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
-                (client (rau-state-client rau--state))
+                (client (rau--state-client rau--state))
                 ((member interface rau--global-binds))
                 (new-id (cl-incf (ewc-client-new-id client)))
                 (xml-version (ewc-interface-version client ifsym))
@@ -730,10 +730,10 @@ point where also the destroy request is sent."
      (unwind-protect
          (rau--reconcile rau--state)
        (rau--request wm-wl 'manage-finish)
-       (setf (rau-state-command-queue rau--state)
-             (append (rau-state-command-queue rau--state) (rau-state-command-queue-after-manage rau--state))
-             (rau-state-command-queue-after-manage rau--state) nil)
-       (when (rau-state-command-queue rau--state)
+       (setf (rau--state-command-queue rau--state)
+             (append (rau--state-command-queue rau--state) (rau--state-command-queue-after-manage rau--state))
+             (rau--state-command-queue-after-manage rau--state) nil)
+       (when (rau--state-command-queue rau--state)
          (rau--schedule-command-handler))))))
 
 (defun rau--on-river-window-manager-v1-render-start (wm-wl _)
@@ -752,18 +752,18 @@ point where also the destroy request is sent."
   (message "rau: WM event session-locked"))
 
 (defun rau--on-river-window-manager-v1-session-unlocked (_wm-wl _)
-  (setf (rau-state-focus-next-id rau--state) (rau-state-focus-last-id rau--state)
-        (rau-state-focus-last-id rau--state) -1))
+  (setf (rau--state-focus-next-id rau--state) (rau--state-focus-last-id rau--state)
+        (rau--state-focus-last-id rau--state) -1))
 
 (defun rau--on-river-window-manager-v1-window (_wm-wl args)
   (pcase-let* (((map id) args))
-    (ewc-object-add (rau-state-client rau--state)
+    (ewc-object-add (rau--state-client rau--state)
                     'river-window-v1
                     id)))
 
 (defun rau--on-river-window-manager-v1-output (_wm-wl args)
   (pcase-let* (((map id) args)
-               (client (rau-state-client rau--state))
+               (client (rau--state-client rau--state))
                (output-wl (ewc-object-add client 'river-output-v1 id)))
     (setf (ewc-object-data output-wl)
           (rau--output-make))
@@ -771,7 +771,7 @@ point where also the destroy request is sent."
 
 (defun rau--on-river-window-manager-v1-seat (_wm-wl args)
   (pcase-let (((map id) args)
-              (client (rau-state-client rau--state)))
+              (client (rau--state-client rau--state)))
     (if (ewc-first-object client 'river-seat-v1)
         (message "rau does not support multi-seat")
       (let* ((seat-wl (ewc-object-add client 'river-seat-v1 id)))
@@ -847,7 +847,7 @@ point where also the destroy request is sent."
                 ;; TODO review
                 (or (and (integerp output)
                          (not (zerop output))
-                         (ewc-object-get (rau-state-client rau--state) output))
+                         (ewc-object-get (rau--state-client rau--state) output))
                     (when-let* (((ewc-object-tagged-p window-wl rau--tag-window))
                                 (frame-wl (rau--frame-wl-for-window-wl window-wl))
                                 (frame (ewc-object-data frame-wl)))
@@ -887,21 +887,21 @@ point where also the destroy request is sent."
 
 (defun rau--on-river-window-v1-unreliable-pid (window-wl args)
   (pcase-let* (((map unreliable-pid) args)
-               (client (rau-state-client rau--state))
+               (client (rau--state-client rau--state))
                (node-wl (ewc-object-add client 'river-node-v1)))
 
     (rau--request window-wl 'get-node
                    `((id . ,(ewc-object-id node-wl))))
 
-    (if (= unreliable-pid (rau-state-pid rau--state))
+    (if (= unreliable-pid (rau--state-pid rau--state))
         (progn
           (rau-log "Discovered new Emacs frame")
           (let ((frame (rau--outputframe-make
                         :node-wl node-wl)))
             (setf (ewc-object-data window-wl) frame)
             (ewc-object-tag client window-wl rau--tag-frame))
-          (if (> (rau-state-pending-frames rau--state) 0)
-              (cl-decf (rau-state-pending-frames rau--state))
+          (if (> (rau--state-pending-frames rau--state) 0)
+              (cl-decf (rau--state-pending-frames rau--state))
             (rau-log "New frame was not requested by WM")))
 
       (rau-log "Discovered new regular external window")
@@ -927,7 +927,7 @@ point where also the destroy request is sent."
 ;;;; river-output-v1 listeners
 (defun rau--on-river-output-v1-removed (output-wl _)
   ;; TODO: check whether we lost focus
-  (let ((client (rau-state-client rau--state)))
+  (let ((client (rau--state-client rau--state)))
     (rau--do rau--tag-frame (frame-wl frame rau--state)
       (when (eq (rau--outputframe-output-wl frame) output-wl)
         (setf (rau--outputframe-output-wl frame) nil)
@@ -959,10 +959,10 @@ point where also the destroy request is sent."
 ;;;; river-seat-v1 listener
 (defun rau--on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
-    (rau-log "last focused surface id: %d" (rau-state-focus-last-id rau--state))
-    (unless (equal window (rau-state-focus-last-id rau--state))
+    (rau-log "last focused surface id: %d" (rau--state-focus-last-id rau--state))
+    (unless (equal window (rau--state-focus-last-id rau--state))
       (rau-log "window interaction with %d" window)
-      (setf (rau-state-focus-next-id rau--state) window))))
+      (setf (rau--state-focus-next-id rau--state) window))))
 
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
@@ -977,21 +977,21 @@ point where also the destroy request is sent."
 
     ;; If focus is with external window then switch to underlying emacs
     ;; frame such that following keypresses go to emacs
-    (when-let* ((surface-id (rau-state-focus-last-id rau--state))
-                (client (rau-state-client rau--state))
+    (when-let* ((surface-id (rau--state-focus-last-id rau--state))
+                (client (rau--state-client rau--state))
                 (surface-wl (ewc-object-get client surface-id))
                 ((ewc-object-tagged-p surface-wl rau--tag-window))
                 (target-wl (rau--frame-wl-for-window-wl surface-wl))
                 (target-id (ewc-object-id target-wl)))
       (rau-log "switch focus to emacs frame for key pressed.")
-      (setf (rau-state-focus-next-id rau--state) target-id))))
+      (setf (rau--state-focus-next-id rau--state) target-id))))
 
 ;;;; river-layer-shell-v1 protocol
 ;;;; river-layer-shell-output-v1 listeners
 (defun rau--on-river-layer-shell-output-v1-non-exclusive-area (ls-output-wl args)
   (pcase-let (((map x y width height) args))
     (when-let* ((out (cl-loop for output-wl in (ewc-objects
-                                          (rau-state-client rau--state)
+                                          (rau--state-client rau--state)
                                           'river-output-v1)
                               for data = (ewc-object-data output-wl)
                               thereis (and data
@@ -1005,8 +1005,8 @@ point where also the destroy request is sent."
 ;;;; river-layer-shell-seat-v1 listeners
 (defun rau--on-river-layer-shell-seat-v1-focus-none (_ls-seat-wl _)
   "Give focus back to the last surface that had it."
-  (setf (rau-state-focus-next-id rau--state) (rau-state-focus-last-id rau--state)
-        (rau-state-focus-last-id rau--state) -1))
+  (setf (rau--state-focus-next-id rau--state) (rau--state-focus-last-id rau--state)
+        (rau--state-focus-last-id rau--state) -1))
 
 ;;; Reconciliation
 
@@ -1042,9 +1042,9 @@ point where also the destroy request is sent."
                   ;; No frame on this output yet: request one.
                   (rau-log "request frame.")
                   (cl-incf frame-requests))))
-    (dotimes (_ (- frame-requests (rau-state-pending-frames state)))
+    (dotimes (_ (- frame-requests (rau--state-pending-frames state)))
       (rau--enqueue (lambda () (make-frame)))
-      (cl-incf (rau-state-pending-frames state)))))
+      (cl-incf (rau--state-pending-frames state)))))
 
 (defun rau--reconcile-windows (state)
   "Close killed windows and propose dimensions for active windows."
@@ -1067,7 +1067,7 @@ point where also the destroy request is sent."
 
 (defun rau--reconcile-bindings (state)
   "Create and enable XKB bindings."
-  (when-let* ((client (rau-state-client state))
+  (when-let* ((client (rau--state-client state))
               (xkb-bindings-wl (ewc-first-object client 'river-xkb-bindings-v1))
               (seat-wl (ewc-first-object client 'river-seat-v1)))
     (maphash
@@ -1084,7 +1084,7 @@ point where also the destroy request is sent."
                  (rau--binding-state binding) 'registered)
            (rau--request binding-wl 'enable)
            (setf (rau--binding-state binding) 'enabled))))
-     (rau-state-bindings state))))
+     (rau--state-bindings state))))
 
 (defun rau--reconcile-fullscreen (state)
   "Advance fullscreen state machines."
@@ -1116,11 +1116,11 @@ point where also the destroy request is sent."
   "Update focus based on either an event or a buffer change.
 See also focus relevant slots in rau STATE."
   (when-let* (((/=
-                  (rau-state-focus-last-id state)
-                  (rau-state-focus-next-id state)))
-              ((/= -1 (rau-state-focus-next-id state)))
-              (client (rau-state-client state))
-              (target-id (rau-state-focus-next-id state))
+                  (rau--state-focus-last-id state)
+                  (rau--state-focus-next-id state)))
+              ((/= -1 (rau--state-focus-next-id state)))
+              (client (rau--state-client state))
+              (target-id (rau--state-focus-next-id state))
               (target-wl (ewc-object-get client target-id))
               (seat-wl (ewc-first-object client 'river-seat-v1)))
 
@@ -1131,8 +1131,8 @@ See also focus relevant slots in rau STATE."
                   'focus-window
                   `((window . ,target-id))
                   t)
-    (setf (rau-state-focus-last-id state) target-id
-          (rau-state-focus-next-id state) -1)
+    (setf (rau--state-focus-last-id state) target-id
+          (rau--state-focus-next-id state) -1)
 
     (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-window)
                               (rau--frame-wl-for-window-wl target-wl)
@@ -1147,9 +1147,9 @@ See also focus relevant slots in rau STATE."
     (when-let* (((ewc-object-tagged-p target-wl rau--tag-window))
                 (emacs-window (rau--emacs-window-for-window-wl target-wl)))
       (rau-log "select underlying window")
-      (setf (rau-state-focus-inhibit-update state) t)
+      (setf (rau--state-focus-inhibit-update state) t)
       (select-window emacs-window 'norecord))
-      (setf (rau-state-focus-inhibit-update state) nil)))
+      (setf (rau--state-focus-inhibit-update state) nil)))
 
 (defun rau--reconcile (state)
   "Run the manage-sequence reconciliation for STATE."
@@ -1270,7 +1270,7 @@ Call this function once when starting Emacs inside of river."
 
   (let* ((interfaces (rau--read-protocols))
          (client (ewc-start interfaces "rau--on-")))
-    (setq rau--state (rau-state-make :client client)))
+    (setq rau--state (rau--state-make :client client)))
 
   (rau-push-intercept-prefixes)
 
