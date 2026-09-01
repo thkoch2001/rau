@@ -80,6 +80,7 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   "Common state shared by windows and frames.
 Not instantiated directly; windows and frames include it."
   (node-wl nil :type ewc-object)
+  app-id
   title)
 
 (cl-defstruct (rau--external (:constructor rau--external-make)
@@ -88,8 +89,7 @@ Not instantiated directly; windows and frames include it."
   (state 'starting) ;; 'active 'killed
   buffer
   actual-width
-  actual-height
-  app-id)
+  actual-height)
 
 (cl-defstruct (rau--outputframe (:constructor rau--outputframe-make)
                           (:include rau--window))
@@ -807,9 +807,8 @@ point where also the destroy request is sent."
 (defun rau--on-river-window-v1-app-id (window-wl args)
   (pcase-let (((map app-id) args))
     (when-let* ((app-id (ewc-to-utf8 app-id))
-                (win (ewc-object-data window-wl))
-                ((rau--external-p win)))
-      (setf (rau--external-app-id win) app-id))))
+                (win (ewc-object-data window-wl)))
+      (setf (rau--window-app-id win) app-id))))
 
 (defun rau--on-river-window-v1-title (window-wl args)
   (pcase-let (((map title) args))
@@ -823,7 +822,7 @@ point where also the destroy request is sent."
              (with-current-buffer buf
                (rename-buffer
                 (rau--make-buffer-name
-                 (rau--external-app-id data)
+                 (rau--window-app-id data)
                  title)
                 t))))))
       (when (rau--outputframe-p data)
