@@ -301,17 +301,17 @@ Returns the newly created object."
                ((map id opcode _len)
                 (funcall (bindat--type-ue ewc-msg-head))))
     (if-let* ((object (ewc-object-get client id)))
-        (let ((listeners (ewc-object-listeners object)))
+        (let ((listeners (ewc-object-listeners object))
+              (spec (nth opcode (ewc-object-events object))))
+          (ewc-log "ewc: event if=%s opcode=%s (%s)"
+                   (ewc-object-interface object)
+                   opcode
+                   (car spec))
           (if (and (< opcode (length listeners))
                    (aref listeners opcode))
               (let* ((listener (aref listeners opcode))
-                     (spec (nth opcode (ewc-object-events object)))
                      (ue (cdr spec))
                      (args (when ue (funcall ue))))
-                (ewc-log "ewc: event if=%s opcode=%s (%s)"
-                         (ewc-object-interface object)
-                         opcode
-                         (car spec))
                 (condition-case err
                     (funcall listener object args)
                   (error (message "ewc: listener error for %s opcode %s: %S"
