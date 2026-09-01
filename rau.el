@@ -435,13 +435,6 @@ See also `rau-on-wl-display-delete-id'."
                request
                arguments))
 
-;; TODO consider moving to ewc.el
-(defun rau--decode-string (s)
-  "Decode a Wayland string S as UTF-8.
-Return nil if S is nil or empty."
-  (when (and s (not (string-empty-p s)))
-    (decode-coding-string s 'utf-8)))
-
 (defun rau--frame-by-cond (state predicate)
   "Return the first frame ewc-object in STATE matching PREDICATE."
   (cl-loop for frame-wl in (ewc-objects (rau-state-client state) rau--tag-frame)
@@ -679,11 +672,18 @@ and thus minibuffer ends up below external window."
 
 ;;;; wayland protocol
 ;;;; wl-display listeners
-;; TODO handle individual args and decode the message string with
-;; rau--decode-string
 ;; TODO Make all handlers private: rau--on-...
 (defun rau-on-wl-display-error (_display-wl args)
-  (message "wl_display error: %S" args))
+  (pcase-let (((map object_id code message) args))
+    (message "wl_display error: object_id=%d code=%d message=%s"
+             object-id
+             code
+             (ewc-to-utf8 message))
+    (when-let* ((object (ewc-object-get object-id)))
+      (message "object id=%d interface=%s tags=%S"
+               object-id
+               (ewc-object-interface object)
+               (ewc-object-tags tags)))))
 
 (defun rau-on-wl-display-delete-id (_display-wl args)
   "Server acknowledges deletion of object created by client.
@@ -811,14 +811,14 @@ point where also the destroy request is sent."
 
 (defun rau-on-river-window-v1-app-id (window-wl args)
   (pcase-let (((map app-id) args))
-    (when-let* ((app-id (rau--decode-string app-id))
+    (when-let* ((app-id (ewc-to-utf8 app-id))
                 (win (ewc-object-data window-wl))
                 ((rau-window-p win)))
       (setf (rau-window-app-id win) app-id))))
 
 (defun rau-on-river-window-v1-title (window-wl args)
   (pcase-let (((map title) args))
-    (when-let* ((title (rau--decode-string title))
+    (when-let* ((title (ewc-to-utf8 title))
                 (data (ewc-object-data window-wl)))
       (setf (rau-surface-title data) title)
       (when (rau-window-p data)

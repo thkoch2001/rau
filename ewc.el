@@ -289,6 +289,13 @@ Returns the newly created object."
 
 ;;; Wire messages
 
+(defun ewc-to-utf8 (s)
+  "Decode a Wayland string S as UTF-8.
+Return nil if S is nil or empty.  Emacs stores whether a string is
+unibyte or multibyte, see struct Lisp_String in src/lisp.h."
+  (when (and s (not (string-empty-p s)))
+    (decode-coding-string s 'utf-8 t)))
+
 (defvar ewc-msg-head
   (bindat-type (id uint 32 t)
                (opcode uint 16 t)
