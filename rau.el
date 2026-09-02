@@ -70,6 +70,7 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
 (cl-defstruct (rau--output (:constructor rau--output-make))
   "State for a River output."
   (ls-output-wl nil :type ewc-object)
+  (frame-wl nil :type ewc-object)
   (x 0)
   (y 0)
   (width 0)
@@ -433,7 +434,7 @@ See also `rau-on-wl-display-delete-id'."
                arguments
                nocache))
 
-(defun rau--frame-by-cond (state predicate)
+(defun rau--frame-wl-by-cond (state predicate)
   "Return the first frame ewc-object in STATE matching PREDICATE."
   (cl-loop for frame-wl in (ewc-objects (rau--state-client state) rau--tag-outputframe)
            for f = (rau--window-role-data (ewc-object-data frame-wl))
@@ -446,20 +447,11 @@ See also `rau-on-wl-display-delete-id'."
               ((frame-live-p emacs-frame)))
     (frame-parameter emacs-frame 'rau-frame-wl)))
 
-(defun rau--frame-for-output (state output-wl)
-  "Return frame associated to OUTPUT-WL or nil."
-  (rau--frame-by-cond state (lambda (f) (eq (rau--outputframe-output-wl f) output-wl))))
-
-(defun rau--frame-without-output (state)
+(defun rau--frame-wl-without-output (state)
   "Return a frame not associated to any output or nil."
-  (rau--frame-by-cond state (lambda (f) (null (rau--outputframe-output-wl f)))))
-
-(defun rau--frame-with-any-output (state)
-  "Return any frame with an associated output or nil."
-  (rau--frame-by-cond state #'rau--outputframe-output-wl))
+  (rau--frame-wl-by-cond state (lambda (f) (null (rau--outputframe-output-wl f)))))
 
 ;;; Command queue
-
 (defun rau--schedule-command-handler ()
   "Schedule command processing if not already scheduled."
   (if rau--handling-commands
@@ -787,22 +779,30 @@ point where also the destroy request is sent."
         (rau--ensure-ls-seat rau--state)))))
 
 ;;;; river-window-v1 listeners
-(defun rau--on-river-window-v1-closed (surface-wl _)
+(defun rau--on-river-window-v1-closed (window-wl _)
   (rau--enqueue
    (lambda ()
-     (when-let* (((ewc-object-tagged-p surface-wl rau--tag-external))
-                 (buf (rau--buffer-for-window-wl surface-wl)))
+     (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
+                 (buf (rau--buffer-for-window-wl window-wl)))
        (kill-buffer buf))
-     (let ((data (ewc-object-data surface-wl)))
+     (let ((data (ewc-object-data window-wl)))
        (when-let* ((node-wl (rau--window-node-wl data)))
          (rau--request node-wl 'destroy))
-       (rau--request surface-wl 'destroy)
-       (rau--remove surface-wl))))
+       (rau--request window-wl 'destroy)
+       (rau--remove window-wl))))
+
+  (when-let* (((ewc-object-tagged-p window-wl rau--tag-outputframe))
+              (window-data (ewc-object-data window-wl))
+              (role-data (rau--window-role-data window-data))
+              (output-wl (rau--outputframe-output-wl role-data))
+              (output-data (ewc-object-data output-wl)))
+    (setf (rau--outputframe-output-wl role-data) nil
+          (rau--output-frame-wl output-data) nil))
 
   ;; Reset fullscreen on output if window was fullscreen.
-  (when (ewc-object-tagged-p surface-wl rau--tag-external)
+  (when (ewc-object-tagged-p window-wl rau--tag-external)
     (rau--do 'river-output-v1 (output-wl out rau--state)
-             (when (eq (rau--fs-window (rau--output-fullscreen out)) surface-wl)
+             (when (eq (rau--fs-window (rau--output-fullscreen out)) window-wl)
                (setf (rau--output-fullscreen out) (rau--fs))))))
 
 (defun rau--on-river-window-v1-dimensions (window-wl args)
@@ -935,15 +935,17 @@ point where also the destroy request is sent."
 (defun rau--on-river-output-v1-removed (output-wl _)
   ;; TODO: check whether we lost focus
   (let ((client (rau--state-client rau--state)))
-    (rau--do rau--tag-outputframe (frame-wl frame rau--state)
-      (let ((role-data (rau--window-role-data frame)))
-        (when (eq (rau--outputframe-output-wl role-data) output-wl)
-          (setf (rau--outputframe-output-wl role-data) nil)
-          (rau--enqueue
-           (lambda ()
-             (when-let* ((emacs-frame (rau--outputframe-emacs-frame role-data))
-                         ((frame-live-p emacs-frame)))
-               (delete-frame emacs-frame)))))))
+    (when-let* ((output-data (ewc-object-data output-wl))
+                (frame-wl (rau--output-frame-wl output-data))
+                (frame-data (ewc-object-data frame-wl))
+                (role-data (rau--window-role-data frame-data)))
+      (setf (rau--outputframe-output-wl role-data) nil
+            (rau--output-frame-wl output-data) nil)
+      (rau--enqueue
+       (lambda ()
+         (when-let* ((emacs-frame (rau--outputframe-emacs-frame role-data))
+                     ((frame-live-p emacs-frame)))
+           (delete-frame emacs-frame)))))
     (when-let* ((out (ewc-object-data output-wl))
                 (ls-output-wl (rau--output-ls-output-wl out)))
       (rau--request ls-output-wl 'destroy))
@@ -1023,7 +1025,7 @@ point where also the destroy request is sent."
   (let ((frame-requests 0))
     (rau--do 'river-output-v1 (output-wl out state)
              (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
-             (if-let* ((frame-wl (rau--frame-for-output state output-wl))
+             (if-let* ((frame-wl (rau--output-frame-wl out))
                        (f (ewc-object-data frame-wl)))
                  (progn
                    (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
@@ -1034,11 +1036,12 @@ point where also the destroy request is sent."
                                    (height . ,(rau--output-height out)))))
 
                (rau--log "no frame found for output.")
-               (if-let* ((frame-wl (rau--frame-without-output state))
+               (if-let* ((frame-wl (rau--frame-wl-without-output state))
                          (data (ewc-object-data frame-wl))
                          (role-data (rau--window-role-data data)))
                     (progn
                       (setf (rau--outputframe-output-wl role-data) output-wl)
+                      (setf (rau--output-frame-wl out) frame-wl)
                       (rau--request frame-wl
                                      'propose-dimensions
                                      `((width . ,(rau--output-width out))
