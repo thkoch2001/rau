@@ -174,6 +174,39 @@ The DATA slot is free to use for arbitrary data about this object."
   (data nil)
   (tags nil :type list))
 
+(defmacro ewc-define-data-accessors (struct-type &optional prefix)
+  "Define accessor functions for slots of STRUCT-TYPE stored in ewc-object data.
+STRUCT-TYPE is a cl-defstruct name.  PREFIX is an optional symbol used as
+the function name prefix; if nil, defaults to STRUCT-TYPE-wl.
+For each slot, defines PREFIX-SLOT that takes an ewc-object and returns
+the value of that slot from the struct in its data slot.
+Also defines setf-able places."
+  (declare (indent 1))
+  (let* ((prefix (or prefix (intern (format "%s-wl" struct-type))))
+         (prefix-str (symbol-name prefix))
+         (struct-str (symbol-name struct-type))
+         (slot-names (delq nil
+                           (mapcar (lambda (entry)
+                                     (unless (eq (car entry) 'cl-tag-slot)
+                                       (car entry)))
+                                   (cl-struct-slot-info struct-type))))
+         (forms nil))
+    (dolist (slot slot-names)
+      (let ((ewc-object-accessor (intern (format "%s-%s" prefix-str slot)))
+            (data-struct-accessor (intern (format "%s-%s" struct-str slot))))
+        (push `(defsubst ,ewc-object-accessor (ewc-object)
+                 ,(format "Access `%s' of %s stored in EWC-OBJECT's data slot.
+This function was defined by ewc-define-data-accessors macro."
+                          slot struct-type)
+                 (when-let* ((data (ewc-object-data ewc-object)))
+                   (,data-struct-accessor data)))
+              forms)
+        (push `(gv-define-setter ,ewc-object-accessor (val ewc-object)
+                 `(let ((data (ewc-object-data ,ewc-object)))
+                    (setf (,',data-struct-accessor data) ,val)))
+              forms)))
+    `(progn ,@(nreverse forms))))
+
 (cl-defstruct (ewc-client (:constructor ewc-client-make)
                            (:copier nil))
   "Global state of the Wayland client.
