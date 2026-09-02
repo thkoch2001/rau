@@ -1299,5 +1299,21 @@ Call this function once when starting Emacs inside of river."
 
   (run-hooks 'rau-enable-hook))
 
+;; TODO Hacks to avoid rau to freeze
+(defun x-popup-menu(position menu)
+  (message "x-popup-menu does not work with rau and is therefor overwritten.")
+  nil)
+
+(defun popup-menu(menu &optional position prefix from-menu-bar)
+  (message "popup-menu does not work with rau and is therefor overwritten.")
+  nil)
+
+(defun x-popup-dialog(position contents &optional header)
+  (message "x-popup-dialog does not work with rau and is therefor overwritten.")
+  nil)
+
+(defun display-popup-menus-p (&optional display)
+  nil)
+
 (provide 'rau)
 ;;; rau.el ends here
