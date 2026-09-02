@@ -1,0 +1,78 @@
+#+title: Rau User Manual
+#+subtitle: Emacs swimming in the river
+#+author: Thomas Koch
+
+#+texinfo_filename: rau.info
+#+texinfo_dir_category: Emacs
+#+texinfo_dir_title: Rau: (rau).
+#+texinfo_dir_desc: Window manager for the River Wayland compositor, written in Emacs Lisp
+
+#+options: H:4 num:t
+
+* Introduction
+
+Rau is a window manager for the River Wayland compositor, written entirely in
+Emacs Lisp.  Every output (monitor) shows a fullscreen Emacs frame.  External
+Wayland windows can be managed just like normal Emacs windows.
+
+* How it works
+
+** River
+
+ River is a Wayland compositor but it is not also a window manager. Instead it
+ implements Wayland protocols that allow a separate process to manage
+ windows. This separate process is not required to be as fast as a compositor
+ and thus can be implemented by a garbage collected scripting language like
+ Emacs Elisp.
+
+ The River process can be used as the session leader. This allows to restart
+ Emacs without the session and thus all other programs to get closed. (Some
+ program relying on layer shell like wpaper or waybar however might die.)
+
+** Windows
+
+Every window announced by River is either an Emacs frame that should serve as
+the background layer of an output or an external window.  (Planned feature:
+There could also be Emacs frame that are not needed as background and thus
+could be treated like external windows.) Every external window gets linked to
+exactly one Emacs buffer marked with the major rau-mode.
+
+Every time a rau-mode buffer gets shown in an Emacs window, Rau instructs
+River to show the external Window exactly over the Emacs window. This gives
+the impression as if the external Window would be just a regular Emacs buffer.
+
+** Keybindings
+
+River allows to register key bindings that should always be sent to the window
+manager instead of the focused window. One way to avoid conflicts with
+keybindings in external windows (e.g. C-x) is to use only the super modifier
+for such bindings, e.g.:
+
+S-x for C-x, S-X for M-x, S-h for C-h
+
+Most Emacs commands require multiple keys to be pressed or even user input
+(M-x). For this reason the input focus is temporarily given to Emacs when a
+bound key gets pressed and given back to the external window after the
+command.
+
+** Focus
+
+Focus can be either with one of multiple Emacs output frames (in case of
+multiple screens) or with an external window. A focus change can happen due to:
+
+- a switch from a normal Emacs buffer to a rau-mode buffer
+- a switch from a rau-mode buffer to a normal Emacs buffer
+- a switch from a rau-mode buffer to another rau-mode buffer
+- a mouse click event
+- mouse movement (in case of focus follows mouse, planned feature)
+- closing of an external window that had focus
+- focus being given to a [[https://wayland.app/protocols/river-layer-shell-v1#river_layer_shell_seat_v1][layer-shell]] object or coming back from it
+
+* Installation
+
+* Usage
+** Starting rau
+** Intercepted prefix keys
+** Fullscreen
+* Configuration
+* Debugging
