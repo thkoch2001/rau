@@ -71,18 +71,15 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   "State for a River output."
   (ls-output-wl nil :type ewc-object)
   (frame-wl nil :type ewc-object)
-  (x 0)
-  (y 0)
-  (width 0)
-  (height 0)
+  (position '(0 . 0))
+  (dimensions '(0 . 0))
   (fullscreen (rau--fs)))
 
 (cl-defstruct (rau--window (:constructor rau--window-make))
   "Common state shared by windows and frames.
 Not instantiated directly; windows and frames include it."
   (node-wl nil :type ewc-object)
-  actual-width
-  actual-height
+  actual-dimensions
   app-id
   title
   role-data)
@@ -807,9 +804,7 @@ point where also the destroy request is sent."
 
 (defun rau--on-river-window-v1-dimensions (window-wl args)
   (pcase-let (((map width height) args))
-    (when-let* ((data (ewc-object-data window-wl)))
-      (setf (rau--window-actual-width data) width
-            (rau--window-actual-height data) height))))
+    (setf (rau--window-wl-actual-dimensions window-wl) `(,width . ,height))))
 
 (defun rau--on-river-window-v1-app-id (window-wl args)
   (pcase-let (((map app-id) args))
@@ -943,13 +938,11 @@ point where also the destroy request is sent."
 
 (defun rau--on-river-output-v1-position (output-wl args)
   (pcase-let (((map x y) args))
-    (setf (rau--output-wl-x output-wl) x
-          (rau--output-wl-y output-wl) y)))
+    (setf (rau--output-wl-position output-wl) `(,x . ,y))))
 
 (defun rau--on-river-output-v1-dimensions (output-wl args)
   (pcase-let (((map width height) args))
-    (setf (rau--output-wl-width output-wl) width
-          (rau--output-wl-height output-wl) height)))
+    (setf (rau--output-wl-dimensions output-wl) `(,width . ,height))))
 
 ;;;; river-seat-v1 listener
 (defun rau--on-river-seat-v1-window-interaction (_seat-wl args)
@@ -993,10 +986,8 @@ point where also the destroy request is sent."
                               thereis (and data
                                            (eq (rau--output-ls-output-wl data) ls-output-wl)
                                            data))))
-      (setf (rau--output-x out) x
-            (rau--output-y out) y
-            (rau--output-width out) width
-            (rau--output-height out) height))))
+      (setf (rau--output-position out) `(,x . ,y)
+            (rau--output-dimensions out) `(,width . ,height)))))
 
 ;;;; river-layer-shell-seat-v1 listeners
 (defun rau--on-river-layer-shell-seat-v1-focus-none (_ls-seat-wl _)
@@ -1012,24 +1003,24 @@ point where also the destroy request is sent."
     (rau--do 'river-output-v1 (output-wl out state)
              (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
              (if-let* ((frame-wl (rau--output-frame-wl out)))
-                 (progn
+                 (let ((dimensions (rau--output-wl-dimensions output-wl)))
                    (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
                    ;; Frame already assigned: only re-propose if size changed.
                    (rau--request frame-wl
                                  'propose-dimensions
-                                 `((width . ,(rau--output-width out))
-                                   (height . ,(rau--output-height out)))))
+                                 `((width . ,(car dimensions))
+                                   (height . ,(cdr dimensions)))))
 
                (rau--log "no frame found for output.")
                (if-let* ((frame-wl (rau--frame-wl-without-output state))
                          (role-data (rau--window-wl-role-data frame-wl)))
-                    (progn
+                   (let ((dimensions (rau--output-wl-dimensions output-wl)))
                       (setf (rau--outputframe-output-wl role-data) output-wl
                             (rau--output-frame-wl out) frame-wl)
                       (rau--request frame-wl
                                      'propose-dimensions
-                                     `((width . ,(rau--output-width out))
-                                       (height . ,(rau--output-height out))))
+                                     `((width . ,(car dimensions))
+                                       (height . ,(cdr dimensions))))
                       (rau--request frame-wl
                                      'inform-maximized)
                       (rau--request frame-wl
@@ -1160,14 +1151,14 @@ See also focus relevant slots in rau STATE."
            (when-let* ((node-wl (rau--window-node-wl frame))
                        (role-data (rau--window-role-data frame))
                        (output-wl (rau--outputframe-output-wl role-data))
-                       (out (ewc-object-data output-wl)))
+                       (position (rau--output-wl-position output-wl)))
              (rau--log "render frame %d for output %d."
                       (ewc-object-id frame-wl)
                       (ewc-object-id output-wl))
              (rau--request node-wl 'place-bottom)
              (rau--request node-wl 'set-position
-                           `((x . ,(rau--output-x out))
-                             (y . ,(rau--output-y out)))))))
+                           `((x . ,(car position))
+                             (y . ,(cdr position)))))))
 
 (defun rau--render-windows (state)
   "Run the render-sequence reconciliation for windows on STATE."
@@ -1178,27 +1169,25 @@ See also focus relevant slots in rau STATE."
       (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
                 (role-data (rau--window-wl-role-data frame-wl))
                 (output-wl (rau--outputframe-output-wl role-data))
-                (out (ewc-object-data output-wl))
                 (emacs-window (rau--emacs-window-for-window-wl window-wl)))
-          (pcase-let ((`(,left ,top ,right ,bottom)
-                       (window-inside-absolute-pixel-edges emacs-window)))
+          (pcase-let* ((`(,left ,top ,right ,bottom)
+                        (window-inside-absolute-pixel-edges emacs-window))
+                       (position (rau--output-wl-position output-wl))
+                       (dimensions (rau--window-wl-actual-dimensions window-wl))
+                       (clip (or dimensions `(,(- right left) . ,(- bottom top)))))
             (rau--request window-wl 'show)
 
             (rau--request node-wl 'set-position
-                          `((x . ,(+ left (rau--output-x out)))
-                            (y . ,(+ top (rau--output-y out)))))
+                          `((x . ,(+ left (car position)))
+                            (y . ,(+ top (cdr position)))))
 
             (rau--request node-wl 'place-top)
 
-            (let ((clip-w (or (rau--window-actual-width win)
-                              (- right left)))
-                  (clip-h (or (rau--window-actual-height win)
-                              (- bottom top))))
-              (rau--request window-wl 'set-clip-box
-                            `((x . 0)
-                              (y . 0)
-                              (width . ,clip-w)
-                              (height . ,clip-h)))))
+            (rau--request window-wl 'set-clip-box
+                          `((x . 0)
+                            (y . 0)
+                            (width . ,(car clip))
+                            (height . ,(cdr clip)))))
 
         (rau--request window-wl 'hide)))))
 
