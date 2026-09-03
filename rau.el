@@ -143,7 +143,7 @@ Not instantiated directly; windows and frames include it."
 (ewc-define-data-accessors rau--seat)
 (ewc-define-data-accessors rau--binding)
 
-;;; Surface tags
+;;; Window tags
 
 (defconst rau--tag-outputframe :rau-frame
   "Tag for `river-window-v1' objects that are Emacs frames.")
@@ -188,8 +188,11 @@ STATE is evaluated once and bound to that same name within BODY."
   (when-let* ((role-data (rau--window-wl-role-data window-wl)))
     (rau--external-buffer role-data)))
 
-(defun rau--surface-wl-for-emacs-window (emacs-window)
-  "Return either the emacs frame-wl or external window-wl for EMACS-WINDOW."
+(defun rau--window-wl-for-emacs-window (emacs-window)
+  "Return window-wl for any EMACS-WINDOW rau-mode or not.
+For a window with a rau-mode buffer return window-wl pointing to an
+external window. For all other buffers return the window-wl of the emacs
+frame."
   (if-let* ((buffer (window-buffer emacs-window))
             (window-wl (buffer-local-value 'rau--window-wl buffer)))
       window-wl
@@ -231,7 +234,7 @@ STATE is evaluated once and bound to that same name within BODY."
 
 ;; TODO: move to handler section
 (defun rau--buffer-killed ()
-  "Request closing of the associated Wayland surface when a rau buffer is killed."
+  "Request closing of the associated Wayland window when a rau buffer is killed."
   (when-let* ((rau--window-wl)
               (role-data (rau--window-wl-role-data rau--window-wl))
               ;; avoid sending close request in response to closed event
@@ -264,7 +267,7 @@ STATE is evaluated once and bound to that same name within BODY."
               (state rau--state)
               ((null (rau--state-focus-inhibit-update state)))
               (emacs-window (selected-window))
-              (target-wl (rau--surface-wl-for-emacs-window emacs-window))
+              (target-wl (rau--window-wl-for-emacs-window emacs-window))
               (target-id (ewc-object-id target-wl))
               ((not (eq target-id (rau--state-focus-last-id state)))))
 
@@ -949,7 +952,7 @@ point where also the destroy request is sent."
 ;;;; river-seat-v1 listener
 (defun rau--on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
-    (rau--log "last focused surface id: %d" (rau--state-focus-last-id rau--state))
+    (rau--log "last focused window-wl id: %d" (rau--state-focus-last-id rau--state))
     (unless (equal window (rau--state-focus-last-id rau--state))
       (rau--log "window interaction with %d" window)
       (setf (rau--state-focus-next-id rau--state) window))))
@@ -966,11 +969,11 @@ point where also the destroy request is sent."
 
     ;; If focus is with external window then switch to underlying emacs
     ;; frame such that following keypresses go to emacs
-    (when-let* ((surface-id (rau--state-focus-last-id rau--state))
+    (when-let* ((window-id (rau--state-focus-last-id rau--state))
                 (client (rau--state-client rau--state))
-                (surface-wl (ewc-object-get client surface-id))
-                ((ewc-object-tagged-p surface-wl rau--tag-external))
-                (target-wl (rau--frame-wl-for-window-wl surface-wl))
+                (window-wl (ewc-object-get client window-id))
+                ((ewc-object-tagged-p window-wl rau--tag-external))
+                (target-wl (rau--frame-wl-for-window-wl window-wl))
                 (target-id (ewc-object-id target-wl)))
       (rau--log "switch focus to emacs frame for key pressed.")
       (setf (rau--state-focus-next-id rau--state) target-id))))
@@ -993,7 +996,7 @@ point where also the destroy request is sent."
 
 ;;;; river-layer-shell-seat-v1 listeners
 (defun rau--on-river-layer-shell-seat-v1-focus-none (_ls-seat-wl _)
-  "Give focus back to the last surface that had it."
+  "Give focus back to the last window that had it."
   (setf (rau--state-focus-next-id rau--state) (rau--state-focus-last-id rau--state)
         (rau--state-focus-last-id rau--state) -1))
 
