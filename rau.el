@@ -163,21 +163,18 @@ Not instantiated directly; windows and frames include it."
 (defvar rau--pending-handler nil
   "Non-nil if a command handler was requested while already handling commands.")
 
-(cl-defmacro rau--do (tag (obj val state) &body body)
+(cl-defmacro rau--do (tag (obj state) &body body)
   "Iterate over the ewc objects in STATE tagged with TAG.
 TAG is a form that evaluates to or is an ewc-object tag, for example
 `rau--tag-external', `rau--tag-outputframe', or `'river-output-v1'.
 
-OBJ is bound to the ewc-object and VAL to its data for each
-element.  STATE is evaluated once and bound to that same name
-within BODY."
+STATE is evaluated once and bound to that same name within BODY."
   (declare (indent 1))
   (unless (symbolp state)
     (error "rau--do: STATE slot must be a symbol, got: %S" state))
   `(let ((,state ,state))
      (dolist (,obj (ewc-objects (rau--state-client ,state) ,tag))
-       (let ((,val (ewc-object-data ,obj)))
-         ,@body))))
+         ,@body)))
 
 (defun rau--set-frame-name (emacs-frame)
   "Name EMACS-FRAME to be a Rau frame if not yet done so."
@@ -704,7 +701,7 @@ point where also the destroy request is sent."
       (pcase ifsym
         ('river-layer-shell-v1
          ;; Attach layer-shell objects to existing outputs/seats in STATE."
-         (rau--do 'river-output-v1 (output-wl _out rau--state)
+         (rau--do 'river-output-v1 (output-wl rau--state)
                    (rau--ensure-ls-output rau--state output-wl))
          (rau--ensure-ls-seat rau--state))
 
@@ -798,9 +795,9 @@ point where also the destroy request is sent."
 
   ;; Reset fullscreen on output if window was fullscreen.
   (when (ewc-object-tagged-p window-wl rau--tag-external)
-    (rau--do 'river-output-v1 (output-wl out rau--state)
-             (when (eq (rau--fs-window (rau--output-fullscreen out)) window-wl)
-               (setf (rau--output-fullscreen out) (rau--fs))))))
+    (rau--do 'river-output-v1 (output-wl rau--state)
+             (when (eq (rau--fs-window (rau--output-wl-fullscreen output-wl)) window-wl)
+               (setf (rau--output-wl-fullscreen output-wl) (rau--fs))))))
 
 (defun rau--on-river-window-v1-dimensions (window-wl args)
   (pcase-let (((map width height) args))
@@ -869,12 +866,12 @@ point where also the destroy request is sent."
                        :previous previous))))))
 
 (defun rau--on-river-window-v1-exit-fullscreen-requested (window-wl _)
-  (rau--do 'river-output-v1 (output-wl out rau--state)
-           (let ((fs (rau--output-fullscreen out)))
+  (rau--do 'river-output-v1 (output-wl rau--state)
+           (let ((fs (rau--output-wl-fullscreen output-wl)))
              (when (and (member (rau--fs-state fs)
                                 '(requested fullscreen))
                         (eq (rau--fs-window fs) window-wl))
-               (setf (rau--output-fullscreen out)
+               (setf (rau--output-wl-fullscreen output-wl)
                      (rau--fs :state 'exiting
                              :window (rau--fs-window fs)))))))
 
@@ -1000,9 +997,9 @@ point where also the destroy request is sent."
 (defun rau--reconcile-frames (state)
   "Ensure each output gets one maximized Emacs frame."
   (let ((frame-requests 0))
-    (rau--do 'river-output-v1 (output-wl out state)
+    (rau--do 'river-output-v1 (output-wl state)
              (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
-             (if-let* ((frame-wl (rau--output-frame-wl out)))
+             (if-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
                  (let ((dimensions (rau--output-wl-dimensions output-wl)))
                    (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
                    ;; Frame already assigned: only re-propose if size changed.
@@ -1016,7 +1013,7 @@ point where also the destroy request is sent."
                          (role-data (rau--window-wl-role-data frame-wl)))
                    (let ((dimensions (rau--output-wl-dimensions output-wl)))
                       (setf (rau--outputframe-output-wl role-data) output-wl
-                            (rau--output-frame-wl out) frame-wl)
+                            (rau--output-wl-frame-wl output-wl) frame-wl)
                       (rau--request frame-wl
                                      'propose-dimensions
                                      `((width . ,(car dimensions))
@@ -1035,8 +1032,8 @@ point where also the destroy request is sent."
 
 (defun rau--reconcile-windows (state)
   "Close killed windows and propose dimensions for active windows."
-  (rau--do rau--tag-external (window-wl win state)
-           (pcase (rau--external-state (rau--window-role-data win))
+  (rau--do rau--tag-external (window-wl state)
+           (pcase (rau--external-state (rau--window-wl-role-data window-wl))
              ;; nothing to do for window-state 'starting
              ('active
               (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl)))
@@ -1075,8 +1072,8 @@ point where also the destroy request is sent."
 
 (defun rau--reconcile-fullscreen (state)
   "Advance fullscreen state machines."
-  (rau--do 'river-output-v1 (output-wl out state)
-    (let ((fs (rau--output-fullscreen out)))
+  (rau--do 'river-output-v1 (output-wl state)
+    (let ((fs (rau--output-wl-fullscreen output-wl)))
       (pcase (rau--fs-state fs)
         ('requested
          (let ((new-wl (rau--fs-new fs))
@@ -1088,16 +1085,15 @@ point where also the destroy request is sent."
              (rau--request new-wl 'inform-fullscreen)
              (rau--request new-wl 'fullscreen
                             `((output . ,(ewc-object-id output-wl)))))
-           (setf (rau--output-fullscreen out)
+           (setf (rau--output-wl-fullscreen output-wl)
                  (rau--fs :state 'fullscreen :window new-wl))))
         ('exiting
          (let ((window-wl (rau--fs-window fs)))
            (when (and window-wl (ewc-object-p window-wl))
              (rau--request window-wl 'inform-not-fullscreen)
              (rau--request window-wl 'exit-fullscreen))
-           (setf (rau--output-fullscreen out) (rau--fs))))
+           (setf (rau--output-wl-fullscreen output-wl) (rau--fs))))
         (_ nil)))))
-
 
 (defun rau--reconcile-focus (state)
   "Update focus based on either an event or a buffer change.
@@ -1147,9 +1143,9 @@ See also focus relevant slots in rau STATE."
 
 (defun rau--render-frames (state)
   "Run the render-sequence reconciliation for frames on STATE."
-  (rau--do rau--tag-outputframe (frame-wl frame state)
-           (when-let* ((node-wl (rau--window-node-wl frame))
-                       (role-data (rau--window-role-data frame))
+  (rau--do rau--tag-outputframe (frame-wl state)
+           (when-let* ((node-wl (rau--window-wl-node-wl frame-wl))
+                       (role-data (rau--window-wl-role-data frame-wl))
                        (output-wl (rau--outputframe-output-wl role-data))
                        (position (rau--output-wl-position output-wl)))
              (rau--log "render frame %d for output %d."
@@ -1162,9 +1158,9 @@ See also focus relevant slots in rau STATE."
 
 (defun rau--render-windows (state)
   "Run the render-sequence reconciliation for windows on STATE."
-  (rau--do rau--tag-external (window-wl win state)
-    (when-let* ((node-wl (rau--window-node-wl win))
-                (role-data (rau--window-role-data win))
+  (rau--do rau--tag-external (window-wl state)
+    (when-let* ((node-wl (rau--window-wl-node-wl window-wl))
+                (role-data (rau--window-wl-role-data window-wl))
                 ((eq (rau--external-state role-data) 'active)))
       (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
                 (role-data (rau--window-wl-role-data frame-wl))
