@@ -449,6 +449,11 @@ See also `rau-on-wl-display-delete-id'."
   "Return a frame not associated to any output or nil."
   (rau--frame-wl-by-cond state (lambda (f) (null (rau--outputframe-output-wl f)))))
 
+(defun rau--emacs-window-dimensions (emacs-window)
+  (pcase-let ((`(,left ,top ,right ,bottom)
+               (window-inside-absolute-pixel-edges emacs-window)))
+    `(,(- right left) .,(- bottom top))))
+
 ;;; Command queue
 (defun rau--schedule-command-handler ()
   "Schedule command processing if not already scheduled."
@@ -1036,16 +1041,15 @@ point where also the destroy request is sent."
            (pcase (rau--external-state (rau--window-wl-role-data window-wl))
              ;; nothing to do for window-state 'starting
              ('active
-              (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl)))
+              (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
+                          (dimensions (rau--emacs-window-dimensions emacs-window)))
                 (rau--request window-wl
                               'set-tiled
                               `((edges . ,rau--edges-all)))
-                (pcase-let ((`(,left ,top ,right ,bottom)
-                             (window-inside-absolute-pixel-edges emacs-window)))
-                  (rau--request window-wl
-                                'propose-dimensions
-                                `((width . ,(- right left))
-                                  (height . ,(- bottom top)))))))
+                (rau--request window-wl
+                              'propose-dimensions
+                              `((width . ,(car dimensions))
+                                (height . ,(cdr dimensions))))))
              ('killed
               (rau--request window-wl 'close)))))
 
@@ -1074,6 +1078,9 @@ point where also the destroy request is sent."
   "Advance fullscreen state machines."
   (rau--do 'river-output-v1 output-wl state
     (let ((fs (rau--output-wl-fullscreen output-wl)))
+      (rau--log "reconcile fs on output %d with fs state %s"
+                (ewc-object-id output-wl)
+                (rau--fs-state fs))
       (pcase (rau--fs-state fs)
         ('requested
          (let ((new-wl (rau--fs-new fs))
@@ -1084,14 +1091,22 @@ point where also the destroy request is sent."
            (when (and new-wl (ewc-object-p new-wl))
              (rau--request new-wl 'inform-fullscreen)
              (rau--request new-wl 'fullscreen
-                            `((output . ,(ewc-object-id output-wl)))))
+                           `((output . ,(ewc-object-id output-wl)))
+                           t))
            (setf (rau--output-wl-fullscreen output-wl)
                  (rau--fs :state 'fullscreen :window new-wl))))
         ('exiting
          (let ((window-wl (rau--fs-window fs)))
            (when (and window-wl (ewc-object-p window-wl))
              (rau--request window-wl 'inform-not-fullscreen)
-             (rau--request window-wl 'exit-fullscreen))
+             (rau--request window-wl 'exit-fullscreen)
+             (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
+                         (dimensions (rau--emacs-window-dimensions emacs-window)))
+               (rau--request window-wl
+                             'propose-dimensions
+                             `((width . ,(car dimensions))
+                               (height . ,(cdr dimensions)))
+                             t)))
            (setf (rau--output-wl-fullscreen output-wl) (rau--fs))))
         (_ nil)))))
 
@@ -1170,7 +1185,7 @@ See also focus relevant slots in rau STATE."
                         (window-inside-absolute-pixel-edges emacs-window))
                        (position (rau--output-wl-position output-wl))
                        (dimensions (rau--window-wl-actual-dimensions window-wl))
-                       (clip (or dimensions `(,(- right left) . ,(- bottom top)))))
+                       (clip (or dimensions (rau--emacs-window-dimensions emacs-window))))
             (rau--request window-wl 'show)
 
             (rau--request node-wl 'set-position
