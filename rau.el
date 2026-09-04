@@ -295,6 +295,8 @@ frame."
 (defun rau-push-intercept-prefix (prefix)
   "Register PREFIX as an intercept key binding.
 PREFIX is a key string suitable for `kbd'."
+  (message "key bindings are about to be refactored and this function to be
+deprecated.")
   (let* ((data (rau--key-to-xkb prefix))
          (event (nth 0 data))
          (key (nth 1 data))
@@ -511,7 +513,56 @@ used in event listeners."
     ((or 'fullscreen 'exiting) (rau--fs-window fs))
     (_ nil)))
 
-;;; XKB keysym resolution
+;;; Keybindings
+
+(defun rau--parse-key-bindings (input)
+  "Parse INPUT into a list of key-binding plists.
+
+Each element of INPUT may be:
+  - a key string as acceptable for `kbd', e.g. \"C-x\"
+  - a list mixing key strings and flag keywords in any order, e.g.
+        (\"s-d\" \"C-h\" :needs-focus)
+        (:locked-active \"M-z\" :needs-focus)
+        (:locked-active \"s-c\" \"s-z\" :layout 2)
+
+Every output plist contains :key, :needs-focus, :locked-active and
+:layout (defaulting to nil).  Duplicate keys trigger a warning."
+  (let ((seen (make-hash-table :test #'equal))
+        (result nil))
+    (dolist (item input)
+      (let ((elements (if (stringp item) (list item) item))
+            keys flags)
+        ;; Walk the element list, separating keys from flags.
+        ;; TODO use while-let
+        (while-let ((elt (pop elements)))
+          (cond
+           ((stringp elt)
+            (push elt keys))
+           ((eq :layout elt)
+            (unless elements
+              (error ":layout requires a layout number"))
+            (push (cons elt (pop elements)) flags))
+           ((memq elt '(:needs-focus :locked-active))
+            (push (cons elt t) flags))
+           ((keywordp elt)
+            (error "unknown flag %S" elt))
+           (t
+            (error "Unexpected element in key binding spec: %S" elt))))
+
+        ;; Emit one plist per key, inheriting the collected flags.
+        (dolist (key keys)
+          (when (gethash key seen)
+            ;; Changed to 'rau-key-bindings to match your rau-- prefix
+            (display-warning 'rau-key-bindings
+                             (format "Duplicate key binding: %s" key)
+                             :warning))
+          (puthash key t seen)
+          (push (list :key key
+                      :needs-focus   (cdr (assq :needs-focus flags))
+                      :locked-active (cdr (assq :locked-active flags))
+                      :layout        (cdr (assq :layout flags)))
+                result))))
+    (nreverse result)))
 
 (defvar rau--xkb-keysym-alist
   '(("return" . #xFF0D)
