@@ -16,9 +16,6 @@ buffer gets displayed exactly on top of the buffer.
 
 I already use Râu however there are still some ~minor~ issues:
 
-- It takes some clicking until all focus and window states "normalize" after I
-  dock my laptop and two additional outputs appear.
-- An Emacs context menu (e.g. from flyspell) blocks rau.
 - Every other day there is an endless loop of keypresses and I have to switch
   to a tty and back to stop it.
   - This seems to happen in alacritty which sends a new window title after
@@ -27,11 +24,10 @@ I already use Râu however there are still some ~minor~ issues:
     quickly lead into an avalange of a seemingly endless stream of manage
     cycles.
 - No support for floating windows.
-- XDG key bindings still go to Emacs when the session is locked.
 - No protection against accidental closing of Emacs, just one C-x C-c away.
 - Tab titles don't get updated when in background.
-- Clicking on a x-popup-menu or x-popup-dialog freezes Râu and Emacs needs to
-  be restarted.
+- Clicking on a x-popup-menu or x-popup-dialog (e.g. from flyspell) freezes
+  Râu and Emacs needs to be restarted.
 
 ** Installation
 
