@@ -105,7 +105,7 @@ Not instantiated directly; windows and frames include it."
   keysym
   modifiers
   event
-  needs-focus
+  (needs-focus t) ;; TODO remove when removing the old keybinding stuff
   locked-active
   layout
   (state 'requested))
@@ -142,8 +142,6 @@ Not instantiated directly; windows and frames include it."
   (command-queue-after-manage nil)
 
   (manage-queue nil))
-
-
 
 (ewc-define-data-accessors rau--output)
 (ewc-define-data-accessors rau--window)
@@ -1061,16 +1059,19 @@ point where also the destroy request is sent."
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
 (defun rau--on-river-xkb-binding-v1-pressed (binding-wl _)
-  (when-let* ((event (rau--binding-wl-event binding-wl)))
-    (rau--log "enqueue-after-manage")
+  (let* ((event (rau--binding-wl-event binding-wl))
+         (needs-focus (rau--binding-wl-needs-focus binding-wl))
+         (locked-active (rau--binding-wl-locked-active binding-wl)))
     (rau--enqueue-after-manage
      (lambda ()
        (push (cons t event) unread-command-events)
-       (add-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)))
+       (when needs-focus
+         (add-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed))))
 
     ;; If focus is with external window then switch to underlying emacs
     ;; frame such that following keypresses go to emacs
-    (when-let* ((window-id (rau--state-focus-last-id rau--state))
+    (when-let* (needs-focus
+                (window-id (rau--state-focus-last-id rau--state))
                 (client (rau--state-client rau--state))
                 (window-wl (ewc-object-get client window-id))
                 ((ewc-object-tagged-p window-wl rau--tag-external))
