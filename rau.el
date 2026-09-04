@@ -561,6 +561,7 @@ used in event listeners."
           (let ((xkb (rau--key-to-xkb key)))
             (push (rau--binding-make
                    :event (cl-first xkb)
+                   :key key
                    :keysym (rau--resolve-keysym (cl-second xkb))
                    :modifiers (cl-third xkb)
                    :needs-focus   (cdr (assq :needs-focus flags))
@@ -644,10 +645,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
         (and (= (length key) 1)
              (rau--utf32-to-keysym (aref key 0)))
         0))
-
    (t 0)))
-
-
 
 (defun rau--bind-parsed-keys (parsed-keys)
   "Actually bind PARSED-KEYS.  See `rau-bind-keys' for the public function."
@@ -668,7 +666,7 @@ KEY may be an integer codepoint, a symbol, or a string key name."
           (rau--enqueue-manage-request
            binding-wl
            'set-layout-override
-           `(layout . ,layout)))
+           `((layout . ,layout))))
         (rau--enqueue-manage-request
          binding-wl
          'enable)))))
@@ -1256,10 +1254,12 @@ See also focus relevant slots in rau STATE."
 
 (defun rau--reconcile (state)
   "Run the manage-sequence reconciliation for STATE."
-  (let ((manage-requests (nreverse (rau--state-manage-queue state))))
-    (setf (rau--state-manage-queue state) nil)
-    (dolist (request manage-requests)
-      (rau--request (cl-first request) (cl-second request) (cl-third request))))
+  (rau--condition-case
+   "reconcile-manage-requests"
+   (let ((manage-requests (nreverse (rau--state-manage-queue state))))
+     (setf (rau--state-manage-queue state) nil)
+     (dolist (request manage-requests)
+       (rau--request (cl-first request) (cl-second request) (cl-third request)))))
   (rau--condition-case "reconcile-frames" (rau--reconcile-frames state))
   (rau--condition-case "reconcile-windows" (rau--reconcile-windows state))
   (rau--condition-case "reconcile-bindings" (rau--reconcile-bindings state))
