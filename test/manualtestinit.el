@@ -1,5 +1,6 @@
 ;; -*- lexical-binding: t; -*-
 (setq inhibit-message t)
+(setq multiple-terminals-merge-keyboards t)
 (print "running init" #'external-debugging-output)
 
 (setq message-log-max t)
@@ -38,8 +39,16 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
 (print "rau enable" #'external-debugging-output)
 (setq rau-debug t)
 ;; (setq ewc-debug t)
-(customize-set-variable 'rau-intercept-prefixes
-                        '("s-z" "C-x" "C-u" "C-h" "M-x"))
+(customize-set-variable 'rau-intercept-prefixes nil)
+(defun rau-test-bind-keys ()
+  (message "rau hook")
+  (rau-bind-keys
+   '("s-z"
+     (:needs-focus "C-x" "C-u" "C-h" "M-x")
+     )))
+
+(add-hook 'rau-ready-hook #'rau-test-bind-keys)
+
 (keymap-global-set "s-z" #'rau-toggle-fullscreen)
 (rau-enable)
 (print "done with init" #'external-debugging-output)

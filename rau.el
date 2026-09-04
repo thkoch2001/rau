@@ -35,8 +35,9 @@
   :group 'environment
   :prefix "rau-")
 
-(defcustom rau-enable-hook nil
-  "Hook run at the end of `rau-enable'."
+(defcustom rau-ready-hook nil
+  "Hook run when rau is ready.  At the moment this means that all global
+Wayland objects have been registered."
   :type 'hook)
 
 (defvar rau-debug nil
@@ -100,9 +101,13 @@ Not instantiated directly; windows and frames include it."
 
 (cl-defstruct (rau--binding (:constructor rau--binding-make))
   "State for one global XKB binding."
+  key
   keysym
   modifiers
   event
+  needs-focus
+  locked-active
+  layout
   (state 'requested))
 
 (cl-defstruct (rau--state (:constructor rau--state-make))
@@ -134,7 +139,9 @@ Not instantiated directly; windows and frames include it."
 
   ;; Lambda command queue: list of LAMBDA.
   (command-queue nil)
-  (command-queue-after-manage nil))
+  (command-queue-after-manage nil)
+
+  (manage-queue nil))
 
 
 
@@ -295,8 +302,11 @@ frame."
 (defun rau-push-intercept-prefix (prefix)
   "Register PREFIX as an intercept key binding.
 PREFIX is a key string suitable for `kbd'."
-  (message "key bindings are about to be refactored and this function to be
-deprecated.")
+  (declare (obsolete 'rau-bind-keys "2026-09-04"))
+  (display-warning 'rau
+                   "Keybinding in rau has been refactored. Use rau-bind-keys."
+                   :warning)
+
   (let* ((data (rau--key-to-xkb prefix))
          (event (nth 0 data))
          (key (nth 1 data))
@@ -319,7 +329,7 @@ deprecated.")
 
 (defcustom rau-intercept-prefixes
   '("C-x" "C-u" "C-h" "M-x")
-  "Prefix keys that should always go to Emacs."
+  "Obsolete. Use rau-bind-keys"
   :type '(repeat key)
   :set (lambda (sym val)
          (set-default sym val)
@@ -330,6 +340,7 @@ deprecated.")
 
 (defun rau-push-intercept-prefixes () ;; TODO: remove, leave only one way?
   "Update the intercept prefixes defined in `rau-intercept-prefixes'."
+  (declare (obsolete 'rau-bind-keys "2026-09-04"))
   (dolist (prefix rau-intercept-prefixes)
     (rau-push-intercept-prefix prefix)))
 
@@ -485,6 +496,11 @@ used in event listeners."
   (setf (rau--state-command-queue-after-manage rau--state)
         (append (rau--state-command-queue-after-manage rau--state) (list fn))))
 
+;;; Manage requests queue
+(defun rau--enqueue-manage-request(ewc-object request &optional args)
+  (push `(,ewc-object ,request ,args) (rau--state-manage-queue rau--state))
+  (rau--mark-manage-dirty rau--state))
+
 ;;; manage-dirty coalescing
 
 (defun rau--mark-manage-dirty (state)
@@ -515,21 +531,11 @@ used in event listeners."
 
 ;;; Keybindings
 
-(defun rau--parse-key-bindings (input)
-  "Parse INPUT into a list of key-binding plists.
-
-Each element of INPUT may be:
-  - a key string as acceptable for `kbd', e.g. \"C-x\"
-  - a list mixing key strings and flag keywords in any order, e.g.
-        (\"s-d\" \"C-h\" :needs-focus)
-        (:locked-active \"M-z\" :needs-focus)
-        (:locked-active \"s-c\" \"s-z\" :layout 2)
-
-Every output plist contains :key, :needs-focus, :locked-active and
-:layout (defaulting to nil).  Duplicate keys trigger a warning."
+(defun rau--parse-keys (keys)
+  "Parse KEYS into a list of rau--binding structs. See `rau-bind-keys'."
   (let ((seen (make-hash-table :test #'equal))
         (result nil))
-    (dolist (item input)
+    (dolist (item keys)
       (let ((elements (if (stringp item) (list item) item))
             keys flags)
         ;; Walk the element list, separating keys from flags.
@@ -548,20 +554,19 @@ Every output plist contains :key, :needs-focus, :locked-active and
             (error "unknown flag %S" elt))
            (t
             (error "Unexpected element in key binding spec: %S" elt))))
-
-        ;; Emit one plist per key, inheriting the collected flags.
         (dolist (key keys)
           (when (gethash key seen)
-            ;; Changed to 'rau-key-bindings to match your rau-- prefix
-            (display-warning 'rau-key-bindings
-                             (format "Duplicate key binding: %s" key)
-                             :warning))
+            (error "Duplicate key binding: %s" key))
           (puthash key t seen)
-          (push (list :key key
-                      :needs-focus   (cdr (assq :needs-focus flags))
-                      :locked-active (cdr (assq :locked-active flags))
-                      :layout        (cdr (assq :layout flags)))
-                result))))
+          (let ((xkb (rau--key-to-xkb key)))
+            (push (rau--binding-make
+                   :event (cl-first xkb)
+                   :keysym (rau--resolve-keysym (cl-second xkb))
+                   :modifiers (cl-third xkb)
+                   :needs-focus   (cdr (assq :needs-focus flags))
+                   :locked-active (cdr (assq :locked-active flags))
+                   :layout        (cdr (assq :layout flags)))
+                  result)))))
     (nreverse result)))
 
 (defvar rau--xkb-keysym-alist
@@ -644,6 +649,52 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 
 
 
+(defun rau--bind-parsed-keys (parsed-keys)
+  "Actually bind PARSED-KEYS.  See `rau-bind-keys' for the public function."
+  (when-let* ((client (rau--state-client rau--state))
+              (xkb-bindings-wl (ewc-first-object client 'river-xkb-bindings-v1))
+              (seat-wl (ewc-first-object client 'river-seat-v1))
+              (seat-id (ewc-object-id seat-wl)))
+    ;; TODO: check for duplicates in ewc-objects
+    (dolist (binding parsed-keys)
+      (let ((binding-wl (ewc-object-add client 'river-xkb-binding-v1)))
+        (setf (ewc-object-data binding-wl) binding)
+        (rau--request xkb-bindings-wl 'get-xkb-binding
+                          `((seat . ,seat-id)
+                            (keysym . ,(rau--binding-keysym binding))
+                            (modifiers . ,(rau--binding-modifiers binding))
+                            (id . ,(ewc-object-id binding-wl))))
+        (when-let* ((layout (rau--binding-layout binding)))
+          (rau--enqueue-manage-request
+           binding-wl
+           'set-layout-override
+           `(layout . ,layout)))
+        (rau--enqueue-manage-request
+         binding-wl
+         'enable)))))
+
+(defun rau-bind-keys (keys)
+  "Bind KEYS to always be sent to Emacs.  KEYS is a list either of strings
+acceptable to `kbd' or of lists of strings and one or more of the
+following keywords:
+
+- :locked-active - keys are also active when the session is locked, e.g. Volume or Brighness control
+- :needs-focus - focus should be temporarily given to Emacs
+- :layout LAYOUT-NR - 0 indexed layout override
+
+Example:
+
+'(\"s-e\" \"s-f\"
+  (\"s-d\" \"C-h\" :needs-focus)
+  (:locked-active \"M-x\" :needs-focus)
+  (:locked-active \"s-c\" \"s-z\" :layout 2))
+
+This function should be run from the `rau-ready-hook'."
+  (unless rau--state
+    (error "Rau has not yet been started."))
+  (let ((parsed-keys (rau--parse-keys keys)))
+    (rau--bind-parsed-keys parsed-keys)))
+
 ;;; Layer shell attachment helpers
 
 (defun rau--ensure-ls-output (state output-wl)
@@ -675,7 +726,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
     (setf (rau--seat-wl-ls-seat-wl seat-wl) ls-seat-wl)
     (rau--request ls-wl 'get-seat
                    `((id . ,ls-seat-id)
-                     (seat . ,(ewc-object-id seat-wl))))))
+                     (seat . ,(ewc-object-id seat-wl))))
+    (rau--enqueue (lambda () (run-hooks 'rau-ready-hook)))))
 
 ;;; Emacs handler functions for hooks
 
@@ -1204,6 +1256,10 @@ See also focus relevant slots in rau STATE."
 
 (defun rau--reconcile (state)
   "Run the manage-sequence reconciliation for STATE."
+  (let ((manage-requests (nreverse (rau--state-manage-queue state))))
+    (setf (rau--state-manage-queue state) nil)
+    (dolist (request manage-requests)
+      (rau--request (cl-first request) (cl-second request) (cl-third request))))
   (rau--condition-case "reconcile-frames" (rau--reconcile-frames state))
   (rau--condition-case "reconcile-windows" (rau--reconcile-windows state))
   (rau--condition-case "reconcile-bindings" (rau--reconcile-bindings state))
@@ -1332,9 +1388,7 @@ Call this function once when starting Emacs inside of river."
   (add-hook 'window-selection-change-functions #'rau--update-focus-request)
   (add-hook 'window-buffer-change-functions    #'rau--update-focus-request)
   (add-hook 'minibuffer-setup-hook             #'rau--update-focus-request)
-  (add-hook 'minibuffer-exit-hook              #'rau--update-focus-request)
-
-  (run-hooks 'rau-enable-hook))
+  (add-hook 'minibuffer-exit-hook              #'rau--update-focus-request))
 
 ;; TODO Hacks to avoid rau to freeze
 (defun x-popup-menu(position menu)
