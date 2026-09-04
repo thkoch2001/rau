@@ -114,6 +114,7 @@ Not instantiated directly; windows and frames include it."
   "Holds the state of the rau Wayland client."
   (client nil :type ewc-client)
   (pid (emacs-pid))
+  session-locked
 
   ;; XKB bindings: (keysym . modifiers) -> rau--binding.
   (bindings (make-hash-table :test 'equal))
@@ -847,11 +848,12 @@ point where also the destroy request is sent."
        (rau--request wm-wl 'render-finish)))))
 
 (defun rau--on-river-window-manager-v1-session-locked (_wm-wl _)
-  (message "rau: WM event session-locked"))
+  (setf (rau--state-session-locked rau--state) t))
 
 (defun rau--on-river-window-manager-v1-session-unlocked (_wm-wl _)
   (setf (rau--state-focus-next-id rau--state) (rau--state-focus-last-id rau--state)
-        (rau--state-focus-last-id rau--state) -1))
+        (rau--state-focus-last-id rau--state) -1
+        (rau--state-session-locked rau--state) nil))
 
 (defun rau--on-river-window-manager-v1-window (_wm-wl args)
   (pcase-let* (((map id) args)
@@ -1059,26 +1061,27 @@ point where also the destroy request is sent."
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
 (defun rau--on-river-xkb-binding-v1-pressed (binding-wl _)
-  (let* ((event (rau--binding-wl-event binding-wl))
-         (needs-focus (rau--binding-wl-needs-focus binding-wl))
-         (locked-active (rau--binding-wl-locked-active binding-wl)))
-    (rau--enqueue-after-manage
-     (lambda ()
-       (push (cons t event) unread-command-events)
-       (when needs-focus
-         (add-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed))))
+  (unless (and (rau--state-session-locked rau--state)
+               (not (rau--binding-wl-locked-active binding-wl)))
+    (let* ((event (rau--binding-wl-event binding-wl))
+           (needs-focus (rau--binding-wl-needs-focus binding-wl)))
+      (rau--enqueue-after-manage
+       (lambda ()
+         (push (cons t event) unread-command-events)
+         (when needs-focus
+           (add-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed))))
 
-    ;; If focus is with external window then switch to underlying emacs
-    ;; frame such that following keypresses go to emacs
-    (when-let* (needs-focus
-                (window-id (rau--state-focus-last-id rau--state))
-                (client (rau--state-client rau--state))
-                (window-wl (ewc-object-get client window-id))
-                ((ewc-object-tagged-p window-wl rau--tag-external))
-                (target-wl (rau--frame-wl-for-window-wl window-wl))
-                (target-id (ewc-object-id target-wl)))
-      (rau--log "switch focus to emacs frame for key pressed.")
-      (setf (rau--state-focus-next-id rau--state) target-id))))
+      ;; If focus is with external window then switch to underlying emacs
+      ;; frame such that following keypresses go to emacs
+      (when-let* (needs-focus
+                  (window-id (rau--state-focus-last-id rau--state))
+                  (client (rau--state-client rau--state))
+                  (window-wl (ewc-object-get client window-id))
+                  ((ewc-object-tagged-p window-wl rau--tag-external))
+                  (target-wl (rau--frame-wl-for-window-wl window-wl))
+                  (target-id (ewc-object-id target-wl)))
+        (rau--log "switch focus to emacs frame for key pressed.")
+        (setf (rau--state-focus-next-id rau--state) target-id)))))
 
 ;;;; river-layer-shell-v1 protocol
 ;;;; river-layer-shell-output-v1 listeners
