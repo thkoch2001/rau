@@ -89,6 +89,7 @@ Not instantiated directly; windows and frames include it."
   actual-dimensions
   app-id
   title
+  pid
   role-data)
 
 (cl-defstruct (rau--external (:constructor rau--external-make))
@@ -142,7 +143,7 @@ Not instantiated directly; windows and frames include it."
   (focus-inhibit-update nil)
 
   ;; Frame request accounting.
-  (pending-frames 0)
+  (pending-frames 1)
 
   ;; task queue: list of TODO.
   task-queue
@@ -185,11 +186,13 @@ STATE is evaluated once and bound to that same name within BODY."
      (dolist (,obj (ewc-objects (rau--state-client ,state) ,tag))
          ,@body)))
 
-(defun rau--set-frame-name (emacs-frame)
-  "Name EMACS-FRAME to be a Rau frame if not yet done so."
-  (unless (string-prefix-p "rau-frame-"
-                           (frame-parameter emacs-frame 'name))
-    (set-frame-parameter emacs-frame 'name (make-temp-name "rau-frame-"))))
+(defun rau--make-outputframe-parameters ()
+  "Return alist of frame parameters with unique name as expected by title
+event handler."
+  `((name . ,(make-temp-name "rau-frame-"))
+    (undecorated . t)
+    ;; avoid showing the same rau buffer twice
+    (buffer-predicate . rau--buffer-predicate)))
 
 ;; TODO: rename to external-wl
 (defun rau--buffer-for-window-wl (window-wl)
@@ -954,10 +957,32 @@ point where also the destroy request is sent."
       (setf (rau--window-wl-app-id window-wl) app-id))))
 
 (defun rau--on-river-window-v1-title (window-wl args)
+  "Handle title event for WINDOW-WL.
+Also categorizes the window based on the title prefix into Emacs
+outputframe or external window."
   (pcase-let* (((map title) args)
-               (title (ewc-to-utf8 title)))
+               (title (ewc-to-utf8 title))
+               (client (rau--state-client rau--state)))
     (setf (rau--window-wl-title window-wl) title)
 
+    (if (string-prefix-p "rau-frame-" title)
+        ;; Categorize as Emacs output frame
+        (unless (ewc-object-tagged-p window-wl rau--tag-outputframe)
+          (rau--log "Discovered new Emacs frame by title: %s" title)
+          (setf (rau--window-wl-role-data window-wl) (rau--outputframe-make))
+          (ewc-object-tag client window-wl rau--tag-outputframe)
+          (if (> (rau--state-pending-frames rau--state) 0)
+              (cl-decf (rau--state-pending-frames rau--state))
+            (rau--log "New frame was not requested by WM")))
+      ;; Categorize as external window
+      (unless (ewc-object-tagged-p window-wl rau--tag-external)
+        (rau--log "Discovered new regular external window")
+        (setf (rau--window-wl-role-data window-wl) (rau--external-make))
+        (ewc-object-tag client window-wl rau--tag-external)
+        (unless (rau--buffer-for-window-wl window-wl)
+          (rau--tasks-enqueue #'rau--task-setup-new-external-window window-wl))))
+
+    ;; Handle title updates for already categorized objects
     (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
       (rau--tasks-enqueue #'rau--task-rename-buffer window-wl))
 
@@ -1017,22 +1042,8 @@ point where also the destroy request is sent."
     (rau--tasks-enqueue #'bury-buffer buffer)))
 
 (defun rau--on-river-window-v1-unreliable-pid (window-wl args)
-  (pcase-let* (((map unreliable-pid) args)
-               (client (rau--state-client rau--state)))
-    (if (= unreliable-pid (rau--state-pid rau--state))
-        (progn
-          (rau--log "Discovered new Emacs frame")
-          (setf (rau--window-wl-role-data window-wl) (rau--outputframe-make))
-          (ewc-object-tag client window-wl rau--tag-outputframe)
-          (if (> (rau--state-pending-frames rau--state) 0)
-              (cl-decf (rau--state-pending-frames rau--state))
-            (rau--log "New frame was not requested by WM")))
-
-      (rau--log "Discovered new regular external window")
-      (setf (rau--window-wl-role-data window-wl) (rau--external-make))
-      (ewc-object-tag client window-wl rau--tag-external)
-      (unless (rau--buffer-for-window-wl window-wl)
-        (rau--tasks-enqueue #'rau--task-setup-new-external-window window-wl)))))
+  (pcase-let* (((map unreliable-pid) args))
+    (setf (rau--window-wl-pid window-wl) unreliable-pid)))
 
 ;;;; river-output-v1 listeners
 (defun rau--on-river-output-v1-removed (output-wl _)
@@ -1137,7 +1148,7 @@ point where also the destroy request is sent."
                   (rau--log "request frame.")
                   (cl-incf frame-requests))))
     (dotimes (_ (- frame-requests (rau--state-pending-frames state)))
-      (rau--tasks-enqueue #'make-frame)
+      (rau--tasks-enqueue #'make-frame (rau--make-outputframe-parameters))
       (cl-incf (rau--state-pending-frames state)))))
 
 (defun rau--reconcile-windows (state)
@@ -1359,22 +1370,15 @@ Call this function once when starting Emacs inside of river."
   (menu-bar-mode 0)
   (tool-bar-mode 0)
 
-  ;; configure this and all future frames ..
-  (let ((frame-params '((undecorated . t)
-                        ;; avoid showing the same rau buffer twice
-                        (buffer-predicate . rau--buffer-predicate))))
-    (modify-all-frames-parameters frame-params))
-
   (advice-add 'split-window-below :filter-return #'rau--split-window-advice)
   (advice-add 'split-window-right :filter-return #'rau--split-window-advice)
   (advice-add 'set-window-buffer :around #'rau--set-window-buffer-advice)
 
   (message "Launching rau (pure Elisp) ...")
+  (unless (= 1 (length (frame-list)))
+    (user-error "There should be exactly one frame when starting Rau."))
 
-  ;; Ensure each existing frame has a unique title that rau can match.
-  (cl-loop for emacs-frame being the frames
-           do (rau--set-frame-name emacs-frame))
-  (add-to-list 'after-make-frame-functions #'rau--set-frame-name)
+  (modify-frame-parameters nil (rau--make-outputframe-parameters))
 
   (let* ((interfaces (rau--read-protocols))
          (client (ewc-start interfaces "rau--on-")))
