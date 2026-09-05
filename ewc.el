@@ -129,7 +129,8 @@ OPCODE is the request opcode."
                  (cons ,(bindat--toplevel 'length spec)
                        ,(bindat--toplevel 'pack spec))))))
 
-;; TODO: Wayland uses cpu endianess. Detect it or make it configurable.
+;; TODO: Wayland uses cpu endianess. Detect it or make it configurable,
+;; see `byteorder'.
 (defun ewc--read-arg (node)
   "Translate one Wayland argument dom NODE into a bindat spec fragment."
   (let ((name (ewc--node-name node)))

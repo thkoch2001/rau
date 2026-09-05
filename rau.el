@@ -826,11 +826,12 @@ and thus minibuffer ends up below external window."
              object-id
              code
              (ewc-to-utf8 message))
-    (when-let* ((object (ewc-object-get object-id)))
+    (when-let* ((client (rau--state-client rau--state))
+                (object (ewc-object-get client object-id)))
       (message "object id=%d interface=%s tags=%S"
                object-id
                (ewc-object-interface object)
-               (ewc-object-tags tags)))))
+               (ewc-object-tags object)))))
 
 (defun rau--on-wl-display-delete-id (_display-wl args)
   "Server acknowledges deletion of object created by client.
@@ -1112,7 +1113,6 @@ point where also the destroy request is sent."
              (if-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
                  (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
                    (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
-                   ;; Frame already assigned: only re-propose if size changed.
                    (rau--request frame-wl
                                  'propose-dimensions
                                  `((width . ,(car dimensions))
@@ -1190,10 +1190,10 @@ point where also the destroy request is sent."
         ('requested
          (let ((new-wl (rau--fs-new fs))
                (prev-wl (rau--fs-previous fs)))
-           (when (and prev-wl (ewc-object-p prev-wl))
+           (when prev-wl
              (rau--request prev-wl 'inform-not-fullscreen)
              (rau--request prev-wl 'exit-fullscreen))
-           (when (and new-wl (ewc-object-p new-wl))
+           (when new-wl
              (rau--request new-wl 'inform-fullscreen)
              (rau--request new-wl 'fullscreen
                            `((output . ,(ewc-object-id output-wl)))
