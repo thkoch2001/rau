@@ -479,9 +479,11 @@ See also `rau-on-wl-display-delete-id'."
   (let ((tasks (nreverse (rau--state-task-queue rau--state))))
     (setf (rau--state-task-queue rau--state) nil)
     (while-let ((task (pop tasks)))
-      (rau--condition-case
-       "handle-task"
-       (funcall task)))))
+      (let ((fn (car task))
+            (args (cdr task)))
+        (rau--condition-case
+         (format "task %s" fn)
+         (apply fn args))))))
 
 (defun rau--tasks-schedule-execution ()
   "Schedule task processing if not already scheduled."
@@ -493,15 +495,58 @@ See also `rau-on-wl-display-delete-id'."
              (setf (rau--state-task-timer rau--state) nil)
              (rau--tasks-execute))))))
 
-(defun rau--tasks-enqueue (fn)
-  "Queue FN for execution by rau--tasks-execute.
+(defun rau--tasks-enqueue (fn &rest args)
+  "Queue FN with ARGS for execution by rau--tasks-execute.
 Also schedule the task execution timer if not yet done so.  Only to be
 used in event listeners."
-  (push fn (rau--state-task-queue rau--state))
+  (push `(,fn . ,args) (rau--state-task-queue rau--state))
   (rau--tasks-schedule-execution))
 
-(defun rau--tasks-enqueue-after-manage (fn)
-  (push fn (rau--state-task-queue-after-manage rau--state)))
+(defun rau--tasks-enqueue-after-manage (fn &rest args)
+  "Queue FN with ARGS to run after the next manage sequence."
+  (push `(,fn . ,args) (rau--state-task-queue-after-manage rau--state)))
+
+
+(defun rau--task-manage-start (wm-wl)
+  (unwind-protect
+      (rau--reconcile rau--state)
+    (rau--request wm-wl 'manage-finish)
+    (let ((after-manage (rau--state-task-queue-after-manage rau--state))
+          (tasks (rau--state-task-queue rau--state)))
+      (setf (rau--state-task-queue-after-manage rau--state) nil
+            (rau--state-task-queue rau--state)
+            (append after-manage tasks)))
+    (when (rau--state-task-queue rau--state)
+      (rau--tasks-schedule-execution))))
+
+(defun rau--task-rename-buffer (window-wl)
+  "Rename buffer for external window with data taken from
+WINDOW-WL."
+  (when-let* ((buffer (rau--buffer-for-window-wl window-wl))
+              (app-id (rau--window-wl-app-id window-wl))
+              (title (rau--window-wl-title window-wl))
+              (name (rau--make-buffer-name app-id title)))
+    (with-current-buffer buffer
+      (rename-buffer name t))))
+
+(defun rau--task-setup-new-external-window (window-wl)
+  "Create Rau mode buffer for WINDOW-WL."
+  (let ((role-data (rau--window-wl-role-data window-wl))
+        (buffer (get-buffer-create (make-temp-name "rau-external-"))))
+    (with-current-buffer buffer
+      (rau-mode)
+      (setq-local rau--window-wl window-wl)
+      (unless (display-buffer buffer)
+        (error "display-buffer failed for window-wl %S buffer %S." window-wl buffer)))
+    (setf (rau--external-buffer role-data) buffer)
+
+    (setf (rau--external-state role-data) 'active)))
+
+(defun rau--task-consume-key-event (event needs-focus)
+  "Forward EVENT to emacs and setup to recover focus if NEEDS-FOCUS."
+  (push (cons t event) unread-command-events)
+  (when needs-focus
+    (add-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)))
 
 ;;; Manage requests queue
 (defun rau--manage-enqueue (ewc-object request &optional args)
@@ -732,7 +777,7 @@ This function should be run from the `rau-ready-hook'."
     (rau--request ls-wl 'get-seat
                    `((id . ,ls-seat-id)
                      (seat . ,(ewc-object-id seat-wl))))
-    (rau--tasks-enqueue (lambda () (run-hooks 'rau-ready-hook)))))
+    (rau--tasks-enqueue #'run-hooks 'rau-ready-hook)))
 
 ;;; Emacs handler functions for hooks
 
@@ -832,30 +877,12 @@ point where also the destroy request is sent."
   (message "rau: WM event finished"))
 
 (defun rau--on-river-window-manager-v1-manage-start (wm-wl _)
-  (rau--tasks-enqueue
-   (lambda ()
-     (unwind-protect
-         (rau--reconcile rau--state)
-       (rau--request wm-wl 'manage-finish)
-       (let ((after-manage (rau--state-task-queue-after-manage rau--state))
-             (tasks (rau--state-task-queue rau--state)))
-         (setf (rau--state-task-queue-after-manage rau--state) nil
-               (rau--state-task-queue rau--state)
-               (append after-manage tasks)))
-       (when (rau--state-task-queue rau--state)
-         (rau--tasks-schedule-execution))))))
+  (rau--tasks-enqueue #'rau--task-manage-start wm-wl))
 
 (defun rau--on-river-window-manager-v1-render-start (wm-wl _)
-  (rau--tasks-enqueue
-   (lambda ()
-     (unwind-protect
-         (condition-case err
-             (progn
-               (rau--render-frames rau--state)
-               (rau--render-windows rau--state))
-           (error
-            (message "rau render error: %S" err)))
-       (rau--request wm-wl 'render-finish)))))
+  (rau--tasks-enqueue #'rau--render-frames)
+  (rau--tasks-enqueue #'rau--render-windows)
+  (rau--tasks-enqueue #'rau--request wm-wl 'render-finish))
 
 (defun rau--on-river-window-manager-v1-session-locked (_wm-wl _)
   (setf (rau--state-session-locked rau--state) t))
@@ -896,15 +923,13 @@ point where also the destroy request is sent."
 
 ;;;; river-window-v1 listeners
 (defun rau--on-river-window-v1-closed (window-wl _)
-  (rau--tasks-enqueue
-   (lambda ()
-     (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-                 (buf (rau--buffer-for-window-wl window-wl)))
-       (kill-buffer buf))
-     (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
-       (rau--request node-wl 'destroy))
-     (rau--request window-wl 'destroy)
-     (rau--remove window-wl)))
+  (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
+              (buf (rau--buffer-for-window-wl window-wl)))
+    (rau--tasks-enqueue #'kill-buffer buf))
+  (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
+    (rau--tasks-enqueue #'rau--request node-wl 'destroy))
+  (rau--tasks-enqueue #'rau--request window-wl 'destroy)
+  (rau--tasks-enqueue #'rau--remove window-wl)
 
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-outputframe))
               (role-data (rau--window-wl-role-data window-wl))
@@ -928,31 +953,22 @@ point where also the destroy request is sent."
       (setf (rau--window-wl-app-id window-wl) app-id))))
 
 (defun rau--on-river-window-v1-title (window-wl args)
-  (pcase-let (((map title) args))
-    (when-let* ((title (ewc-to-utf8 title))
-                (data (ewc-object-data window-wl)))
-      (setf (rau--window-title data) title)
-      (when (ewc-object-tagged-p window-wl rau--tag-external)
-        (rau--tasks-enqueue
-         (lambda ()
-           (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
-             (with-current-buffer buf
-               (rename-buffer
-                (rau--make-buffer-name
-                 (rau--window-app-id data)
-                 title)
-                t))))))
-      (when (ewc-object-tagged-p window-wl rau--tag-outputframe)
-        (when-let* ((emacs-frame
-                     (cl-find title (frame-list)
-                              :test #'equal
-                              :key (lambda (f) (frame-parameter f 'name))))
-                    (role-data (rau--window-role-data data)))
-          (setf (rau--outputframe-emacs-frame role-data) emacs-frame)
-          (rau--tasks-enqueue
-           (lambda ()
-             (when (frame-live-p emacs-frame)
-               (set-frame-parameter emacs-frame 'rau-frame-wl window-wl)))))))))
+  (pcase-let* (((map title) args)
+               (title (ewc-to-utf8 title)))
+    (setf (rau--window-wl-title window-wl) title)
+
+    (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
+      (rau--tasks-enqueue #'rau--task-rename-buffer window-wl))
+
+    (when-let* (((ewc-object-tagged-p window-wl rau--tag-outputframe))
+                (role-data (rau--window-wl-role-data window-wl))
+                ((not (rau--outputframe-emacs-frame role-data)))
+                (emacs-frame
+                 (cl-find title (frame-list)
+                          :test #'equal
+                          :key (lambda (f) (frame-parameter f 'name)))))
+      (setf (rau--outputframe-emacs-frame role-data) emacs-frame)
+      (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl))))
 
 (defun rau--on-river-window-v1-fullscreen-requested (window-wl args)
   (pcase-let* (((map output) args)
@@ -995,12 +1011,9 @@ point where also the destroy request is sent."
                              :window (rau--fs-window fs)))))))
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
-  (when (ewc-object-tagged-p window-wl rau--tag-external)
-    (rau--tasks-enqueue
-     (lambda ()
-       (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
-         (with-current-buffer buf
-           (bury-buffer)))))))
+  (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
+              (buffer (rau--buffer-for-window-wl window-wl)))
+    (rau--tasks-enqueue #'bury-buffer buffer)))
 
 (defun rau--on-river-window-v1-unreliable-pid (window-wl args)
   (pcase-let* (((map unreliable-pid) args)
@@ -1017,20 +1030,8 @@ point where also the destroy request is sent."
       (rau--log "Discovered new regular external window")
       (setf (rau--window-wl-role-data window-wl) (rau--external-make))
       (ewc-object-tag client window-wl rau--tag-external)
-      (rau--tasks-enqueue
-       (lambda ()
-         ;; Confirm that the Emacs-side buffer for the window was created.
-         (let* ((role-data (rau--window-wl-role-data window-wl)))
-           (unless (rau--buffer-for-window-wl window-wl)
-             (let ((buffer (get-buffer-create (make-temp-name "rau-external-"))))
-               (with-current-buffer buffer
-                 (rau-mode)
-                 (setq-local rau--window-wl window-wl)
-                 (unless (display-buffer buffer)
-                   (error "display-buffer failed for window-wl %S buffer %S." window-wl buffer)))
-               (setf (rau--external-buffer role-data) buffer)))
-
-           (setf (rau--external-state role-data) 'active)))))))
+      (unless (rau--buffer-for-window-wl window-wl)
+        (rau--tasks-enqueue #'rau--task-setup-new-external-window window-wl)))))
 
 ;;;; river-output-v1 listeners
 (defun rau--on-river-output-v1-removed (output-wl _)
@@ -1040,11 +1041,10 @@ point where also the destroy request is sent."
                 (role-data (rau--window-wl-role-data frame-wl)))
       (setf (rau--outputframe-output-wl role-data) nil
             (rau--output-wl-frame-wl output-wl) nil)
-      (rau--tasks-enqueue
-       (lambda ()
-         (when-let* ((emacs-frame (rau--outputframe-emacs-frame role-data))
-                     ((frame-live-p emacs-frame)))
-           (delete-frame emacs-frame)))))
+      (when-let* ((emacs-frame (rau--outputframe-emacs-frame role-data))
+                  ((frame-live-p emacs-frame)))
+        (rau--tasks-enqueue #'delete-frame emacs-frame)))
+    ;; TODO: also enqueue the below three actions, look out for race conditions
     (when-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
       (rau--request ls-output-wl 'destroy))
     (rau--request output-wl 'destroy)
@@ -1075,11 +1075,7 @@ point where also the destroy request is sent."
                (not (rau--binding-wl-locked-active binding-wl)))
     (let* ((event (rau--binding-wl-event binding-wl))
            (needs-focus (rau--binding-wl-needs-focus binding-wl)))
-      (rau--tasks-enqueue-after-manage
-       (lambda ()
-         (push (cons t event) unread-command-events)
-         (when needs-focus
-           (add-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed))))
+      (rau--tasks-enqueue-after-manage #'rau--task-consume-key-event event needs-focus)
 
       ;; If focus is with external window then switch to underlying emacs
       ;; frame such that following keypresses go to emacs
@@ -1141,7 +1137,7 @@ point where also the destroy request is sent."
                   (rau--log "request frame.")
                   (cl-incf frame-requests))))
     (dotimes (_ (- frame-requests (rau--state-pending-frames state)))
-      (rau--tasks-enqueue (lambda () (make-frame)))
+      (rau--tasks-enqueue #'make-frame)
       (cl-incf (rau--state-pending-frames state)))))
 
 (defun rau--reconcile-windows (state)
@@ -1271,9 +1267,9 @@ See also focus relevant slots in rau STATE."
   (rau--condition-case "reconcile-fs" (rau--reconcile-fullscreen state))
   (rau--condition-case "reconcile-focus" (rau--reconcile-focus state)))
 
-(defun rau--render-frames (state)
-  "Run the render-sequence reconciliation for frames on STATE."
-  (rau--do rau--tag-outputframe frame-wl state
+(defun rau--render-frames ()
+  "Run the render-sequence reconciliation for frames."
+  (rau--do rau--tag-outputframe frame-wl rau--state
            (when-let* ((node-wl (rau--window-wl-node-wl frame-wl))
                        (role-data (rau--window-wl-role-data frame-wl))
                        (output-wl (rau--outputframe-output-wl role-data))
@@ -1286,9 +1282,9 @@ See also focus relevant slots in rau STATE."
                            `((x . ,(car position))
                              (y . ,(cdr position)))))))
 
-(defun rau--render-windows (state)
-  "Run the render-sequence reconciliation for windows on STATE."
-  (rau--do rau--tag-external window-wl state
+(defun rau--render-windows ()
+  "Run the render-sequence reconciliation for windows."
+  (rau--do rau--tag-external window-wl rau--state
     (when-let* ((node-wl (rau--window-wl-node-wl window-wl))
                 (role-data (rau--window-wl-role-data window-wl))
                 ((eq (rau--external-state role-data) 'active)))
