@@ -76,6 +76,12 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   (dimensions '(0 . 0))
   (fullscreen (rau--fs)))
 
+(cl-defstruct (rau--ls-output (:constructor rau--ls-output-make))
+  "State for a River output."
+  (output-wl nil :type ewc-object)
+  (non-excl-position '(0 . 0))
+  (non-excl-dimensions '(0 . 0)))
+
 (cl-defstruct (rau--window (:constructor rau--window-make))
   "Common state shared by windows and frames.
 Not instantiated directly; windows and frames include it."
@@ -145,6 +151,7 @@ Not instantiated directly; windows and frames include it."
   (manage-queue nil))
 
 (ewc-define-data-accessors rau--output)
+(ewc-define-data-accessors rau--ls-output)
 (ewc-define-data-accessors rau--window)
 (ewc-define-data-accessors rau--seat)
 (ewc-define-data-accessors rau--binding)
@@ -464,10 +471,26 @@ See also `rau-on-wl-display-delete-id'."
   "Return a frame not associated to any output or nil."
   (rau--frame-wl-by-cond state (lambda (f) (null (rau--outputframe-output-wl f)))))
 
-(defun rau--emacs-window-dimensions (emacs-window)
+(defun rau--dimensions-for-emacs-window (emacs-window)
   (pcase-let ((`(,left ,top ,right ,bottom)
                (window-inside-absolute-pixel-edges emacs-window)))
     `(,(- right left) .,(- bottom top))))
+
+(defun rau--dimensions-for-outputframe (output-wl)
+  "Get dimensions either from output-wl or its associated ls-output-wl non-exclusive-area."
+  (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
+            (non-excl-dimensions (rau--ls-output-wl-non-excl-dimensions ls-output-wl))
+            ((not (equal '(0 . 0) non-excl-dimensions))))
+      non-excl-dimensions
+    (rau--output-wl-dimensions output-wl)))
+
+(defun rau--position-for-outputframe (output-wl)
+  "Get position either from output-wl or its associated ls-output-wl non-exclusive-area."
+  (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
+            (non-excl-position (rau--ls-output-wl-non-excl-position ls-output-wl))
+            ((not (equal '(0 . 0) non-excl-position))))
+      non-excl-position
+    (rau--output-wl-position output-wl)))
 
 ;;; Command queue
 (defun rau--schedule-command-handler ()
@@ -700,13 +723,13 @@ This function should be run from the `rau-ready-hook'."
               ((null (rau--output-ls-output-wl out)))
               (client (rau--state-client state))
               (ls-wl (ewc-first-object client 'river-layer-shell-v1))
-              (ls-output-id (cl-incf (ewc-client-new-id client)))
               (ls-output-wl
-               (ewc-object-add client 'river-layer-shell-output-v1 ls-output-id)))
-    (setf (rau--output-ls-output-wl out) ls-output-wl)
+               (ewc-object-add client 'river-layer-shell-output-v1)))
+    (setf (rau--output-ls-output-wl out) ls-output-wl
+          (ewc-object-data ls-output-wl) (rau--ls-output-make :output-wl output-wl))
     (rau--request ls-wl 'get-output
-                   `((id . ,ls-output-id)
-                     (output . ,(ewc-object-id output-wl))))))
+                  `((id . ,(ewc-object-id ls-output-wl))
+                    (output . ,(ewc-object-id output-wl))))))
 
 ;; TODO: this ls-seat is never used ATM.
 (defun rau--ensure-ls-seat (state)
@@ -1087,17 +1110,8 @@ point where also the destroy request is sent."
 ;;;; river-layer-shell-output-v1 listeners
 (defun rau--on-river-layer-shell-output-v1-non-exclusive-area (ls-output-wl args)
   (pcase-let (((map x y width height) args))
-    ;; TODO: add backlink from ls-output-wl to its output-wl and eliminate this loop.
-    ;; Better: store this data separately and decide on frame reconciliation which data to use
-    (when-let* ((out (cl-loop for output-wl in (ewc-objects
-                                          (rau--state-client rau--state)
-                                          'river-output-v1)
-                              for data = (ewc-object-data output-wl)
-                              thereis (and data
-                                           (eq (rau--output-ls-output-wl data) ls-output-wl)
-                                           data))))
-      (setf (rau--output-position out) `(,x . ,y)
-            (rau--output-dimensions out) `(,width . ,height)))))
+    (setf (rau--ls-output-wl-non-excl-position ls-output-wl) `(,x . ,y)
+          (rau--ls-output-wl-non-excl-dimensions ls-output-wl) `(,width . ,height))))
 
 ;;;; river-layer-shell-seat-v1 listeners
 (defun rau--on-river-layer-shell-seat-v1-focus-none (_ls-seat-wl _)
@@ -1113,7 +1127,7 @@ point where also the destroy request is sent."
     (rau--do 'river-output-v1 output-wl state
              (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
              (if-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
-                 (let ((dimensions (rau--output-wl-dimensions output-wl)))
+                 (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
                    (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
                    ;; Frame already assigned: only re-propose if size changed.
                    (rau--request frame-wl
@@ -1124,7 +1138,7 @@ point where also the destroy request is sent."
                (rau--log "no frame found for output.")
                (if-let* ((frame-wl (rau--frame-wl-without-output state))
                          (role-data (rau--window-wl-role-data frame-wl)))
-                   (let ((dimensions (rau--output-wl-dimensions output-wl)))
+                   (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
                       (setf (rau--outputframe-output-wl role-data) output-wl
                             (rau--output-wl-frame-wl output-wl) frame-wl)
                       (rau--request frame-wl
@@ -1150,7 +1164,7 @@ point where also the destroy request is sent."
              ;; nothing to do for window-state 'starting
              ('active
               (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
-                          (dimensions (rau--emacs-window-dimensions emacs-window)))
+                          (dimensions (rau--dimensions-for-emacs-window emacs-window)))
                 (rau--request window-wl
                               'set-tiled
                               `((edges . ,rau--edges-all)))
@@ -1209,7 +1223,7 @@ point where also the destroy request is sent."
              (rau--request window-wl 'inform-not-fullscreen)
              (rau--request window-wl 'exit-fullscreen)
              (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
-                         (dimensions (rau--emacs-window-dimensions emacs-window)))
+                         (dimensions (rau--dimensions-for-emacs-window emacs-window)))
                (rau--request window-wl
                              'propose-dimensions
                              `((width . ,(car dimensions))
@@ -1276,7 +1290,7 @@ See also focus relevant slots in rau STATE."
            (when-let* ((node-wl (rau--window-wl-node-wl frame-wl))
                        (role-data (rau--window-wl-role-data frame-wl))
                        (output-wl (rau--outputframe-output-wl role-data))
-                       (position (rau--output-wl-position output-wl)))
+                       (position (rau--position-for-outputframe output-wl)))
              (rau--log "render frame %d for output %d."
                       (ewc-object-id frame-wl)
                       (ewc-object-id output-wl))
@@ -1297,9 +1311,9 @@ See also focus relevant slots in rau STATE."
                 (emacs-window (rau--emacs-window-for-window-wl window-wl)))
           (pcase-let* ((`(,left ,top ,right ,bottom)
                         (window-inside-absolute-pixel-edges emacs-window))
-                       (position (rau--output-wl-position output-wl))
+                       (position (rau--position-for-outputframe output-wl))
                        (dimensions (rau--window-wl-actual-dimensions window-wl))
-                       (clip (or dimensions (rau--emacs-window-dimensions emacs-window))))
+                       (clip (or dimensions (rau--dimensions-for-emacs-window emacs-window))))
             (rau--request window-wl 'show)
 
             (rau--request node-wl 'set-position
