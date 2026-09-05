@@ -144,11 +144,14 @@ Not instantiated directly; windows and frames include it."
   ;; Frame request accounting.
   (pending-frames 0)
 
-  ;; Lambda command queue: list of LAMBDA.
-  (command-queue nil)
-  (command-queue-after-manage nil)
+  ;; task queue: list of TODO.
+  task-queue
+  task-queue-after-manage
+  task-timer
 
-  (manage-queue nil))
+  ;; manage queue: list of (ewc-object 'request args) for the next manage
+  ;; cycle
+  manage-queue)
 
 (ewc-define-data-accessors rau--output)
 (ewc-define-data-accessors rau--ls-output)
@@ -164,14 +167,13 @@ Not instantiated directly; windows and frames include it."
 (defconst rau--tag-external :rau-external
   "Tag for `river-window-v1' objects that are external windows.")
 
-(defvar rau--command-timer nil
-  "Timer used to drain the rau command queue.")
+
 
 (defvar rau--manage-timer nil
   "Timer used to coalesce `manage-dirty' requests.")
 
 (defvar rau--handling-commands nil
-  "Non-nil while `rau--handle-commands' is running.")
+  "Non-nil while `rau--tasks-execute' is running.")
 
 (defvar rau--pending-handler nil
   "Non-nil if a command handler was requested while already handling commands.")
@@ -224,21 +226,6 @@ frame."
                        title)))
     (if app-id (concat title-trunc " - " app-id)
       title-trunc)))
-
-(defun rau--handle-commands (state)
-  "Execute commands enqueed by event listeners."
-  (unless rau--handling-commands
-    (let ((rau--handling-commands t))
-      ;; Drain the command queue.
-      (while-let ((cmd (pop (rau--state-command-queue state))))
-        (rau--condition-case
-         "handle-command"
-         (funcall cmd)))
-
-      (when (or rau--pending-handler
-                (rau--state-command-queue state))
-        (setq rau--pending-handler nil)
-        (rau--schedule-command-handler)))))
 
 ;; Major mode for rau-managed buffers
 (defvar-local rau--window-wl nil
@@ -492,34 +479,49 @@ See also `rau-on-wl-display-delete-id'."
       non-excl-position
     (rau--output-wl-position output-wl)))
 
-;;; Command queue
-(defun rau--schedule-command-handler ()
-  "Schedule command processing if not already scheduled."
+;;; task queue
+(defun rau--tasks-execute (state)
+  "Execute tasks enqueued by event listeners."
+  (unless rau--handling-commands
+    (let ((rau--handling-commands t))
+      ;; Drain the task queue.
+      (while-let ((cmd (pop (rau--state-task-queue state))))
+        (rau--condition-case
+         "handle-task"
+         (funcall cmd)))
+
+      (when (or rau--pending-handler
+                (rau--state-task-queue state))
+        (setq rau--pending-handler nil)
+        (rau--tasks-schedule-execution)))))
+
+(defun rau--tasks-schedule-execution ()
+  "Schedule task processing if not already scheduled."
   (if rau--handling-commands
       (setq rau--pending-handler t)
-    (unless rau--command-timer
-      (setq rau--command-timer
+    (unless (rau--state-task-timer rau--state)
+      (setf (rau--state-task-timer rau--state)
             (run-at-time
              0 nil
              (lambda (state)
-               (setq rau--command-timer nil)
-               (rau--handle-commands state))
+               (setf (rau--state-task-timer rau--state) nil)
+               (rau--tasks-execute state))
              rau--state)))))
 
-(defun rau--enqueue (fn)
-  "Queue FN for execution by rau--command-handler.
-Also schedule the command handler timer if not yet done so.  Only to be
+(defun rau--tasks-enqueue (fn)
+  "Queue FN for execution by rau--tasks-execute.
+Also schedule the task execution timer if not yet done so.  Only to be
 used in event listeners."
-  (setf (rau--state-command-queue rau--state)
-        (append (rau--state-command-queue rau--state) (list fn)))
-  (rau--schedule-command-handler))
+  (setf (rau--state-task-queue rau--state)
+        (append (rau--state-task-queue rau--state) (list fn)))
+  (rau--tasks-schedule-execution))
 
-(defun rau--enqueue-after-manage (fn)
-  (setf (rau--state-command-queue-after-manage rau--state)
-        (append (rau--state-command-queue-after-manage rau--state) (list fn))))
+(defun rau--tasks-enqueue-after-manage (fn)
+  (setf (rau--state-task-queue-after-manage rau--state)
+        (append (rau--state-task-queue-after-manage rau--state) (list fn))))
 
 ;;; Manage requests queue
-(defun rau--enqueue-manage-request(ewc-object request &optional args)
+(defun rau--manage-enqueue (ewc-object request &optional args)
   (push `(,ewc-object ,request ,args) (rau--state-manage-queue rau--state))
   (rau--mark-manage-dirty rau--state))
 
@@ -685,11 +687,11 @@ KEY may be an integer codepoint, a symbol, or a string key name."
                             (modifiers . ,(rau--binding-modifiers binding))
                             (id . ,(ewc-object-id binding-wl))))
         (when-let* ((layout (rau--binding-layout binding)))
-          (rau--enqueue-manage-request
+          (rau--manage-enqueue
            binding-wl
            'set-layout-override
            `((layout . ,layout))))
-        (rau--enqueue-manage-request
+        (rau--manage-enqueue
          binding-wl
          'enable)))))
 
@@ -747,7 +749,7 @@ This function should be run from the `rau-ready-hook'."
     (rau--request ls-wl 'get-seat
                    `((id . ,ls-seat-id)
                      (seat . ,(ewc-object-id seat-wl))))
-    (rau--enqueue (lambda () (run-hooks 'rau-ready-hook)))))
+    (rau--tasks-enqueue (lambda () (run-hooks 'rau-ready-hook)))))
 
 ;;; Emacs handler functions for hooks
 
@@ -847,19 +849,19 @@ point where also the destroy request is sent."
   (message "rau: WM event finished"))
 
 (defun rau--on-river-window-manager-v1-manage-start (wm-wl _)
-  (rau--enqueue
+  (rau--tasks-enqueue
    (lambda ()
      (unwind-protect
          (rau--reconcile rau--state)
        (rau--request wm-wl 'manage-finish)
-       (setf (rau--state-command-queue rau--state)
-             (append (rau--state-command-queue rau--state) (rau--state-command-queue-after-manage rau--state))
-             (rau--state-command-queue-after-manage rau--state) nil)
-       (when (rau--state-command-queue rau--state)
-         (rau--schedule-command-handler))))))
+       (setf (rau--state-task-queue rau--state)
+             (append (rau--state-task-queue rau--state) (rau--state-task-queue-after-manage rau--state))
+             (rau--state-task-queue-after-manage rau--state) nil)
+       (when (rau--state-task-queue rau--state)
+         (rau--tasks-schedule-execution))))))
 
 (defun rau--on-river-window-manager-v1-render-start (wm-wl _)
-  (rau--enqueue
+  (rau--tasks-enqueue
    (lambda ()
      (unwind-protect
          (condition-case err
@@ -909,7 +911,7 @@ point where also the destroy request is sent."
 
 ;;;; river-window-v1 listeners
 (defun rau--on-river-window-v1-closed (window-wl _)
-  (rau--enqueue
+  (rau--tasks-enqueue
    (lambda ()
      (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
                  (buf (rau--buffer-for-window-wl window-wl)))
@@ -946,7 +948,7 @@ point where also the destroy request is sent."
                 (data (ewc-object-data window-wl)))
       (setf (rau--window-title data) title)
       (when (ewc-object-tagged-p window-wl rau--tag-external)
-        (rau--enqueue
+        (rau--tasks-enqueue
          (lambda ()
            (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
              (with-current-buffer buf
@@ -962,7 +964,7 @@ point where also the destroy request is sent."
                               :key (lambda (f) (frame-parameter f 'name))))
                     (role-data (rau--window-role-data data)))
           (setf (rau--outputframe-emacs-frame role-data) emacs-frame)
-          (rau--enqueue
+          (rau--tasks-enqueue
            (lambda ()
              (when (frame-live-p emacs-frame)
                (set-frame-parameter emacs-frame 'rau-frame-wl window-wl)))))))))
@@ -1009,7 +1011,7 @@ point where also the destroy request is sent."
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
   (when (ewc-object-tagged-p window-wl rau--tag-external)
-    (rau--enqueue
+    (rau--tasks-enqueue
      (lambda ()
        (when-let* ((buf (rau--buffer-for-window-wl window-wl)))
          (with-current-buffer buf
@@ -1030,7 +1032,7 @@ point where also the destroy request is sent."
       (rau--log "Discovered new regular external window")
       (setf (rau--window-wl-role-data window-wl) (rau--external-make))
       (ewc-object-tag client window-wl rau--tag-external)
-      (rau--enqueue
+      (rau--tasks-enqueue
        (lambda ()
          ;; Confirm that the Emacs-side buffer for the window was created.
          (let* ((role-data (rau--window-wl-role-data window-wl)))
@@ -1053,7 +1055,7 @@ point where also the destroy request is sent."
                 (role-data (rau--window-wl-role-data frame-wl)))
       (setf (rau--outputframe-output-wl role-data) nil
             (rau--output-wl-frame-wl output-wl) nil)
-      (rau--enqueue
+      (rau--tasks-enqueue
        (lambda ()
          (when-let* ((emacs-frame (rau--outputframe-emacs-frame role-data))
                      ((frame-live-p emacs-frame)))
@@ -1088,7 +1090,7 @@ point where also the destroy request is sent."
                (not (rau--binding-wl-locked-active binding-wl)))
     (let* ((event (rau--binding-wl-event binding-wl))
            (needs-focus (rau--binding-wl-needs-focus binding-wl)))
-      (rau--enqueue-after-manage
+      (rau--tasks-enqueue-after-manage
        (lambda ()
          (push (cons t event) unread-command-events)
          (when needs-focus
@@ -1154,7 +1156,7 @@ point where also the destroy request is sent."
                   (rau--log "request frame.")
                   (cl-incf frame-requests))))
     (dotimes (_ (- frame-requests (rau--state-pending-frames state)))
-      (rau--enqueue (lambda () (make-frame)))
+      (rau--tasks-enqueue (lambda () (make-frame)))
       (cl-incf (rau--state-pending-frames state)))))
 
 (defun rau--reconcile-windows (state)
