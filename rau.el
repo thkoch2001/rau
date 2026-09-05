@@ -172,12 +172,6 @@ Not instantiated directly; windows and frames include it."
 (defvar rau--manage-timer nil
   "Timer used to coalesce `manage-dirty' requests.")
 
-(defvar rau--handling-commands nil
-  "Non-nil while `rau--tasks-execute' is running.")
-
-(defvar rau--pending-handler nil
-  "Non-nil if a command handler was requested while already handling commands.")
-
 (cl-defmacro rau--do (tag obj state &body body)
   "Iterate over the ewc objects in STATE tagged with TAG.
 TAG is a form that evaluates to or is an ewc-object tag, for example
@@ -480,45 +474,34 @@ See also `rau-on-wl-display-delete-id'."
     (rau--output-wl-position output-wl)))
 
 ;;; task queue
-(defun rau--tasks-execute (state)
+(defun rau--tasks-execute ()
   "Execute tasks enqueued by event listeners."
-  (unless rau--handling-commands
-    (let ((rau--handling-commands t))
-      ;; Drain the task queue.
-      (while-let ((cmd (pop (rau--state-task-queue state))))
-        (rau--condition-case
-         "handle-task"
-         (funcall cmd)))
-
-      (when (or rau--pending-handler
-                (rau--state-task-queue state))
-        (setq rau--pending-handler nil)
-        (rau--tasks-schedule-execution)))))
+  (let ((tasks (nreverse (rau--state-task-queue rau--state))))
+    (setf (rau--state-task-queue rau--state) nil)
+    (while-let ((task (pop tasks)))
+      (rau--condition-case
+       "handle-task"
+       (funcall task)))))
 
 (defun rau--tasks-schedule-execution ()
   "Schedule task processing if not already scheduled."
-  (if rau--handling-commands
-      (setq rau--pending-handler t)
-    (unless (rau--state-task-timer rau--state)
-      (setf (rau--state-task-timer rau--state)
-            (run-at-time
-             0 nil
-             (lambda (state)
-               (setf (rau--state-task-timer rau--state) nil)
-               (rau--tasks-execute state))
-             rau--state)))))
+  (unless (rau--state-task-timer rau--state)
+    (setf (rau--state-task-timer rau--state)
+          (run-at-time
+           0 nil
+           (lambda ()
+             (setf (rau--state-task-timer rau--state) nil)
+             (rau--tasks-execute))))))
 
 (defun rau--tasks-enqueue (fn)
   "Queue FN for execution by rau--tasks-execute.
 Also schedule the task execution timer if not yet done so.  Only to be
 used in event listeners."
-  (setf (rau--state-task-queue rau--state)
-        (append (rau--state-task-queue rau--state) (list fn)))
+  (push fn (rau--state-task-queue rau--state))
   (rau--tasks-schedule-execution))
 
 (defun rau--tasks-enqueue-after-manage (fn)
-  (setf (rau--state-task-queue-after-manage rau--state)
-        (append (rau--state-task-queue-after-manage rau--state) (list fn))))
+  (push fn (rau--state-task-queue-after-manage rau--state)))
 
 ;;; Manage requests queue
 (defun rau--manage-enqueue (ewc-object request &optional args)
@@ -854,9 +837,11 @@ point where also the destroy request is sent."
      (unwind-protect
          (rau--reconcile rau--state)
        (rau--request wm-wl 'manage-finish)
-       (setf (rau--state-task-queue rau--state)
-             (append (rau--state-task-queue rau--state) (rau--state-task-queue-after-manage rau--state))
-             (rau--state-task-queue-after-manage rau--state) nil)
+       (let ((after-manage (rau--state-task-queue-after-manage rau--state))
+             (tasks (rau--state-task-queue rau--state)))
+         (setf (rau--state-task-queue-after-manage rau--state) nil
+               (rau--state-task-queue rau--state)
+               (append after-manage tasks)))
        (when (rau--state-task-queue rau--state)
          (rau--tasks-schedule-execution))))))
 
