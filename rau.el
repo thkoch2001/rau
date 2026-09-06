@@ -124,7 +124,6 @@ Not instantiated directly; windows and frames include it."
 (cl-defstruct (rau--state (:constructor rau--state-make))
   "Holds the state of the rau Wayland client."
   (client nil :type ewc-client)
-  (pid (emacs-pid))
   session-locked
 
   ;; XKB bindings: (keysym . modifiers) -> rau--binding.
