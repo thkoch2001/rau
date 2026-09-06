@@ -112,22 +112,18 @@ Not instantiated directly; windows and frames include it."
 
 (cl-defstruct (rau--binding (:constructor rau--binding-make))
   "State for one global XKB binding."
+  event
   key
   keysym
   modifiers
-  event
-  (needs-focus t) ;; TODO remove when removing the old keybinding stuff
-  locked-active
+  needs-focus
   layout
-  (state 'requested))
+  locked-active)
 
 (cl-defstruct (rau--state (:constructor rau--state-make))
   "Holds the state of the rau Wayland client."
   (client nil :type ewc-client)
   session-locked
-
-  ;; XKB bindings: (keysym . modifiers) -> rau--binding.
-  (bindings (make-hash-table :test 'equal))
 
   ;;; Focus tracking.
   ;; id of ewc-object for which the last focus request was sent
@@ -291,51 +287,6 @@ frame."
                          (event-modifiers event)))
          (key (if (characterp basic) basic (symbol-name basic))))
     (list event key (apply #'logior mods))))
-
-(defun rau-push-intercept-prefix (prefix)
-  "Register PREFIX as an intercept key binding.
-PREFIX is a key string suitable for `kbd'."
-  (declare (obsolete 'rau-bind-keys "2026-09-04"))
-  (display-warning 'rau
-                   "Keybinding in rau has been refactored. Use rau-bind-keys."
-                   :warning)
-
-  (let* ((data (rau--key-to-xkb prefix))
-         (event (nth 0 data))
-         (key (nth 1 data))
-         (modifiers (nth 2 data))
-         (keysym (rau--resolve-keysym key))
-         (binding-key (cons keysym modifiers)))
-    (if (= keysym 0)
-        (message "rau: could not resolve XKB keysym for %S" key)
-      (let ((existing (gethash binding-key (rau--state-bindings rau--state))))
-        (if existing
-            (setf (rau--binding-event existing) event)
-          (puthash binding-key
-                   (rau--binding-make
-                    :keysym keysym
-                    :modifiers modifiers
-                    :event event
-                    :state 'requested)
-                   (rau--state-bindings rau--state))))
-      (rau--mark-manage-dirty rau--state))))
-
-(defcustom rau-intercept-prefixes
-  '("C-x" "C-u" "C-h" "M-x")
-  "Obsolete. Use rau-bind-keys"
-  :type '(repeat key)
-  :set (lambda (sym val)
-         (set-default sym val)
-         (when (and (boundp 'rau--state)
-                    rau--state
-                    (fboundp 'rau-push-intercept-prefixes))
-           (rau-push-intercept-prefixes))))
-
-(defun rau-push-intercept-prefixes () ;; TODO: remove, leave only one way?
-  "Update the intercept prefixes defined in `rau-intercept-prefixes'."
-  (declare (obsolete 'rau-bind-keys "2026-09-04"))
-  (dolist (prefix rau-intercept-prefixes)
-    (rau-push-intercept-prefix prefix)))
 
 (defun rau--buffer-predicate (buffer)
   "Buffer predicate to avoid accidentally showing the same rau BUFFER twice."
@@ -1200,27 +1151,6 @@ outputframe or external window."
         ('killed
          (rau--request window-wl 'close))))))
 
-(defun rau--reconcile-bindings (state)
-  "Create and enable XKB bindings."
-  (when-let* ((client (rau--state-client state))
-              (xkb-bindings-wl (ewc-first-object client 'river-xkb-bindings-v1))
-              (seat-wl (ewc-first-object client 'river-seat-v1)))
-    (maphash
-     (lambda (_key binding)
-       (when (eq (rau--binding-state binding) 'requested)
-         (let* ((id (cl-incf (ewc-client-new-id client)))
-                (binding-wl (ewc-object-add client 'river-xkb-binding-v1 id)))
-           (rau--request xkb-bindings-wl 'get-xkb-binding
-                          `((seat . ,(ewc-object-id seat-wl))
-                            (keysym . ,(rau--binding-keysym binding))
-                            (modifiers . ,(rau--binding-modifiers binding))
-                            (id . ,id)))
-           (setf (ewc-object-data binding-wl) binding
-                 (rau--binding-state binding) 'registered)
-           (rau--request binding-wl 'enable)
-           (setf (rau--binding-state binding) 'enabled))))
-     (rau--state-bindings state))))
-
 (defun rau--reconcile-fullscreen (state)
   "Advance fullscreen state machines."
   (rau--do 'river-output-v1 output-wl state
@@ -1305,7 +1235,6 @@ See also focus relevant slots in rau STATE."
        (rau--request (cl-first request) (cl-second request) (cl-third request)))))
   (rau--condition-case "reconcile-frames" (rau--reconcile-frames state))
   (rau--condition-case "reconcile-windows" (rau--reconcile-windows state))
-  (rau--condition-case "reconcile-bindings" (rau--reconcile-bindings state))
   (rau--condition-case "reconcile-fs" (rau--reconcile-fullscreen state))
   (rau--condition-case "reconcile-focus" (rau--reconcile-focus state)))
 
@@ -1428,8 +1357,6 @@ Call this function once when starting Emacs inside of river."
   (let* ((interfaces (rau--read-protocols))
          (client (ewc-start interfaces "rau--on-")))
     (setq rau--state (rau--state-make :client client)))
-
-  (rau-push-intercept-prefixes)
 
   ;; Layout signals
   (add-hook 'window-configuration-change-hook #'rau--window-configuration-change-handler)
