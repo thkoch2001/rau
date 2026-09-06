@@ -87,6 +87,8 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
 Not instantiated directly; windows and frames include it."
   actual-dimensions
   app-id
+  (dimensions-hint-max '(0 . 0))
+  (dimensions-hint-min '(0 . 0))
   (node-wl nil :type ewc-object)
   parent-wl
   pid
@@ -948,6 +950,11 @@ point where also the destroy request is sent."
     (rau--do 'river-output-v1 output-wl rau--state
              (when (eq (rau--fs-window (rau--output-wl-fullscreen output-wl)) window-wl)
                (setf (rau--output-wl-fullscreen output-wl) (rau--fs))))))
+
+(defun rau--on-river-window-v1-dimensions-hint (window-wl args)
+  (pcase-let (((map min-width min-height max-width max-height) args))
+    (setf (rau--window-wl-dimensions-hint-min window-wl) `(,min-width . ,min-height)
+          (rau--window-wl-dimensions-hint-max window-wl) `(,max-width . ,max-height))))
 
 (defun rau--on-river-window-v1-dimensions (window-wl args)
   (pcase-let (((map width height) args))
