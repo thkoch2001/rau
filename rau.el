@@ -1334,6 +1334,8 @@ See also focus relevant slots in rau STATE."
     (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
               (role-data (rau--window-wl-role-data frame-wl))
               (output-wl (rau--outputframe-output-wl role-data))
+              (frame-node-wl (rau--window-wl-node-wl frame-wl))
+              (frame-node-id (ewc-object-id frame-node-wl))
               (emacs-window (rau--emacs-window-for-window-wl window-wl)))
         (pcase-let* ((`(,left ,top ,right ,bottom)
                       (window-inside-absolute-pixel-edges emacs-window))
@@ -1346,7 +1348,9 @@ See also focus relevant slots in rau STATE."
                         `((x . ,(+ left (car position)))
                           (y . ,(+ top (cdr position)))))
 
-          (rau--request node-wl 'place-top)
+          ;; Place window above the Emacs outputframe window but not at the top
+          ;; In theory this should leave the top for floating windows
+          (rau--request node-wl 'place-above `((other . ,frame-node-id)))
 
           (rau--request window-wl 'set-clip-box
                         `((x . 0)
