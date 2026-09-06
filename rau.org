@@ -51,8 +51,8 @@ for such bindings, e.g.:
 S-x for C-x, S-X for M-x, S-h for C-h
 
 Most Emacs commands require multiple keys to be pressed or even user input
-(M-x). For this reason the input focus is temporarily given to Emacs when a
-bound key gets pressed and given back to the external window after the
+(M-x). For this reason the input focus can be temporarily given to Emacs when
+a bound key gets pressed and given back to the external window after the
 command.
 
 ** Focus
@@ -69,6 +69,35 @@ multiple screens) or with an external window. A focus change can happen due to:
 - focus being given to a [[https://wayland.app/protocols/river-layer-shell-v1#river_layer_shell_seat_v1][layer-shell]] object or coming back from it
 
 * Installation
+
+(TODO: more details needed...)
+
+This is how I do it:
+
+1. Install [[https://isaacfreund.com/software/river/][River]] and have it start as the desktop session leader.
+2. Put this in river's init file, assuming you use systemd:
+
+#+BEGIN_SRC sh
+#!/bin/sh
+
+systemctl --user import-environment XDG_SESSION_TYPE XDG_CURRENT_DESKTOP WAYLAND_DISPLAY DISPLAY REKA_LOGLEVEL
+if command -v dbus-update-activation-environment >/dev/null 2>&1; then
+    dbus-update-activation-environment --all
+fi
+
+exec systemctl --user --wait start rau-emacs.service
+#+END_SRC
+
+3. Install the rau emacs package.
+4. Provide a rau-emacs.service unit that starts emacs and e.g. additionally
+   loads a rau.el file:
+
+#+BEGIN_SRC emacs-lisp
+  (require 'rau)
+  (rau-enable) ; must be called after changes to rau-intercept-prefixes
+#+END_SRC
+
+Check my [[https://github.com/thkoch2001/general-config][dotfiles]] for the time being for further details.
 
 * Usage
 ** Starting rau
