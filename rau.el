@@ -85,17 +85,19 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
 (cl-defstruct (rau--window (:constructor rau--window-make))
   "Common state shared by windows and frames.
 Not instantiated directly; windows and frames include it."
-  (node-wl nil :type ewc-object)
   actual-dimensions
   app-id
-  title
+  (node-wl nil :type ewc-object)
+  parent-wl
   pid
-  role-data)
+  role-data
+  title)
 
 (cl-defstruct (rau--external (:constructor rau--external-make))
   "State for a regular external window."
-  (state 'starting) ;; 'active 'killed
-  buffer)
+  buffer
+  floating
+  (state 'starting)) ;; 'active 'killed
 
 (cl-defstruct (rau--outputframe (:constructor rau--outputframe-make))
   "State for an Emacs frame managed by rau."
@@ -977,7 +979,9 @@ outputframe or external window."
       ;; Categorize as external window
       (unless (ewc-object-tagged-p window-wl rau--tag-external)
         (rau--log "Discovered new regular external window")
-        (setf (rau--window-wl-role-data window-wl) (rau--external-make))
+        (setf (rau--window-wl-role-data window-wl)
+              (rau--external-make :floating
+                                  (not (null (rau--window-wl-parent-wl window-wl)))))
         (ewc-object-tag client window-wl rau--tag-external)
         (unless (rau--buffer-for-window-wl window-wl)
           (rau--tasks-enqueue #'rau--task-setup-new-external-window window-wl))))
@@ -995,6 +999,15 @@ outputframe or external window."
                           :key (lambda (f) (frame-parameter f 'name)))))
       (setf (rau--outputframe-emacs-frame role-data) emacs-frame)
       (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl))))
+
+(defun rau--on-river-window-v1-parent (window-wl args)
+  (pcase-let* (((map object) args)
+               (client (rau--state-client rau--state)))
+    (when-let* ((parent-wl (ewc-object-get client object)))
+      (setf (rau--window-parent-wl window-wl) parent-wl)
+      (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
+                  (role-data (rau--window-wl-role-data window-wl)))
+        (setf (rau--external-floating role-data) t)))))
 
 (defun rau--on-river-window-v1-fullscreen-requested (window-wl args)
   (pcase-let* (((map output) args)
@@ -1151,23 +1164,35 @@ outputframe or external window."
       (rau--tasks-enqueue #'make-frame (rau--make-outputframe-parameters))
       (cl-incf (rau--state-pending-frames state)))))
 
+(defun rau--reconcile-window-floating (window-wl)
+  (rau--request window-wl 'set-tiled '((edges . 0)))
+  ;; propose 0, allow window do decide its own dimensions
+  (rau--request window-wl 'propose-dimensions '((width . 0) (height . 0)))
+  (rau--request window-wl 'use-csd))
+
+(defun rau--reconcile-window-tiled (window-wl)
+  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
+              (dimensions (rau--dimensions-for-emacs-window emacs-window)))
+    (rau--request window-wl
+                  'set-tiled
+                  `((edges . ,rau--edges-all)))
+    (rau--request window-wl
+                  'propose-dimensions
+                  `((width . ,(car dimensions))
+                    (height . ,(cdr dimensions))))))
+
 (defun rau--reconcile-windows (state)
   "Close killed windows and propose dimensions for active windows."
   (rau--do rau--tag-external window-wl state
-           (pcase (rau--external-state (rau--window-wl-role-data window-wl))
-             ;; nothing to do for window-state 'starting
-             ('active
-              (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
-                          (dimensions (rau--dimensions-for-emacs-window emacs-window)))
-                (rau--request window-wl
-                              'set-tiled
-                              `((edges . ,rau--edges-all)))
-                (rau--request window-wl
-                              'propose-dimensions
-                              `((width . ,(car dimensions))
-                                (height . ,(cdr dimensions))))))
-             ('killed
-              (rau--request window-wl 'close)))))
+    (let ((role-data (rau--window-wl-role-data window-wl)))
+      (pcase (rau--external-state role-data)
+        ;; nothing to do for window-state 'starting
+        ('active
+         (if (rau--external-floating role-data)
+             (rau--reconcile-window-floating window-wl)
+           (rau--reconcile-window-tiled window-wl)))
+        ('killed
+         (rau--request window-wl 'close))))))
 
 (defun rau--reconcile-bindings (state)
   "Create and enable XKB bindings."
@@ -1293,36 +1318,46 @@ See also focus relevant slots in rau STATE."
                            `((x . ,(car position))
                              (y . ,(cdr position)))))))
 
+(defun rau--render-window-floating (window-wl)
+  (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
+    (rau--request window-wl 'show)
+    (rau--request node-wl 'place-top)))
+
+(defun rau--render-window-tiled (window-wl)
+  (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
+    (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
+              (role-data (rau--window-wl-role-data frame-wl))
+              (output-wl (rau--outputframe-output-wl role-data))
+              (emacs-window (rau--emacs-window-for-window-wl window-wl)))
+        (pcase-let* ((`(,left ,top ,right ,bottom)
+                      (window-inside-absolute-pixel-edges emacs-window))
+                     (position (rau--position-for-outputframe output-wl))
+                     (dimensions (rau--window-wl-actual-dimensions window-wl))
+                     (clip (or dimensions (rau--dimensions-for-emacs-window emacs-window))))
+          (rau--request window-wl 'show)
+
+          (rau--request node-wl 'set-position
+                        `((x . ,(+ left (car position)))
+                          (y . ,(+ top (cdr position)))))
+
+          (rau--request node-wl 'place-top)
+
+          (rau--request window-wl 'set-clip-box
+                        `((x . 0)
+                          (y . 0)
+                          (width . ,(car clip))
+                          (height . ,(cdr clip)))))
+
+      (rau--request window-wl 'hide))))
+
 (defun rau--render-windows ()
   "Run the render-sequence reconciliation for windows."
   (rau--do rau--tag-external window-wl rau--state
-    (when-let* ((node-wl (rau--window-wl-node-wl window-wl))
-                (role-data (rau--window-wl-role-data window-wl))
+    (when-let* ((role-data (rau--window-wl-role-data window-wl))
                 ((eq (rau--external-state role-data) 'active)))
-      (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
-                (role-data (rau--window-wl-role-data frame-wl))
-                (output-wl (rau--outputframe-output-wl role-data))
-                (emacs-window (rau--emacs-window-for-window-wl window-wl)))
-          (pcase-let* ((`(,left ,top ,right ,bottom)
-                        (window-inside-absolute-pixel-edges emacs-window))
-                       (position (rau--position-for-outputframe output-wl))
-                       (dimensions (rau--window-wl-actual-dimensions window-wl))
-                       (clip (or dimensions (rau--dimensions-for-emacs-window emacs-window))))
-            (rau--request window-wl 'show)
-
-            (rau--request node-wl 'set-position
-                          `((x . ,(+ left (car position)))
-                            (y . ,(+ top (cdr position)))))
-
-            (rau--request node-wl 'place-top)
-
-            (rau--request window-wl 'set-clip-box
-                          `((x . 0)
-                            (y . 0)
-                            (width . ,(car clip))
-                            (height . ,(cdr clip)))))
-
-        (rau--request window-wl 'hide)))))
+      (if (rau--external-floating role-data)
+          (rau--render-window-floating window-wl)
+        (rau--render-window-tiled window-wl)))))
 
 ;;; Fullscreen toggle
 
