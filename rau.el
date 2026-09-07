@@ -144,7 +144,7 @@ Not instantiated directly; windows and frames include it."
   ;; Frame request accounting.
   (pending-frames 1)
 
-  ;; task queue: list of TODO.
+  ;; task queue: list of (FN ARGS...).
   task-queue
   task-timer
 
@@ -192,8 +192,7 @@ event handler."
     ;; avoid showing the same rau buffer twice
     (buffer-predicate . rau--buffer-predicate)))
 
-;; TODO: rename to external-wl
-(defun rau--buffer-for-window-wl (window-wl)
+(defun rau--buffer-for-external-window-wl (window-wl)
   "Return Emacs buffer associated with WINDOW-WL."
   (when-let* ((role-data (rau--window-wl-role-data window-wl)))
     (rau--external-buffer role-data)))
@@ -211,7 +210,7 @@ frame."
 
 (defun rau--emacs-window-for-window-wl (window-wl)
   "Return Emacs window associated with WINDOW-WL."
-  (when-let* ((buffer (rau--buffer-for-window-wl window-wl)))
+  (when-let* ((buffer (rau--buffer-for-external-window-wl window-wl)))
     (get-buffer-window buffer 'visible)))
 
 (defun rau--make-buffer-name (app-id title)
@@ -225,7 +224,6 @@ frame."
 ;; Major mode for rau-managed buffers
 (defvar-local rau--window-wl nil
   "Window object for this `rau-mode' buffer.")
-
 
 ;; TODO: move to handler section
 (defun rau--buffer-killed ()
@@ -461,7 +459,7 @@ used in event listeners."
 (defun rau--task-rename-buffer (window-wl)
   "Rename buffer for external window with data taken from
 WINDOW-WL."
-  (when-let* ((buffer (rau--buffer-for-window-wl window-wl))
+  (when-let* ((buffer (rau--buffer-for-external-window-wl window-wl))
               (app-id (rau--window-wl-app-id window-wl))
               (title (rau--window-wl-title window-wl))
               (name (rau--make-buffer-name app-id title)))
@@ -529,8 +527,6 @@ WINDOW-WL."
     (dolist (item keys)
       (let ((elements (if (stringp item) (list item) item))
             keys flags)
-        ;; Walk the element list, separating keys from flags.
-        ;; TODO use while-let
         (while-let ((elt (pop elements)))
           (cond
            ((stringp elt)
@@ -870,7 +866,7 @@ point where also the destroy request is sent."
 ;;;; river-window-v1 listeners
 (defun rau--on-river-window-v1-closed (window-wl _)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-              (buf (rau--buffer-for-window-wl window-wl)))
+              (buf (rau--buffer-for-external-window-wl window-wl)))
     (rau--tasks-enqueue #'kill-buffer buf))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (rau--tasks-enqueue #'rau--request node-wl 'destroy))
@@ -928,7 +924,7 @@ outputframe or external window."
               (rau--external-make :floating
                                   (not (null (rau--window-wl-parent-wl window-wl)))))
         (ewc-object-tag client window-wl rau--tag-external)
-        (unless (rau--buffer-for-window-wl window-wl)
+        (unless (rau--buffer-for-external-window-wl window-wl)
           (rau--tasks-enqueue #'rau--task-setup-new-external-window window-wl))))
 
     ;; Handle title updates for already categorized objects
@@ -996,7 +992,7 @@ outputframe or external window."
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-              (buffer (rau--buffer-for-window-wl window-wl)))
+              (buffer (rau--buffer-for-external-window-wl window-wl)))
     (rau--tasks-enqueue #'bury-buffer buffer)))
 
 (defun rau--on-river-window-v1-unreliable-pid (window-wl args)
