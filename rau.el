@@ -918,46 +918,51 @@ point where also the destroy request is sent."
     (when-let* ((app-id (ewc-to-utf8 app-id)))
       (setf (rau--window-wl-app-id window-wl) app-id))))
 
+(defun rau--maybe-new-outputframe-window (window-wl title)
+  (unless (ewc-object-tagged-p window-wl rau--tag-outputframe)
+    (rau--log "Discovered new Emacs frame by title: %s" title)
+    (setf (rau--window-wl-role-data window-wl) (rau--outputframe-make))
+    (ewc-object-tag (rau--state-client rau--state)
+                    window-wl rau--tag-outputframe)
+    (if (> (rau--state-pending-frames rau--state) 0)
+        (cl-decf (rau--state-pending-frames rau--state))
+      (rau--log "New frame was not requested by WM"))
+
+    (if-let* ((emacs-frame
+               (cl-find title (frame-list)
+                        :test #'equal
+                        :key (lambda (f) (frame-parameter f 'name)))))
+        (progn
+          (setf (rau--outframe-wl-emacs-frame window-wl) emacs-frame)
+          (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl))
+      (error "No emacs frame found for wayland window with title %s." title))))
+
+(defun rau--maybe-new-external-window (window-wl title)
+  (unless (ewc-object-tagged-p window-wl rau--tag-external)
+    (rau--log "Discovered new regular external window with title %s." title)
+    (setf (rau--window-wl-role-data window-wl)
+          (rau--external-make :floating
+                              (not (null (rau--window-wl-parent-wl window-wl)))))
+    (ewc-object-tag (rau--state-client rau--state)
+                    window-wl rau--tag-external)
+    (unless (rau--extwin-wl-buffer window-wl)
+      (rau--tasks-enqueue #'rau--task-setup-new-external-window window-wl))))
+
 (defun rau--on-river-window-v1-title (window-wl args)
   "Handle title event for WINDOW-WL.
 Also categorizes the window based on the title prefix into Emacs
 outputframe or external window."
   (pcase-let* (((map title) args)
-               (title (ewc-to-utf8 title))
-               (client (rau--state-client rau--state)))
+               (title (ewc-to-utf8 title)))
     (setf (rau--window-wl-title window-wl) title)
 
     (if (string-prefix-p "rau-frame-" title)
-        ;; Categorize as Emacs output frame
-        (unless (ewc-object-tagged-p window-wl rau--tag-outputframe)
-          (rau--log "Discovered new Emacs frame by title: %s" title)
-          (setf (rau--window-wl-role-data window-wl) (rau--outputframe-make))
-          (ewc-object-tag client window-wl rau--tag-outputframe)
-          (if (> (rau--state-pending-frames rau--state) 0)
-              (cl-decf (rau--state-pending-frames rau--state))
-            (rau--log "New frame was not requested by WM")))
-      ;; Categorize as external window
-      (unless (ewc-object-tagged-p window-wl rau--tag-external)
-        (rau--log "Discovered new regular external window")
-        (setf (rau--window-wl-role-data window-wl)
-              (rau--external-make :floating
-                                  (not (null (rau--window-wl-parent-wl window-wl)))))
-        (ewc-object-tag client window-wl rau--tag-external)
-        (unless (rau--extwin-wl-buffer window-wl)
-          (rau--tasks-enqueue #'rau--task-setup-new-external-window window-wl))))
+        (rau--maybe-new-outputframe-window window-wl title)
+      (rau--maybe-new-external-window window-wl title))
 
     ;; Handle title updates for already categorized objects
     (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
-      (rau--tasks-enqueue #'rau--task-rename-buffer window-wl))
-
-    (when-let* (((ewc-object-tagged-p window-wl rau--tag-outputframe))
-                ((not (rau--outframe-wl-emacs-frame window-wl)))
-                (emacs-frame
-                 (cl-find title (frame-list)
-                          :test #'equal
-                          :key (lambda (f) (frame-parameter f 'name)))))
-      (setf (rau--outframe-wl-emacs-frame window-wl) emacs-frame)
-      (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl))))
+      (rau--tasks-enqueue #'rau--task-rename-buffer window-wl))))
 
 (defun rau--on-river-window-v1-parent (window-wl args)
   (pcase-let* (((map object) args)
