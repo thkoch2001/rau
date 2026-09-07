@@ -431,7 +431,7 @@ WINDOW-WL."
 (defun rau--dimensions-for-emacs-window (emacs-window)
   (pcase-let ((`(,left ,top ,right ,bottom)
                (window-inside-absolute-pixel-edges emacs-window)))
-    `(,(- right left) .,(- bottom top))))
+    `(,(- right left) . ,(- bottom top))))
 
 (defun rau--dimensions-for-outputframe (output-wl)
   "Get dimensions either from output-wl or its associated ls-output-wl non-exclusive-area."
