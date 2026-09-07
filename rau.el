@@ -1294,17 +1294,16 @@ See also focus relevant slots in rau STATE."
   (if-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
             (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
             (output-wl (rau--outframe-wl-output-wl frame-wl))
-            (out (ewc-object-data output-wl))
-            (fs (rau--output-fullscreen out)))
+            (fs (rau--output-wl-fullscreen output-wl)))
       (pcase (rau--fs-state fs)
         ('none
-         (setf (rau--output-fullscreen out)
+         (setf (rau--output-wl-fullscreen output-wl)
                (rau--fs :state 'requested
                        :new window-wl))
          (rau--mark-manage-dirty rau--state))
 
         ('fullscreen
-         (setf (rau--output-fullscreen out)
+         (setf (rau--output-wl-fullscreen output-wl)
                (rau--fs :state 'exiting
                        :window (rau--fs-window fs)))
          (rau--mark-manage-dirty rau--state))
