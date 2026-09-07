@@ -30,6 +30,9 @@
 (require 'seq)
 (require 'subr-x)
 
+
+;;; Configuration and state
+
 (defgroup rau nil
   "Rau - Emacs swimming in the river."
   :group 'environment
@@ -45,16 +48,6 @@ Wayland objects have been registered."
 
 (defvar rau--state nil
   "Current global rau WM state.")
-
-(defmacro rau--condition-case (location &rest body)
-  "Wrap BODY in a condition-case unless `rau-debug' is non-nil.
-LOCATION identifies where the error occurred.  If `rau-debug' is t, BODY
-is executed directly so errors drop into the debugger."
-  `(if rau-debug
-       (progn ,@body)
-     (condition-case err
-         (progn ,@body)
-       (error (message "Error at %s: %S" ,location err)))))
 
 ;;; State structs
 
@@ -81,6 +74,13 @@ WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   (output-wl nil :type ewc-object)
   (non-excl-position '(0 . 0))
   (non-excl-dimensions '(0 . 0)))
+
+
+(defconst rau--tag-outputframe :rau-frame
+  "Tag for `river-window-v1' objects that are Emacs frames.")
+
+(defconst rau--tag-external :rau-external
+  "Tag for `river-window-v1' objects that are external windows.")
 
 (cl-defstruct (rau--window (:constructor rau--window-make))
   "Common state shared by windows and frames.
@@ -187,34 +187,46 @@ ROLE-STRUCT-TYPE via ewc-object's `data' and rau--window's `role-data'."
 (rau--define-window-role-accessors rau--external "rau--extwin-wl-")
 (rau--define-window-role-accessors rau--outputframe "rau--outframe-wl-")
 
-;;; Window tags
+;;; Data access helpers
 
-(defconst rau--tag-outputframe :rau-frame
-  "Tag for `river-window-v1' objects that are Emacs frames.")
+(defun rau--frame-wl-by-cond (state predicate)
+  "Return the first frame ewc-object in STATE matching PREDICATE."
+  (cl-loop for frame-wl in (ewc-objects (rau--state-client state) rau--tag-outputframe)
+           for f = (rau--window-wl-role-data frame-wl)
+           thereis (and f (funcall predicate f) frame-wl)))
 
-(defconst rau--tag-external :rau-external
-  "Tag for `river-window-v1' objects that are external windows.")
+(defun rau--frame-wl-for-extwin-wl (window-wl)
+  "Return the Emacs outputframe window-wl displaying external
+WINDOW-WL."
+  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
+              (emacs-frame (window-frame emacs-window))
+              ((frame-live-p emacs-frame)))
+    (frame-parameter emacs-frame 'rau-frame-wl)))
 
-(cl-defmacro rau--do (tag obj state &body body)
-  "Iterate over the ewc objects in STATE tagged with TAG.
-TAG is a form that evaluates to or is an ewc-object tag, for example
-`rau--tag-external', `rau--tag-outputframe', or `'river-output-v1'.
+(defun rau--frame-wl-without-output (state)
+  "Return a frame not associated to any output or nil."
+  (rau--frame-wl-by-cond state (lambda (f) (null (rau--outputframe-output-wl f)))))
 
-STATE is evaluated once and bound to that same name within BODY."
-  (declare (indent 1))
-  (unless (symbolp state)
-    (error "rau--do: STATE slot must be a symbol, got: %S" state))
-  `(let ((,state ,state))
-     (dolist (,obj (ewc-objects (rau--state-client ,state) ,tag))
-         ,@body)))
+(defun rau--dimensions-for-emacs-window (emacs-window)
+  (pcase-let ((`(,left ,top ,right ,bottom)
+               (window-inside-absolute-pixel-edges emacs-window)))
+    `(,(- right left) . ,(- bottom top))))
 
-(defun rau--make-outputframe-parameters ()
-  "Return alist of frame parameters with unique name as expected by title
-event handler."
-  `((name . ,(make-temp-name "rau-frame-"))
-    (undecorated . t)
-    ;; avoid showing the same rau buffer twice
-    (buffer-predicate . rau--buffer-predicate)))
+(defun rau--dimensions-for-outputframe (output-wl)
+  "Get dimensions either from output-wl or its associated ls-output-wl non-exclusive-area."
+  (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
+            (non-excl-dimensions (rau--ls-output-wl-non-excl-dimensions ls-output-wl))
+            ((not (equal '(0 . 0) non-excl-dimensions))))
+      non-excl-dimensions
+    (rau--output-wl-dimensions output-wl)))
+
+(defun rau--position-for-outputframe (output-wl)
+  "Get position either from output-wl or its associated ls-output-wl non-exclusive-area."
+  (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
+            (non-excl-position (rau--ls-output-wl-non-excl-position ls-output-wl))
+            ((not (equal '(0 . 0) non-excl-position))))
+      non-excl-position
+    (rau--output-wl-position output-wl)))
 
 (defun rau--window-wl-for-emacs-window (emacs-window)
   "Return window-wl for any EMACS-WINDOW rau-mode or not.
@@ -232,6 +244,23 @@ frame."
   (when-let* ((buffer (rau--extwin-wl-buffer window-wl)))
     (get-buffer-window buffer 'visible)))
 
+(defun rau--fs-window (fs)
+  "Return the window involved in fullscreen state FS, if any."
+  (pcase (rau--fs-state fs)
+    ('requested (rau--fs-new fs))
+    ((or 'fullscreen 'exiting) (rau--fs-window fs))
+    (_ nil)))
+
+;;; Emacs integration, interaction
+
+(defun rau--make-outputframe-parameters ()
+  "Return alist of frame parameters with unique name as expected by title
+event handler."
+  `((name . ,(make-temp-name "rau-frame-"))
+    (undecorated . t)
+    ;; avoid showing the same rau buffer twice
+    (buffer-predicate . rau--buffer-predicate)))
+
 (defun rau--make-buffer-name (app-id title)
   "Return a buffer name string using APP-ID and TITLE."
   (let ((title-trunc (if (> (length title) 40)
@@ -244,15 +273,6 @@ frame."
 (defvar-local rau--window-wl nil
   "Window object for this `rau-mode' buffer.")
 
-;; TODO: move to handler section
-(defun rau--buffer-killed ()
-  "Request closing of the associated Wayland window when a rau buffer is killed."
-  (when-let* ((rau--window-wl)
-              ;; avoid sending close request in response to closed event
-              ((eq 'active (rau--extwin-wl-state rau--window-wl))))
-    (setf (rau--extwin-wl-state rau--window-wl) 'killed)
-    (rau--mark-manage-dirty)))
-
 (define-derived-mode rau-mode special-mode "Rau"
   "Major mode for buffers representing windows managed by rau."
   :group 'rau
@@ -262,76 +282,7 @@ frame."
   (setq-local left-fringe-width 0
               right-fringe-width 0))
 
-(defun rau--focus-change-allowed-p ()
-  "Non-nil when no interactive command or edit is in progress."
-  (and (not this-command)
-       (length= unread-command-events 0)
-       (length= (this-single-command-keys) 0)
-       (zerop (minibuffer-depth))
-       (zerop (recursion-depth))))
 
-;; TODO move to hook handlers section
-(defun rau--update-focus-request (&rest args)
-  "Reconcile Wayland focus with the selected window."
-  (rau--log "update-focus-request %S" args)
-  (when-let* (((rau--focus-change-allowed-p))
-              (state rau--state)
-              ((null (rau--state-focus-inhibit-update state)))
-              (emacs-window (selected-window))
-              (target-wl (rau--window-wl-for-emacs-window emacs-window))
-              (target-id (ewc-object-id target-wl))
-              ((not (eq target-id (rau--state-focus-last-id state)))))
-
-    (setf (rau--state-focus-next-id state) target-id)
-    (rau--mark-manage-dirty)))
-
-(defconst rau--modifier-bits
-  '((shift   . 1)
-    (control . 4)
-    (meta    . 8)
-    (super   . 64)
-    (hyper   . 128))
-  "Modifier bits as per river_seat_v1.modifiers / XKB.")
-
-(defun rau--key-to-xkb (key-string)
-  "Decompose KEY-STRING into (EVENT KEY MODIFIERS)."
-  (let* ((event (aref (kbd key-string) 0))
-         (basic (event-basic-type event))
-         (mods (seq-keep (lambda (mod)
-                           (alist-get mod rau--modifier-bits))
-                         (event-modifiers event)))
-         (key (if (characterp basic) basic (symbol-name basic))))
-    (list event key (apply #'logior mods))))
-
-(defun rau--buffer-predicate (buffer)
-  "Buffer predicate to avoid accidentally showing the same rau BUFFER twice."
-  (or (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))
-      (not (get-buffer-window buffer t))))
-
-(defun rau--split-window-advice (new-window)
-  "Advice window splits to always display another buffer."
-  (with-selected-window new-window
-    (with-current-buffer (window-buffer)
-      (when (derived-mode-p 'rau-mode)
-        (switch-to-buffer (other-buffer)))))
-  new-window)
-
-(defun rau--set-window-buffer-advice (orig win buf &rest r)
-  "Avoid double-display of rau buffers, by stealing them.
-Note that displaying the same buffer in two different tabs, for example,
-is completely valid."
-  (with-current-buffer buf
-    (when (derived-mode-p 'rau-mode)
-      (dolist (other (get-buffer-window-list buf nil 'visible))
-        (unless (eq (or win (selected-window)) other)
-          (with-selected-window other
-            (switch-to-buffer (other-buffer)))))))
-  (apply orig win buf r))
-
-(defun rau--log (&rest args)
-  "Log ARGS with `message' when `rau-debug' is non-nil."
-  (when rau-debug
-    (apply #'message args)))
 
 ;;; Protocol loading
 
@@ -394,6 +345,35 @@ when used from other files (e.g. tests)."
 
 ;;; Basic helpers
 
+
+(defun rau--log (&rest args)
+  "Log ARGS with `message' when `rau-debug' is non-nil."
+  (when rau-debug
+    (apply #'message args)))
+
+(defmacro rau--condition-case (location &rest body)
+  "Wrap BODY in a condition-case unless `rau-debug' is non-nil.
+LOCATION identifies where the error occurred.  If `rau-debug' is t, BODY
+is executed directly so errors drop into the debugger."
+  `(if rau-debug
+       (progn ,@body)
+     (condition-case err
+         (progn ,@body)
+       (error (message "Error at %s: %S" ,location err)))))
+
+(cl-defmacro rau--do (tag obj state &body body)
+  "Iterate over the ewc objects in STATE tagged with TAG.
+TAG is a form that evaluates to or is an ewc-object tag, for example
+`rau--tag-external', `rau--tag-outputframe', or `'river-output-v1'.
+
+STATE is evaluated once and bound to that same name within BODY."
+  (declare (indent 1))
+  (unless (symbolp state)
+    (error "rau--do: STATE slot must be a symbol, got: %S" state))
+  `(let ((,state ,state))
+     (dolist (,obj (ewc-objects (rau--state-client ,state) ,tag))
+       ,@body)))
+
 (defun rau--remove (object-wl)
   "Remove object from ewc objects table.
 See also `rau-on-wl-display-delete-id'."
@@ -406,45 +386,6 @@ See also `rau-on-wl-display-delete-id'."
                request
                arguments
                nocache))
-
-(defun rau--frame-wl-by-cond (state predicate)
-  "Return the first frame ewc-object in STATE matching PREDICATE."
-  (cl-loop for frame-wl in (ewc-objects (rau--state-client state) rau--tag-outputframe)
-           for f = (rau--window-wl-role-data frame-wl)
-           thereis (and f (funcall predicate f) frame-wl)))
-
-(defun rau--frame-wl-for-extwin-wl (window-wl)
-  "Return the Emacs outputframe window-wl displaying external
-WINDOW-WL."
-  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
-              (emacs-frame (window-frame emacs-window))
-              ((frame-live-p emacs-frame)))
-    (frame-parameter emacs-frame 'rau-frame-wl)))
-
-(defun rau--frame-wl-without-output (state)
-  "Return a frame not associated to any output or nil."
-  (rau--frame-wl-by-cond state (lambda (f) (null (rau--outputframe-output-wl f)))))
-
-(defun rau--dimensions-for-emacs-window (emacs-window)
-  (pcase-let ((`(,left ,top ,right ,bottom)
-               (window-inside-absolute-pixel-edges emacs-window)))
-    `(,(- right left) . ,(- bottom top))))
-
-(defun rau--dimensions-for-outputframe (output-wl)
-  "Get dimensions either from output-wl or its associated ls-output-wl non-exclusive-area."
-  (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
-            (non-excl-dimensions (rau--ls-output-wl-non-excl-dimensions ls-output-wl))
-            ((not (equal '(0 . 0) non-excl-dimensions))))
-      non-excl-dimensions
-    (rau--output-wl-dimensions output-wl)))
-
-(defun rau--position-for-outputframe (output-wl)
-  "Get position either from output-wl or its associated ls-output-wl non-exclusive-area."
-  (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
-            (non-excl-position (rau--ls-output-wl-non-excl-position ls-output-wl))
-            ((not (equal '(0 . 0) non-excl-position))))
-      non-excl-position
-    (rau--output-wl-position output-wl)))
 
 ;;; task queue
 (defun rau--tasks-execute ()
@@ -502,12 +443,7 @@ WINDOW-WL."
   (when needs-focus
     (add-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)))
 
-;;; Manage requests queue
-(defun rau--manage-enqueue (ewc-object request &optional args)
-  (push `(,ewc-object ,request ,args) (rau--state-manage-queue rau--state))
-  (rau--mark-manage-dirty))
-
-;;; manage-dirty coalescing
+;;; Manage cycle preparation
 
 (defun rau--mark-manage-dirty ()
   "Mark that a new manage sequence is needed."
@@ -524,16 +460,29 @@ WINDOW-WL."
                                                    'river-window-manager-v1)))
                 (rau--request wm-wl 'manage-dirty))))))))
 
-;;; Fullscreen helpers
-
-(defun rau--fs-window (fs)
-  "Return the window involved in fullscreen state FS, if any."
-  (pcase (rau--fs-state fs)
-    ('requested (rau--fs-new fs))
-    ((or 'fullscreen 'exiting) (rau--fs-window fs))
-    (_ nil)))
+(defun rau--manage-enqueue (ewc-object request &optional args)
+  (push `(,ewc-object ,request ,args) (rau--state-manage-queue rau--state))
+  (rau--mark-manage-dirty))
 
 ;;; Keybindings
+
+(defconst rau--modifier-bits
+  '((shift   . 1)
+    (control . 4)
+    (meta    . 8)
+    (super   . 64)
+    (hyper   . 128))
+  "Modifier bits as per river_seat_v1.modifiers / XKB.")
+
+(defun rau--key-to-xkb (key-string)
+  "Decompose KEY-STRING into (EVENT KEY MODIFIERS)."
+  (let* ((event (aref (kbd key-string) 0))
+         (basic (event-basic-type event))
+         (mods (seq-keep (lambda (mod)
+                           (alist-get mod rau--modifier-bits))
+                         (event-modifiers event)))
+         (key (if (characterp basic) basic (symbol-name basic))))
+    (list event key (apply #'logior mods))))
 
 (defun rau--parse-keys (keys)
   "Parse KEYS into a list of rau--binding structs. See `rau-bind-keys'."
@@ -695,6 +644,100 @@ This function should be run from the `rau-ready-hook'."
   (let ((parsed-keys (rau--parse-keys keys)))
     (rau--bind-parsed-keys parsed-keys)))
 
+;;; Emacs handler functions for hooks
+
+(defun rau--focus-change-allowed-p ()
+  "Non-nil when no interactive command or edit is in progress."
+  (and (not this-command)
+       (length= unread-command-events 0)
+       (length= (this-single-command-keys) 0)
+       (zerop (minibuffer-depth))
+       (zerop (recursion-depth))))
+
+(defun rau--update-focus-request (&rest args)
+  "Reconcile Wayland focus with the selected window."
+  (rau--log "update-focus-request %S" args)
+  (when-let* (((rau--focus-change-allowed-p))
+              (state rau--state)
+              ((null (rau--state-focus-inhibit-update state)))
+              (emacs-window (selected-window))
+              (target-wl (rau--window-wl-for-emacs-window emacs-window))
+              (target-id (ewc-object-id target-wl))
+              ((not (eq target-id (rau--state-focus-last-id state)))))
+
+    (setf (rau--state-focus-next-id state) target-id)
+    (rau--mark-manage-dirty)))
+
+(defun rau--recover-focus-after-binding-pressed ()
+  "Give focus back to external window after it was given to Emacs to handle
+a keybinding pressed event. This function is meant to be bound to
+post-command-hook in the enqueued command of the pressed event handler."
+  (rau--log "recover focus. not t-c=%S u-c-e=%d t-s-c-k=%d m-d=%d r-d=%d"
+           (not this-command)
+           (length unread-command-events)
+           (length (this-single-command-keys))
+           (minibuffer-depth)
+           (recursion-depth))
+  (when (and (length= unread-command-events 0)
+             (zerop (minibuffer-depth))
+             (zerop (recursion-depth)))
+    (rau--log "recover focus. removing post-command-hook.")
+    (remove-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)
+    (when-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
+                (window-id (ewc-object-id window-wl))
+                ((/= window-id (rau--state-focus-last-id rau--state))))
+      (rau--log "recover focus. focusing window-id=%d title=%s"
+               window-id
+               (rau--window-wl-title window-wl))
+      (setf (rau--state-focus-next-id rau--state) window-id)
+      (rau--mark-manage-dirty))))
+
+(defun rau--buffer-killed ()
+  "Request closing of the associated Wayland window when a rau buffer is killed."
+  (when-let* ((rau--window-wl)
+              ;; avoid sending close request in response to closed event
+              ((eq 'active (rau--extwin-wl-state rau--window-wl))))
+    (setf (rau--extwin-wl-state rau--window-wl) 'killed)
+    (rau--mark-manage-dirty)))
+
+(defun rau--window-configuration-change-handler ()
+  "Schedule a river manage cycle and thus a reconciliation cycle.
+This is necessary for external windows to resize when the minibuffer
+expands.  This needs to be added to the global hook since local hooks
+don't get called for windows that disappear.  Also
+window-size-change-functions does not get called when minibuffer expands
+and thus minibuffer ends up below external window."
+  (rau--mark-manage-dirty))
+
+
+;;; Other Emacs config functions: advices, predicates
+
+(defun rau--buffer-predicate (buffer)
+  "Buffer predicate to avoid accidentally showing the same rau BUFFER twice."
+  (or (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))
+      (not (get-buffer-window buffer t))))
+
+(defun rau--split-window-advice (new-window)
+  "Advice window splits to always display another buffer."
+  (with-selected-window new-window
+    (with-current-buffer (window-buffer)
+      (when (derived-mode-p 'rau-mode)
+        (switch-to-buffer (other-buffer)))))
+  new-window)
+
+(defun rau--set-window-buffer-advice (orig win buf &rest r)
+  "Avoid double-display of rau buffers, by stealing them.
+Note that displaying the same buffer in two different tabs, for example,
+is completely valid."
+  (with-current-buffer buf
+    (when (derived-mode-p 'rau-mode)
+      (dolist (other (get-buffer-window-list buf nil 'visible))
+        (unless (eq (or win (selected-window)) other)
+          (with-selected-window other
+            (switch-to-buffer (other-buffer)))))))
+  (apply orig win buf r))
+
+
 ;;; Layer shell attachment helpers
 
 (defun rau--ensure-ls-output (state output-wl)
@@ -728,41 +771,6 @@ This function should be run from the `rau-ready-hook'."
                    `((id . ,ls-seat-id)
                      (seat . ,(ewc-object-id seat-wl))))
     (rau--tasks-enqueue #'run-hooks 'rau-ready-hook)))
-
-;;; Emacs handler functions for hooks
-
-(defun rau--recover-focus-after-binding-pressed ()
-  "Give focus back to external window after it was given to Emacs to handle
-a keybinding pressed event. This function is meant to be bound to
-post-command-hook in the enqueued command of the pressed event handler."
-  (rau--log "recover focus. not t-c=%S u-c-e=%d t-s-c-k=%d m-d=%d r-d=%d"
-           (not this-command)
-           (length unread-command-events)
-           (length (this-single-command-keys))
-           (minibuffer-depth)
-           (recursion-depth))
-  (when (and (length= unread-command-events 0)
-             (zerop (minibuffer-depth))
-             (zerop (recursion-depth)))
-    (rau--log "recover focus. removing post-command-hook.")
-    (remove-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)
-    (when-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
-                (window-id (ewc-object-id window-wl))
-                ((/= window-id (rau--state-focus-last-id rau--state))))
-      (rau--log "recover focus. focusing window-id=%d title=%s"
-               window-id
-               (rau--window-wl-title window-wl))
-      (setf (rau--state-focus-next-id rau--state) window-id)
-      (rau--mark-manage-dirty))))
-
-(defun rau--window-configuration-change-handler ()
-  "Schedule a river manage cycle and thus a reconciliation cycle.
-This is necessary for external windows to resize when the minibuffer
-expands.  This needs to be added to the global hook since local hooks
-don't get called for windows that disappear.  Also
-window-size-change-functions does not get called when minibuffer expands
-and thus minibuffer ends up below external window."
-  (rau--mark-manage-dirty))
 
 ;;; Listeners
 
@@ -1082,7 +1090,7 @@ outputframe or external window."
   (setf (rau--state-focus-next-id rau--state) (rau--state-focus-last-id rau--state)
         (rau--state-focus-last-id rau--state) -1))
 
-;;; Reconciliation
+;;; Manage cycle
 
 (defun rau--reconcile-frames ()
   "Ensure each output gets one maximized Emacs frame."
@@ -1229,6 +1237,9 @@ See also focus relevant slots in rau STATE."
      (dolist (request manage-requests)
        (rau--request (cl-first request) (cl-second request) (cl-third request))))))
 
+
+;;; Render cycle
+
 (defun rau--render-frames ()
   "Run the render-sequence reconciliation for frames."
   (rau--do rau--tag-outputframe frame-wl rau--state
@@ -1353,7 +1364,8 @@ Call this function once when starting Emacs inside of river."
   (add-hook 'minibuffer-setup-hook             #'rau--update-focus-request)
   (add-hook 'minibuffer-exit-hook              #'rau--update-focus-request))
 
-;; TODO Hacks to avoid rau to freeze
+;;; Hacks to avoid rau to freeze, TODO find an alternative
+
 (defun x-popup-menu(position menu)
   (message "x-popup-menu does not work with rau and is therefor overwritten.")
   nil)
