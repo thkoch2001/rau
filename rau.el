@@ -146,7 +146,6 @@ Not instantiated directly; windows and frames include it."
 
   ;; task queue: list of TODO.
   task-queue
-  task-queue-after-manage
   task-timer
 
   ;; manage queue: list of (ewc-object 'request args) for the next manage
@@ -458,23 +457,6 @@ Also schedule the task execution timer if not yet done so.  Only to be
 used in event listeners."
   (push `(,fn . ,args) (rau--state-task-queue rau--state))
   (rau--tasks-schedule-execution))
-
-(defun rau--tasks-enqueue-after-manage (fn &rest args)
-  "Queue FN with ARGS to run after the next manage sequence."
-  (push `(,fn . ,args) (rau--state-task-queue-after-manage rau--state)))
-
-
-(defun rau--task-manage-start (wm-wl)
-  (unwind-protect
-      (rau--reconcile rau--state)
-    (rau--request wm-wl 'manage-finish)
-    (let ((after-manage (rau--state-task-queue-after-manage rau--state))
-          (tasks (rau--state-task-queue rau--state)))
-      (setf (rau--state-task-queue-after-manage rau--state) nil
-            (rau--state-task-queue rau--state)
-            (append after-manage tasks)))
-    (when (rau--state-task-queue rau--state)
-      (rau--tasks-schedule-execution))))
 
 (defun rau--task-rename-buffer (window-wl)
   "Rename buffer for external window with data taken from
@@ -835,7 +817,8 @@ point where also the destroy request is sent."
   (message "rau: WM event finished"))
 
 (defun rau--on-river-window-manager-v1-manage-start (wm-wl _)
-  (rau--tasks-enqueue #'rau--task-manage-start wm-wl))
+  (rau--tasks-enqueue #'rau--reconcile)
+  (rau--tasks-enqueue #'rau--request wm-wl 'manage-finish))
 
 (defun rau--on-river-window-manager-v1-render-start (wm-wl _)
   (rau--tasks-enqueue #'rau--render-frames)
@@ -1057,7 +1040,7 @@ outputframe or external window."
                (not (rau--binding-wl-locked-active binding-wl)))
     (let* ((event (rau--binding-wl-event binding-wl))
            (needs-focus (rau--binding-wl-needs-focus binding-wl)))
-      (rau--tasks-enqueue-after-manage #'rau--task-consume-key-event event needs-focus)
+      (rau--tasks-enqueue #'rau--task-consume-key-event event needs-focus)
 
       ;; If focus is with external window then switch to underlying emacs
       ;; frame such that following keypresses go to emacs
@@ -1225,18 +1208,18 @@ See also focus relevant slots in rau STATE."
       (select-window emacs-window 'norecord))
       (setf (rau--state-focus-inhibit-update state) nil)))
 
-(defun rau--reconcile (state)
-  "Run the manage-sequence reconciliation for STATE."
+(defun rau--reconcile ()
+  "Run the manage-sequence reconciliation."
   (rau--condition-case
    "reconcile-manage-requests"
-   (let ((manage-requests (nreverse (rau--state-manage-queue state))))
-     (setf (rau--state-manage-queue state) nil)
+   (let ((manage-requests (nreverse (rau--state-manage-queue rau--state))))
+     (setf (rau--state-manage-queue rau--state) nil)
      (dolist (request manage-requests)
        (rau--request (cl-first request) (cl-second request) (cl-third request)))))
-  (rau--condition-case "reconcile-frames" (rau--reconcile-frames state))
-  (rau--condition-case "reconcile-windows" (rau--reconcile-windows state))
-  (rau--condition-case "reconcile-fs" (rau--reconcile-fullscreen state))
-  (rau--condition-case "reconcile-focus" (rau--reconcile-focus state)))
+  (rau--condition-case "reconcile-frames" (rau--reconcile-frames rau--state))
+  (rau--condition-case "reconcile-windows" (rau--reconcile-windows rau--state))
+  (rau--condition-case "reconcile-fs" (rau--reconcile-fullscreen rau--state))
+  (rau--condition-case "reconcile-focus" (rau--reconcile-focus rau--state)))
 
 (defun rau--render-frames ()
   "Run the render-sequence reconciliation for frames."
