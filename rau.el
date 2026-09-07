@@ -416,8 +416,9 @@ See also `rau-on-wl-display-delete-id'."
            for f = (rau--window-wl-role-data frame-wl)
            thereis (and f (funcall predicate f) frame-wl)))
 
-(defun rau--frame-wl-for-window-wl (window-wl)
-  "Return the ewc frame object displaying WINDOW-WL."
+(defun rau--frame-wl-for-extwin-wl (window-wl)
+  "Return the Emacs outputframe window-wl displaying external
+WINDOW-WL."
   (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
               (emacs-frame (window-frame emacs-window))
               ((frame-live-p emacs-frame)))
@@ -977,7 +978,7 @@ outputframe or external window."
                          (not (zerop output))
                          (ewc-object-get (rau--state-client rau--state) output))
                     (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-                                (frame-wl (rau--frame-wl-for-window-wl window-wl)))
+                                (frame-wl (rau--frame-wl-for-extwin-wl window-wl)))
                       (rau--outframe-wl-output-wl frame-wl))
                     (when-let* ((frame-wl (frame-parameter (selected-frame) 'rau-frame-wl)))
                       (rau--outframe-wl-output-wl frame-wl)))))
@@ -1063,7 +1064,7 @@ outputframe or external window."
                   (client (rau--state-client rau--state))
                   (window-wl (ewc-object-get client window-id))
                   ((ewc-object-tagged-p window-wl rau--tag-external))
-                  (target-wl (rau--frame-wl-for-window-wl window-wl))
+                  (target-wl (rau--frame-wl-for-extwin-wl window-wl))
                   (target-id (ewc-object-id target-wl)))
         (rau--log "switch focus to emacs frame for key pressed.")
         (setf (rau--state-focus-next-id rau--state) target-id)))))
@@ -1205,7 +1206,7 @@ See also focus relevant slots in rau STATE."
           (rau--state-focus-next-id rau--state) -1)
 
     (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-external)
-                              (rau--frame-wl-for-window-wl target-wl)
+                              (rau--frame-wl-for-extwin-wl target-wl)
                             target-wl))
                 (output-wl (rau--outframe-wl-output-wl frame-wl))
                 (ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
@@ -1249,7 +1250,7 @@ See also focus relevant slots in rau STATE."
 
 (defun rau--render-window-tiled (window-wl)
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
-    (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
+    (if-let* ((frame-wl (rau--frame-wl-for-extwin-wl window-wl))
               (output-wl (rau--outframe-wl-output-wl frame-wl))
               (frame-node-wl (rau--window-wl-node-wl frame-wl))
               (frame-node-id (ewc-object-id frame-node-wl))
@@ -1291,7 +1292,7 @@ See also focus relevant slots in rau STATE."
   "Toggle fullscreen for the currently focused external window."
   (interactive)
   (if-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
-            (frame-wl (rau--frame-wl-for-window-wl window-wl))
+            (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
             (output-wl (rau--outframe-wl-output-wl frame-wl))
             (out (ewc-object-data output-wl))
             (fs (rau--output-fullscreen out)))
