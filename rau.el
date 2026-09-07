@@ -817,7 +817,12 @@ point where also the destroy request is sent."
   (message "rau: WM event finished"))
 
 (defun rau--on-river-window-manager-v1-manage-start (wm-wl _)
-  (rau--tasks-enqueue #'rau--reconcile)
+  (rau--tasks-enqueue #'rau--manage-queue-send)
+  (rau--tasks-enqueue #'rau--reconcile-frames)
+  (rau--tasks-enqueue #'rau--reconcile-windows)
+  (rau--tasks-enqueue #'rau--reconcile-fullscreen)
+  (rau--tasks-enqueue #'rau--reconcile-focus)
+
   (rau--tasks-enqueue #'rau--request wm-wl 'manage-finish))
 
 (defun rau--on-river-window-manager-v1-render-start (wm-wl _)
@@ -1069,10 +1074,10 @@ outputframe or external window."
 
 ;;; Reconciliation
 
-(defun rau--reconcile-frames (state)
+(defun rau--reconcile-frames ()
   "Ensure each output gets one maximized Emacs frame."
   (let ((frame-requests 0))
-    (rau--do 'river-output-v1 output-wl state
+    (rau--do 'river-output-v1 output-wl rau--state
              (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
              (if-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
                  (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
@@ -1083,7 +1088,7 @@ outputframe or external window."
                                    (height . ,(cdr dimensions)))))
 
                (rau--log "no frame found for output.")
-               (if-let* ((frame-wl (rau--frame-wl-without-output state))
+               (if-let* ((frame-wl (rau--frame-wl-without-output rau--state))
                          (role-data (rau--window-wl-role-data frame-wl)))
                    (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
                       (setf (rau--outputframe-output-wl role-data) output-wl
@@ -1100,9 +1105,9 @@ outputframe or external window."
                   ;; No frame on this output yet: request one.
                   (rau--log "request frame.")
                   (cl-incf frame-requests))))
-    (dotimes (_ (- frame-requests (rau--state-pending-frames state)))
+    (dotimes (_ (- frame-requests (rau--state-pending-frames rau--state)))
       (rau--tasks-enqueue #'make-frame (rau--make-outputframe-parameters))
-      (cl-incf (rau--state-pending-frames state)))))
+      (cl-incf (rau--state-pending-frames rau--state)))))
 
 (defun rau--reconcile-window-floating (window-wl)
   (rau--request window-wl 'set-tiled '((edges . 0)))
@@ -1121,9 +1126,9 @@ outputframe or external window."
                   `((width . ,(car dimensions))
                     (height . ,(cdr dimensions))))))
 
-(defun rau--reconcile-windows (state)
+(defun rau--reconcile-windows ()
   "Close killed windows and propose dimensions for active windows."
-  (rau--do rau--tag-external window-wl state
+  (rau--do rau--tag-external window-wl rau--state
     (let ((role-data (rau--window-wl-role-data window-wl)))
       (pcase (rau--external-state role-data)
         ;; nothing to do for window-state 'starting
@@ -1134,9 +1139,9 @@ outputframe or external window."
         ('killed
          (rau--request window-wl 'close))))))
 
-(defun rau--reconcile-fullscreen (state)
+(defun rau--reconcile-fullscreen ()
   "Advance fullscreen state machines."
-  (rau--do 'river-output-v1 output-wl state
+  (rau--do 'river-output-v1 output-wl rau--state
     (let ((fs (rau--output-wl-fullscreen output-wl)))
       (rau--log "reconcile fs on output %d with fs state %s"
                 (ewc-object-id output-wl)
@@ -1170,15 +1175,15 @@ outputframe or external window."
            (setf (rau--output-wl-fullscreen output-wl) (rau--fs))))
         (_ nil)))))
 
-(defun rau--reconcile-focus (state)
+(defun rau--reconcile-focus ()
   "Update focus based on either an event or a buffer change.
 See also focus relevant slots in rau STATE."
   (when-let* (((/=
-                  (rau--state-focus-last-id state)
-                  (rau--state-focus-next-id state)))
-              ((/= -1 (rau--state-focus-next-id state)))
-              (client (rau--state-client state))
-              (target-id (rau--state-focus-next-id state))
+                  (rau--state-focus-last-id rau--state)
+                  (rau--state-focus-next-id rau--state)))
+              ((/= -1 (rau--state-focus-next-id rau--state)))
+              (client (rau--state-client rau--state))
+              (target-id (rau--state-focus-next-id rau--state))
               (target-wl (ewc-object-get client target-id))
               (seat-wl (ewc-first-object client 'river-seat-v1)))
 
@@ -1189,8 +1194,8 @@ See also focus relevant slots in rau STATE."
                   'focus-window
                   `((window . ,target-id))
                   t)
-    (setf (rau--state-focus-last-id state) target-id
-          (rau--state-focus-next-id state) -1)
+    (setf (rau--state-focus-last-id rau--state) target-id
+          (rau--state-focus-next-id rau--state) -1)
 
     (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-external)
                               (rau--frame-wl-for-window-wl target-wl)
@@ -1204,22 +1209,18 @@ See also focus relevant slots in rau STATE."
     (when-let* (((ewc-object-tagged-p target-wl rau--tag-external))
                 (emacs-window (rau--emacs-window-for-window-wl target-wl)))
       (rau--log "select underlying window")
-      (setf (rau--state-focus-inhibit-update state) t)
+      (setf (rau--state-focus-inhibit-update rau--state) t)
       (select-window emacs-window 'norecord))
-      (setf (rau--state-focus-inhibit-update state) nil)))
+      (setf (rau--state-focus-inhibit-update rau--state) nil)))
 
-(defun rau--reconcile ()
+(defun rau--manage-queue-send ()
   "Run the manage-sequence reconciliation."
   (rau--condition-case
    "reconcile-manage-requests"
    (let ((manage-requests (nreverse (rau--state-manage-queue rau--state))))
      (setf (rau--state-manage-queue rau--state) nil)
      (dolist (request manage-requests)
-       (rau--request (cl-first request) (cl-second request) (cl-third request)))))
-  (rau--condition-case "reconcile-frames" (rau--reconcile-frames rau--state))
-  (rau--condition-case "reconcile-windows" (rau--reconcile-windows rau--state))
-  (rau--condition-case "reconcile-fs" (rau--reconcile-fullscreen rau--state))
-  (rau--condition-case "reconcile-focus" (rau--reconcile-focus rau--state)))
+       (rau--request (cl-first request) (cl-second request) (cl-third request))))))
 
 (defun rau--render-frames ()
   "Run the render-sequence reconciliation for frames."
