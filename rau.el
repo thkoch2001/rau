@@ -3,10 +3,10 @@
 ;; Copyright (C) 2026 Thomas Koch
 
 ;; Author: Thomas Koch <thomas@koch.ro>
-;; Version: 0.1
+;; Version: 0.2
 ;; Keywords: frames
 ;; URL: https://github.com/thkoch2001/rau
-;; Package-Requires: ((emacs "30.2"))
+;; Package-Requires: ((emacs "31.1"))
 
 ;;; Commentary:
 ;; Rau is a Wayland Window Manager based on Emacs and River in pure Elisp.  The
