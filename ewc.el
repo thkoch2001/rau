@@ -186,11 +186,7 @@ Also defines setf-able places."
   (let* ((prefix (or prefix (intern (format "%s-wl" struct-type))))
          (prefix-str (symbol-name prefix))
          (struct-str (symbol-name struct-type))
-         (slot-names (delq nil
-                           (mapcar (lambda (entry)
-                                     (unless (eq (car entry) 'cl-tag-slot)
-                                       (car entry)))
-                                   (cl-struct-slot-info struct-type))))
+         (slot-names (mapcar #'car (cdr (cl-struct-slot-info struct-type))))
          (forms nil))
     (dolist (slot slot-names)
       (let ((ewc-object-accessor (intern (format "%s-%s" prefix-str slot)))

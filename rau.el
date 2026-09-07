@@ -158,6 +158,33 @@ Not instantiated directly; windows and frames include it."
 (ewc-define-data-accessors rau--seat)
 (ewc-define-data-accessors rau--binding)
 
+(defmacro rau--define-window-role-accessors (role-struct-type prefix)
+  "Define two-level accessors named PREFIX-SLOT for slots of
+ROLE-STRUCT-TYPE via ewc-object's `data' and rau--window's `role-data'."
+  (declare (indent 1))
+  (let* ((struct-str (symbol-name role-struct-type))
+         (slot-names (mapcar #'car (cdr (cl-struct-slot-info role-struct-type))))
+         (forms nil))
+    (dolist (slot slot-names)
+      (let ((accessor-name (intern (format "%s%s" prefix slot)))
+            (role-struct-accessor (intern (format "%s-%s" struct-str slot))))
+        (push `(defsubst ,accessor-name (window-wl)
+                 ,(format "Access `%s' of %s stored in WINDOW-WL's role-data."
+                          slot role-struct-type)
+                 (when-let* ((data (ewc-object-data window-wl))
+                             (role-data (rau--window-role-data data)))
+                   (,role-struct-accessor role-data)))
+              forms)
+        (push `(gv-define-setter ,accessor-name (val window-wl)
+                 `(let* ((data (ewc-object-data ,window-wl))
+                         (role-data (rau--window-role-data data)))
+                    (setf (,',role-struct-accessor role-data) ,val)))
+              forms)))
+    `(progn ,@(nreverse forms))))
+
+(rau--define-window-role-accessors rau--external "rau--extwin-wl-")
+(rau--define-window-role-accessors rau--outputframe "rau--outframe-wl-")
+
 ;;; Window tags
 
 (defconst rau--tag-outputframe :rau-frame
@@ -192,11 +219,6 @@ event handler."
     ;; avoid showing the same rau buffer twice
     (buffer-predicate . rau--buffer-predicate)))
 
-(defun rau--buffer-for-external-window-wl (window-wl)
-  "Return Emacs buffer associated with WINDOW-WL."
-  (when-let* ((role-data (rau--window-wl-role-data window-wl)))
-    (rau--external-buffer role-data)))
-
 (defun rau--window-wl-for-emacs-window (emacs-window)
   "Return window-wl for any EMACS-WINDOW rau-mode or not.
 For a window with a rau-mode buffer return window-wl pointing to an
@@ -210,7 +232,7 @@ frame."
 
 (defun rau--emacs-window-for-window-wl (window-wl)
   "Return Emacs window associated with WINDOW-WL."
-  (when-let* ((buffer (rau--buffer-for-external-window-wl window-wl)))
+  (when-let* ((buffer (rau--extwin-wl-buffer window-wl)))
     (get-buffer-window buffer 'visible)))
 
 (defun rau--make-buffer-name (app-id title)
@@ -229,10 +251,9 @@ frame."
 (defun rau--buffer-killed ()
   "Request closing of the associated Wayland window when a rau buffer is killed."
   (when-let* ((rau--window-wl)
-              (role-data (rau--window-wl-role-data rau--window-wl))
               ;; avoid sending close request in response to closed event
-              ((eq 'active (rau--external-state role-data))))
-    (setf (rau--external-state role-data) 'killed)
+              ((eq 'active (rau--extwin-wl-state rau--window-wl))))
+    (setf (rau--extwin-wl-state rau--window-wl) 'killed)
     (rau--mark-manage-dirty rau--state)))
 
 (define-derived-mode rau-mode special-mode "Rau"
@@ -459,7 +480,7 @@ used in event listeners."
 (defun rau--task-rename-buffer (window-wl)
   "Rename buffer for external window with data taken from
 WINDOW-WL."
-  (when-let* ((buffer (rau--buffer-for-external-window-wl window-wl))
+  (when-let* ((buffer (rau--extwin-wl-buffer window-wl))
               (app-id (rau--window-wl-app-id window-wl))
               (title (rau--window-wl-title window-wl))
               (name (rau--make-buffer-name app-id title)))
@@ -468,16 +489,14 @@ WINDOW-WL."
 
 (defun rau--task-setup-new-external-window (window-wl)
   "Create Rau mode buffer for WINDOW-WL."
-  (let ((role-data (rau--window-wl-role-data window-wl))
-        (buffer (get-buffer-create (make-temp-name "rau-external-"))))
+  (let ((buffer (get-buffer-create (make-temp-name "rau-external-"))))
     (with-current-buffer buffer
       (rau-mode)
       (setq-local rau--window-wl window-wl)
       (unless (display-buffer buffer)
         (error "display-buffer failed for window-wl %S buffer %S." window-wl buffer)))
-    (setf (rau--external-buffer role-data) buffer)
-
-    (setf (rau--external-state role-data) 'active)))
+    (setf (rau--extwin-wl-buffer window-wl) buffer)
+    (setf (rau--extwin-wl-state window-wl) 'active)))
 
 (defun rau--task-consume-key-event (event needs-focus)
   "Forward EVENT to emacs and setup to recover focus if NEEDS-FOCUS."
@@ -866,7 +885,7 @@ point where also the destroy request is sent."
 ;;;; river-window-v1 listeners
 (defun rau--on-river-window-v1-closed (window-wl _)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-              (buf (rau--buffer-for-external-window-wl window-wl)))
+              (buf (rau--extwin-wl-buffer window-wl)))
     (rau--tasks-enqueue #'kill-buffer buf))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (rau--tasks-enqueue #'rau--request node-wl 'destroy))
@@ -874,9 +893,8 @@ point where also the destroy request is sent."
   (rau--tasks-enqueue #'rau--remove window-wl)
 
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-outputframe))
-              (role-data (rau--window-wl-role-data window-wl))
-              (output-wl (rau--outputframe-output-wl role-data)))
-    (setf (rau--outputframe-output-wl role-data) nil
+              (output-wl (rau--outframe-wl-output-wl window-wl)))
+    (setf (rau--outframe-wl-output-wl window-wl) nil
           (rau--output-wl-frame-wl output-wl) nil))
 
   ;; Reset fullscreen on output if window was fullscreen.
@@ -924,7 +942,7 @@ outputframe or external window."
               (rau--external-make :floating
                                   (not (null (rau--window-wl-parent-wl window-wl)))))
         (ewc-object-tag client window-wl rau--tag-external)
-        (unless (rau--buffer-for-external-window-wl window-wl)
+        (unless (rau--extwin-wl-buffer window-wl)
           (rau--tasks-enqueue #'rau--task-setup-new-external-window window-wl))))
 
     ;; Handle title updates for already categorized objects
@@ -932,13 +950,12 @@ outputframe or external window."
       (rau--tasks-enqueue #'rau--task-rename-buffer window-wl))
 
     (when-let* (((ewc-object-tagged-p window-wl rau--tag-outputframe))
-                (role-data (rau--window-wl-role-data window-wl))
-                ((not (rau--outputframe-emacs-frame role-data)))
+                ((not (rau--outframe-wl-emacs-frame window-wl)))
                 (emacs-frame
                  (cl-find title (frame-list)
                           :test #'equal
                           :key (lambda (f) (frame-parameter f 'name)))))
-      (setf (rau--outputframe-emacs-frame role-data) emacs-frame)
+      (setf (rau--outframe-wl-emacs-frame window-wl) emacs-frame)
       (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl))))
 
 (defun rau--on-river-window-v1-parent (window-wl args)
@@ -946,9 +963,8 @@ outputframe or external window."
                (client (rau--state-client rau--state)))
     (when-let* ((parent-wl (ewc-object-get client object)))
       (setf (rau--window-parent-wl window-wl) parent-wl)
-      (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-                  (role-data (rau--window-wl-role-data window-wl)))
-        (setf (rau--external-floating role-data) t)))))
+      (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
+        (setf (rau--extwin-wl-floating window-wl) t)))))
 
 (defun rau--on-river-window-v1-fullscreen-requested (window-wl args)
   (pcase-let* (((map output) args)
@@ -961,12 +977,10 @@ outputframe or external window."
                          (not (zerop output))
                          (ewc-object-get (rau--state-client rau--state) output))
                     (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-                                (frame-wl (rau--frame-wl-for-window-wl window-wl))
-                                (role-data (rau--window-wl-role-data frame-wl)))
-                      (rau--outputframe-output-wl role-data))
-                    (when-let* ((frame-wl (frame-parameter (selected-frame) 'rau-frame-wl))
-                                (role-data (rau--window-wl-role-data frame-wl)))
-                      (rau--outputframe-output-wl role-data)))))
+                                (frame-wl (rau--frame-wl-for-window-wl window-wl)))
+                      (rau--outframe-wl-output-wl frame-wl))
+                    (when-let* ((frame-wl (frame-parameter (selected-frame) 'rau-frame-wl)))
+                      (rau--outframe-wl-output-wl frame-wl)))))
     (if (not output-wl)
         (message "Fullscreen requested, but no output found")
       (let* ((fs (rau--output-wl-fullscreen output-wl))
@@ -992,7 +1006,7 @@ outputframe or external window."
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-              (buffer (rau--buffer-for-external-window-wl window-wl)))
+              (buffer (rau--extwin-wl-buffer window-wl)))
     (rau--tasks-enqueue #'bury-buffer buffer)))
 
 (defun rau--on-river-window-v1-unreliable-pid (window-wl args)
@@ -1003,11 +1017,10 @@ outputframe or external window."
 (defun rau--on-river-output-v1-removed (output-wl _)
   ;; TODO: check whether we lost focus
   (let ((client (rau--state-client rau--state)))
-    (when-let* ((frame-wl (rau--output-wl-frame-wl output-wl))
-                (role-data (rau--window-wl-role-data frame-wl)))
-      (setf (rau--outputframe-output-wl role-data) nil
+    (when-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
+      (setf (rau--outframe-wl-output-wl frame-wl) nil
             (rau--output-wl-frame-wl output-wl) nil)
-      (when-let* ((emacs-frame (rau--outputframe-emacs-frame role-data))
+      (when-let* ((emacs-frame (rau--outframe-wl-emacs-frame frame-wl))
                   ((frame-live-p emacs-frame)))
         (rau--tasks-enqueue #'delete-frame emacs-frame)))
     ;; TODO: also enqueue the below three actions, look out for race conditions
@@ -1084,23 +1097,22 @@ outputframe or external window."
                                    (height . ,(cdr dimensions)))))
 
                (rau--log "no frame found for output.")
-               (if-let* ((frame-wl (rau--frame-wl-without-output rau--state))
-                         (role-data (rau--window-wl-role-data frame-wl)))
+               (if-let* ((frame-wl (rau--frame-wl-without-output rau--state)))
                    (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
-                      (setf (rau--outputframe-output-wl role-data) output-wl
-                            (rau--output-wl-frame-wl output-wl) frame-wl)
-                      (rau--request frame-wl
-                                     'propose-dimensions
-                                     `((width . ,(car dimensions))
-                                       (height . ,(cdr dimensions))))
-                      (rau--request frame-wl
-                                     'inform-maximized)
-                      (rau--request frame-wl
-                                     'set-tiled
-                                     `((edges . ,rau--edges-all))))
-                  ;; No frame on this output yet: request one.
-                  (rau--log "request frame.")
-                  (cl-incf frame-requests))))
+                     (setf (rau--outframe-wl-output-wl frame-wl) output-wl
+                           (rau--output-wl-frame-wl output-wl) frame-wl)
+                     (rau--request frame-wl
+                                   'propose-dimensions
+                                   `((width . ,(car dimensions))
+                                     (height . ,(cdr dimensions))))
+                     (rau--request frame-wl
+                                   'inform-maximized)
+                     (rau--request frame-wl
+                                   'set-tiled
+                                   `((edges . ,rau--edges-all))))
+                 ;; No frame on this output yet: request one.
+                 (rau--log "request frame.")
+                 (cl-incf frame-requests))))
     (dotimes (_ (- frame-requests (rau--state-pending-frames rau--state)))
       (rau--tasks-enqueue #'make-frame (rau--make-outputframe-parameters))
       (cl-incf (rau--state-pending-frames rau--state)))))
@@ -1125,15 +1137,14 @@ outputframe or external window."
 (defun rau--reconcile-windows ()
   "Close killed windows and propose dimensions for active windows."
   (rau--do rau--tag-external window-wl rau--state
-    (let ((role-data (rau--window-wl-role-data window-wl)))
-      (pcase (rau--external-state role-data)
-        ;; nothing to do for window-state 'starting
-        ('active
-         (if (rau--external-floating role-data)
-             (rau--reconcile-window-floating window-wl)
-           (rau--reconcile-window-tiled window-wl)))
-        ('killed
-         (rau--request window-wl 'close))))))
+    (pcase (rau--extwin-wl-state window-wl)
+      ;; nothing to do for window-state 'starting
+      ('active
+       (if (rau--extwin-wl-floating window-wl)
+           (rau--reconcile-window-floating window-wl)
+         (rau--reconcile-window-tiled window-wl)))
+      ('killed
+       (rau--request window-wl 'close)))))
 
 (defun rau--reconcile-fullscreen ()
   "Advance fullscreen state machines."
@@ -1196,8 +1207,7 @@ See also focus relevant slots in rau STATE."
     (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-external)
                               (rau--frame-wl-for-window-wl target-wl)
                             target-wl))
-                (role-data (rau--window-wl-role-data frame-wl))
-                (output-wl (rau--outputframe-output-wl role-data))
+                (output-wl (rau--outframe-wl-output-wl frame-wl))
                 (ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
       (rau--request ls-output-wl 'set-default))
 
@@ -1222,8 +1232,7 @@ See also focus relevant slots in rau STATE."
   "Run the render-sequence reconciliation for frames."
   (rau--do rau--tag-outputframe frame-wl rau--state
            (when-let* ((node-wl (rau--window-wl-node-wl frame-wl))
-                       (role-data (rau--window-wl-role-data frame-wl))
-                       (output-wl (rau--outputframe-output-wl role-data))
+                       (output-wl (rau--outframe-wl-output-wl frame-wl))
                        (position (rau--position-for-outputframe output-wl)))
              (rau--log "render frame %d for output %d."
                       (ewc-object-id frame-wl)
@@ -1241,8 +1250,7 @@ See also focus relevant slots in rau STATE."
 (defun rau--render-window-tiled (window-wl)
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (if-let* ((frame-wl (rau--frame-wl-for-window-wl window-wl))
-              (role-data (rau--window-wl-role-data frame-wl))
-              (output-wl (rau--outputframe-output-wl role-data))
+              (output-wl (rau--outframe-wl-output-wl frame-wl))
               (frame-node-wl (rau--window-wl-node-wl frame-wl))
               (frame-node-id (ewc-object-id frame-node-wl))
               (emacs-window (rau--emacs-window-for-window-wl window-wl)))
@@ -1272,9 +1280,8 @@ See also focus relevant slots in rau STATE."
 (defun rau--render-windows ()
   "Run the render-sequence reconciliation for windows."
   (rau--do rau--tag-external window-wl rau--state
-    (when-let* ((role-data (rau--window-wl-role-data window-wl))
-                ((eq (rau--external-state role-data) 'active)))
-      (if (rau--external-floating role-data)
+    (when-let* (((eq (rau--extwin-wl-state window-wl) 'active)))
+      (if (rau--extwin-wl-floating window-wl)
           (rau--render-window-floating window-wl)
         (rau--render-window-tiled window-wl)))))
 
@@ -1285,8 +1292,7 @@ See also focus relevant slots in rau STATE."
   (interactive)
   (if-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
             (frame-wl (rau--frame-wl-for-window-wl window-wl))
-            (role-data (rau--window-wl-role-data frame-wl))
-            (output-wl (rau--outputframe-output-wl role-data))
+            (output-wl (rau--outframe-wl-output-wl frame-wl))
             (out (ewc-object-data output-wl))
             (fs (rau--output-fullscreen out)))
       (pcase (rau--fs-state fs)
