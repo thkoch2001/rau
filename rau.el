@@ -148,6 +148,8 @@ Not instantiated directly; windows and frames include it."
   task-queue
   task-timer
 
+  manage-dirty-timer
+
   ;; manage queue: list of (ewc-object 'request args) for the next manage
   ;; cycle
   manage-queue)
@@ -192,11 +194,6 @@ ROLE-STRUCT-TYPE via ewc-object's `data' and rau--window's `role-data'."
 
 (defconst rau--tag-external :rau-external
   "Tag for `river-window-v1' objects that are external windows.")
-
-
-
-(defvar rau--manage-timer nil
-  "Timer used to coalesce `manage-dirty' requests.")
 
 (cl-defmacro rau--do (tag obj state &body body)
   "Iterate over the ewc objects in STATE tagged with TAG.
@@ -254,7 +251,7 @@ frame."
               ;; avoid sending close request in response to closed event
               ((eq 'active (rau--extwin-wl-state rau--window-wl))))
     (setf (rau--extwin-wl-state rau--window-wl) 'killed)
-    (rau--mark-manage-dirty rau--state)))
+    (rau--mark-manage-dirty)))
 
 (define-derived-mode rau-mode special-mode "Rau"
   "Major mode for buffers representing windows managed by rau."
@@ -286,7 +283,7 @@ frame."
               ((not (eq target-id (rau--state-focus-last-id state)))))
 
     (setf (rau--state-focus-next-id state) target-id)
-    (rau--mark-manage-dirty state)))
+    (rau--mark-manage-dirty)))
 
 (defconst rau--modifier-bits
   '((shift   . 1)
@@ -508,26 +505,24 @@ WINDOW-WL."
 ;;; Manage requests queue
 (defun rau--manage-enqueue (ewc-object request &optional args)
   (push `(,ewc-object ,request ,args) (rau--state-manage-queue rau--state))
-  (rau--mark-manage-dirty rau--state))
+  (rau--mark-manage-dirty))
 
 ;;; manage-dirty coalescing
 
-(defun rau--mark-manage-dirty (state)
+(defun rau--mark-manage-dirty ()
   "Mark that a new manage sequence is needed."
-  (unless rau--manage-timer
-    (setq rau--manage-timer
+  (unless (rau--state-manage-dirty-timer rau--state)
+    (setf (rau--state-manage-dirty-timer rau--state)
           (run-at-time
            0 nil
-           (lambda (state)
-             (setq rau--manage-timer nil)
-             (condition-case err
-                 (when-let* ((client (rau--state-client state))
-                             (wm-wl (ewc-first-object client
+           (lambda ()
+             (setf (rau--state-manage-dirty-timer rau--state) nil)
+             (rau--condition-case
+              "request-manage-dirty"
+              (when-let* ((client (rau--state-client rau--state))
+                          (wm-wl (ewc-first-object client
                                                    'river-window-manager-v1)))
-                   (rau--request wm-wl 'manage-dirty))
-               (error
-                (message "rau manage-dirty error: %S" err))))
-           state))))
+                (rau--request wm-wl 'manage-dirty))))))))
 
 ;;; Fullscreen helpers
 
@@ -739,7 +734,7 @@ This function should be run from the `rau-ready-hook'."
 (defun rau--recover-focus-after-binding-pressed ()
   "Give focus back to external window after it was given to Emacs to handle
 a keybinding pressed event. This function is meant to be bound to
-post-command-hook in the enqueued command of the pressed event handler."
+post-command-hook in the enqueued command of the pressed event handler."
   (rau--log "recover focus. not t-c=%S u-c-e=%d t-s-c-k=%d m-d=%d r-d=%d"
            (not this-command)
            (length unread-command-events)
@@ -758,7 +753,7 @@ post-command-hook in the enqueued command of the pressed event handler."
                window-id
                (rau--window-wl-title window-wl))
       (setf (rau--state-focus-next-id rau--state) window-id)
-      (rau--mark-manage-dirty rau--state))))
+      (rau--mark-manage-dirty))))
 
 (defun rau--window-configuration-change-handler ()
   "Schedule a river manage cycle and thus a reconciliation cycle.
@@ -767,7 +762,7 @@ expands.  This needs to be added to the global hook since local hooks
 don't get called for windows that disappear.  Also
 window-size-change-functions does not get called when minibuffer expands
 and thus minibuffer ends up below external window."
-  (rau--mark-manage-dirty rau--state))
+  (rau--mark-manage-dirty))
 
 ;;; Listeners
 
@@ -1305,13 +1300,13 @@ See also focus relevant slots in rau STATE."
          (setf (rau--output-wl-fullscreen output-wl)
                (rau--fs :state 'requested
                        :new window-wl))
-         (rau--mark-manage-dirty rau--state))
+         (rau--mark-manage-dirty))
 
         ('fullscreen
          (setf (rau--output-wl-fullscreen output-wl)
                (rau--fs :state 'exiting
                        :window (rau--fs-window fs)))
-         (rau--mark-manage-dirty rau--state))
+         (rau--mark-manage-dirty))
 
         (_
          (message "Invalid output state for fullscreen toggle")))
