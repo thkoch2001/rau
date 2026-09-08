@@ -39,7 +39,7 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
 (print "rau enable" #'external-debugging-output)
 (setq rau-debug t)
 ;; (setq ewc-debug t)
-(customize-set-variable 'rau-intercept-prefixes nil)
+
 (defun rau-test-bind-keys ()
   (message "rau hook")
   (rau-bind-keys

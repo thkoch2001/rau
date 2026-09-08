@@ -603,24 +603,41 @@ KEY may be an integer codepoint, a symbol, or a string key name."
   (when-let* ((client (rau--state-client rau--state))
               (xkb-bindings-wl (ewc-first-object client 'river-xkb-bindings-v1))
               (seat-wl (ewc-first-object client 'river-seat-v1))
-              (seat-id (ewc-object-id seat-wl)))
-    ;; TODO: check for duplicates in ewc-objects
-    (dolist (binding parsed-keys)
-      (let ((binding-wl (ewc-object-add client 'river-xkb-binding-v1)))
-        (setf (ewc-object-data binding-wl) binding)
-        (rau--request xkb-bindings-wl 'get-xkb-binding
-                          `((seat . ,seat-id)
-                            (keysym . ,(rau--binding-keysym binding))
-                            (modifiers . ,(rau--binding-modifiers binding))
-                            (id . ,(ewc-object-id binding-wl))))
-        (when-let* ((layout (rau--binding-layout binding)))
+              (seat-id (ewc-object-id seat-wl))
+              )
+    (let ((existing-bindings
+           (mapcar #'ewc-object-data (ewc-objects client 'river-xkb-binding-v1))))
+      (dolist (binding parsed-keys)
+        (dolist (existing existing-bindings)
+          (message "binding: %S" binding)
+          (message "existing: %S" existing)
+          (when (or (equal (rau--binding-key binding)
+                           (rau--binding-key existing))
+                    (and
+                     (equal (rau--binding-event binding)
+                            (rau--binding-event existing))
+                     (equal (rau--binding-keysym binding)
+                            (rau--binding-keysym existing))
+                     (equal (rau--binding-modifiers binding)
+                            (rau--binding-modifiers existing))))
+            (error "Key binding %s already exists: %s"
+                   (rau--binding-key binding)
+                   (rau--binding-key existing))))
+        (let ((binding-wl (ewc-object-add client 'river-xkb-binding-v1)))
+          (setf (ewc-object-data binding-wl) binding)
+          (rau--request xkb-bindings-wl 'get-xkb-binding
+                        `((seat . ,seat-id)
+                          (keysym . ,(rau--binding-keysym binding))
+                          (modifiers . ,(rau--binding-modifiers binding))
+                          (id . ,(ewc-object-id binding-wl))))
+          (when-let* ((layout (rau--binding-layout binding)))
+            (rau--manage-enqueue
+             binding-wl
+             'set-layout-override
+             `((layout . ,layout))))
           (rau--manage-enqueue
            binding-wl
-           'set-layout-override
-           `((layout . ,layout))))
-        (rau--manage-enqueue
-         binding-wl
-         'enable)))))
+           'enable))))))
 
 (defun rau-bind-keys (keys)
   "Bind KEYS to always be sent to Emacs.  KEYS is a list either of strings
