@@ -212,7 +212,7 @@ WINDOW-WL."
     `(,(- right left) . ,(- bottom top))))
 
 (defun rau--dimensions-for-outputframe (output-wl)
-  "Get dimensions either from output-wl or its associated ls-output-wl non-exclusive-area."
+  "Get dimensions from output-wl or its ls-output-wl non-exclusive-area."
   (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
             (non-excl-dimensions (rau--ls-output-wl-non-excl-dimensions ls-output-wl))
             ((not (equal '(0 . 0) non-excl-dimensions))))
@@ -220,7 +220,7 @@ WINDOW-WL."
     (rau--output-wl-dimensions output-wl)))
 
 (defun rau--position-for-outputframe (output-wl)
-  "Get position either from output-wl or its associated ls-output-wl non-exclusive-area."
+  "Get position from output-wl or its ls-output-wl non-exclusive-area."
   (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
             (non-excl-position (rau--ls-output-wl-non-excl-position ls-output-wl))
             ((not (equal '(0 . 0) non-excl-position))))
@@ -636,13 +636,14 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 acceptable to `kbd' or of lists of strings and one or more of the
 following keywords:
 
-- :locked-active - keys are also active when the session is locked, e.g. Volume or Brighness control
+- :locked-active - keys are also active when the session is locked, e.g. Volume
+  or Brighness control
 - :needs-focus - focus should be temporarily given to Emacs
 - :layout LAYOUT-NR - 0 indexed layout override
 
 Example:
 
-'(\"s-e\" \"s-f\"
+(\"s-e\" \"s-f\"
   (\"s-d\" \"C-h\" :needs-focus)
   (:locked-active \"M-x\" :needs-focus)
   (:locked-active \"s-c\" \"s-z\" :layout 2))
@@ -1267,7 +1268,7 @@ See also focus relevant slots in rau STATE."
               (frame-node-wl (rau--window-wl-node-wl frame-wl))
               (frame-node-id (ewc-object-id frame-node-wl))
               (emacs-window (rau--emacs-window-for-window-wl window-wl)))
-        (pcase-let* ((`(,left ,top ,right ,bottom)
+        (pcase-let* ((`(,left ,top ,_right ,_bottom)
                       (window-inside-absolute-pixel-edges emacs-window))
                      (position (rau--position-for-outputframe output-wl))
                      (dimensions (rau--window-wl-actual-dimensions window-wl))
@@ -1367,19 +1368,19 @@ Call this function once when starting Emacs inside of river."
 
 ;;; Hacks to avoid rau to freeze, TODO find an alternative
 
-(defun x-popup-menu(position menu)
+(defun x-popup-menu(_position _menu)
   (message "x-popup-menu does not work with rau and is therefor overwritten.")
   nil)
 
-(defun popup-menu(menu &optional position prefix from-menu-bar)
+(defun popup-menu(_menu &optional _position _prefix _from-menu-bar)
   (message "popup-menu does not work with rau and is therefor overwritten.")
   nil)
 
-(defun x-popup-dialog(position contents &optional header)
+(defun x-popup-dialog(_position _contents &optional _header)
   (message "x-popup-dialog does not work with rau and is therefor overwritten.")
   nil)
 
-(defun display-popup-menus-p (&optional display)
+(defun display-popup-menus-p (&optional _display)
   nil)
 
 (provide 'rau)
