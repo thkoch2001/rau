@@ -754,38 +754,31 @@ is completely valid."
             (switch-to-buffer (other-buffer)))))))
   (apply orig win buf r))
 
-
 ;;; Layer shell attachment helpers
 
-(defun rau--ensure-ls-output (state output-wl)
+(defun rau--ensure-ls-output (output-wl)
   "Create a layer-shell output object for OUTPUT-WL if possible."
-  (when-let* ((out (ewc-object-data output-wl))
-              ((null (rau--output-ls-output-wl out)))
-              (client (rau--state-client state))
+  (when-let* (((null (rau--output-wl-ls-output-wl output-wl)))
+              (client (rau--state-client rau--state))
               (ls-wl (ewc-first-object client 'river-layer-shell-v1))
               (ls-output-wl
                (ewc-object-add client 'river-layer-shell-output-v1)))
-    (setf (rau--output-ls-output-wl out) ls-output-wl
+    (setf (rau--output-wl-ls-output-wl output-wl) ls-output-wl
           (ewc-object-data ls-output-wl) (rau--ls-output-make :output-wl output-wl))
     (rau--request ls-wl 'get-output
                   `((id . ,(ewc-object-id ls-output-wl))
                     (output . ,(ewc-object-id output-wl))))))
 
-;; TODO: this ls-seat is never used ATM.
-(defun rau--ensure-ls-seat (state)
+(defun rau--ensure-ls-seat (seat-wl)
   "Create a layer-shell seat object for the current seat if possible."
-  (when-let* ((client (rau--state-client state))
-              (seat-wl (ewc-first-object client 'river-seat-v1))
-              ((null (rau--seat-wl-ls-seat-wl seat-wl)))
+  (when-let* (((null (rau--seat-wl-ls-seat-wl seat-wl)))
+              (client (rau--state-client rau--state))
               (ls-wl (ewc-first-object client 'river-layer-shell-v1))
-              (ls-seat-id (cl-incf (ewc-client-new-id client)))
               (ls-seat-wl
-               (ewc-object-add client
-                               'river-layer-shell-seat-v1
-                               ls-seat-id)))
+               (ewc-object-add client 'river-layer-shell-seat-v1)))
     (setf (rau--seat-wl-ls-seat-wl seat-wl) ls-seat-wl)
     (rau--request ls-wl 'get-seat
-                   `((id . ,ls-seat-id)
+                   `((id . ,(ewc-object-id ls-seat-wl))
                      (seat . ,(ewc-object-id seat-wl))))
     (rau--tasks-enqueue #'run-hooks 'rau-ready-hook)))
 
@@ -823,26 +816,25 @@ point where also the destroy request is sent."
     (when-let* ((ifsym (intern (string-replace "_" "-" interface)))
                 (client (rau--state-client rau--state))
                 ((member interface rau--global-binds))
-                (new-id (cl-incf (ewc-client-new-id client)))
                 (xml-version (ewc-interface-version client ifsym))
                 (bind-version
-                 (if xml-version (min version xml-version) version)))
-      (ewc-object-add client ifsym new-id)
+                 (if xml-version (min version xml-version) version))
+                (global (ewc-object-add client ifsym)))
+
       (rau--log "rau: binding global %s version %s" interface bind-version)
       (rau--request registry-wl 'bind
                      `((name . ,name)
                        (interface-len . ,(1+ (string-bytes interface)))
                        (interface . ,interface)
                        (version . ,bind-version)
-                       (id . ,new-id)))
+                       (id . ,(ewc-object-id global))))
       (pcase ifsym
         ('river-layer-shell-v1
          ;; Attach layer-shell objects to existing outputs/seats in STATE."
          (rau--do 'river-output-v1 output-wl rau--state
-                   (rau--ensure-ls-output rau--state output-wl))
-         (rau--ensure-ls-seat rau--state))
-
-        (_ (rau--log "rau: bound %s" ifsym))))))
+                  (rau--ensure-ls-output output-wl))
+         (rau--do 'river-seat-v1 seat-wl rau--state
+                   (rau--ensure-ls-seat seat-wl)))))))
 
 ;;;; river-window-management-v1 Protocol
 ;;;; river-window-manager-v1 listeners
@@ -892,7 +884,7 @@ point where also the destroy request is sent."
                (output-wl (ewc-object-add client 'river-output-v1 id)))
     (setf (ewc-object-data output-wl)
           (rau--output-make))
-    (rau--ensure-ls-output rau--state output-wl)))
+    (rau--ensure-ls-output output-wl)))
 
 (defun rau--on-river-window-manager-v1-seat (_wm-wl args)
   (pcase-let (((map id) args)
@@ -901,7 +893,7 @@ point where also the destroy request is sent."
         (message "rau does not support multi-seat")
       (let* ((seat-wl (ewc-object-add client 'river-seat-v1 id)))
         (setf (ewc-object-data seat-wl) (rau--seat-make))
-        (rau--ensure-ls-seat rau--state)))))
+        (rau--ensure-ls-seat seat-wl)))))
 
 ;;;; river-window-v1 listeners
 (defun rau--on-river-window-v1-closed (window-wl _)
