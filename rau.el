@@ -57,9 +57,8 @@ STATE is one of: `none', `requested', `fullscreen', `exiting'.
 NEW and PREVIOUS are meaningful only when STATE is `requested'.
 WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
   (state    'none :type symbol :read-only t)
-  (new      nil   :type ewc-object :read-only t)
-  (previous nil   :type ewc-object :read-only t)
-  (window   nil   :type ewc-object :read-only t))
+  (window   nil   :type ewc-object :read-only t)
+  (previous nil   :type ewc-object :read-only t))
 
 (cl-defstruct (rau--output (:constructor rau--output-make))
   "State for a River output."
@@ -243,13 +242,6 @@ frame."
   "Return Emacs window associated with WINDOW-WL."
   (when-let* ((buffer (rau--extwin-wl-buffer window-wl)))
     (get-buffer-window buffer 'visible)))
-
-(defun rau--fs-window (fs)
-  "Return the window involved in fullscreen state FS, if any."
-  (pcase (rau--fs-state fs)
-    ('requested (rau--fs-new fs))
-    ((or 'fullscreen 'exiting) (rau--fs-window fs))
-    (_ nil)))
 
 ;;; Emacs integration, interaction
 
@@ -1009,7 +1001,7 @@ outputframe or external window."
                 (_ nil))))
         (setf (rau--output-wl-fullscreen output-wl)
               (rau--fs :state 'requested
-                       :new window-wl
+                       :window window-wl
                        :previous previous))))))
 
 (defun rau--on-river-window-v1-exit-fullscreen-requested (window-wl _)
@@ -1020,7 +1012,7 @@ outputframe or external window."
                         (eq (rau--fs-window fs) window-wl))
                (setf (rau--output-wl-fullscreen output-wl)
                      (rau--fs :state 'exiting
-                             :window (rau--fs-window fs)))))))
+                              :window (rau--fs-window fs)))))))
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
@@ -1173,7 +1165,7 @@ outputframe or external window."
                 (rau--fs-state fs))
       (pcase (rau--fs-state fs)
         ('requested
-         (let ((new-wl (rau--fs-new fs))
+         (let ((new-wl (rau--fs-window fs))
                (prev-wl (rau--fs-previous fs)))
            (when prev-wl
              (rau--request prev-wl 'inform-not-fullscreen)
@@ -1319,13 +1311,13 @@ See also focus relevant slots in rau STATE."
         ('none
          (setf (rau--output-wl-fullscreen output-wl)
                (rau--fs :state 'requested
-                       :new window-wl))
+                        :window window-wl))
          (rau--mark-manage-dirty))
 
         ('fullscreen
          (setf (rau--output-wl-fullscreen output-wl)
                (rau--fs :state 'exiting
-                       :window (rau--fs-window fs)))
+                        :window (rau--fs-window fs)))
          (rau--mark-manage-dirty))
 
         (_
