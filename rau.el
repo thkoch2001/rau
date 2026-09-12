@@ -117,7 +117,7 @@ Not instantiated directly; windows and frames include it."
   modifiers
   needs-focus
   layout
-  locked-active)
+  allow-when-locked)
 
 (cl-defstruct (rau--state (:constructor rau--state-make))
   "Holds the state of the rau Wayland client."
@@ -491,7 +491,7 @@ WINDOW-WL."
             (unless elements
               (error ":layout requires a layout number"))
             (push (cons elt (pop elements)) flags))
-           ((memq elt '(:needs-focus :locked-active))
+           ((memq elt '(:needs-focus :allow-when-locked))
             (push (cons elt t) flags))
            ((keywordp elt)
             (error "unknown flag %S" elt))
@@ -508,7 +508,7 @@ WINDOW-WL."
                    :keysym (rau--resolve-keysym (cl-second xkb))
                    :modifiers (cl-third xkb)
                    :needs-focus   (cdr (assq :needs-focus flags))
-                   :locked-active (cdr (assq :locked-active flags))
+                   :allow-when-locked (cdr (assq :allow-when-locked flags))
                    :layout        (cdr (assq :layout flags)))
                   result)))))
     (nreverse result)))
@@ -636,8 +636,8 @@ KEY may be an integer codepoint, a symbol, or a string key name."
 acceptable to `kbd' or of lists of strings and one or more of the
 following keywords:
 
-- :locked-active - keys are also active when the session is locked, e.g. Volume
-  or Brighness control
+- :allow-when-locked - keys are also active when the session is locked,
+   e.g. Volume or Brightness control
 - :needs-focus - focus should be temporarily given to Emacs
 - :layout LAYOUT-NR - 0 indexed layout override
 
@@ -645,8 +645,8 @@ Example:
 
 (\"s-e\" \"s-f\"
   (\"s-d\" \"C-h\" :needs-focus)
-  (:locked-active \"M-x\" :needs-focus)
-  (:locked-active \"s-c\" \"s-z\" :layout 2))
+  (:allow-when-locked \"M-x\" :needs-focus)
+  (:allow-when-locked \"s-c\" \"s-z\" :layout 2))
 
 This function should be run from the `rau-ready-hook'."
   (unless rau--state
@@ -1062,7 +1062,7 @@ outputframe or external window."
 ;;;; river-xkb-binding-v1 listeners
 (defun rau--on-river-xkb-binding-v1-pressed (binding-wl _)
   (unless (and (rau--state-session-locked rau--state)
-               (not (rau--binding-wl-locked-active binding-wl)))
+               (not (rau--binding-wl-allow-when-locked binding-wl)))
     (let* ((event (rau--binding-wl-event binding-wl))
            (needs-focus (rau--binding-wl-needs-focus binding-wl)))
       (rau--tasks-enqueue #'rau--task-consume-key-event event needs-focus)
