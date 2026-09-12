@@ -118,13 +118,6 @@ Not instantiated directly; windows and frames include it."
   ;; id of ewc-object for which the last focus request was sent
   ;; This could be a focus_window or a focus_shell_surface request
   (focus-last-id -1)
-  ;; window or surface id that should receive focus.
-  ;; Events that lead to a focus change can be:
-  ;; - window_interaction
-  ;; - shell_surface_interaction
-  ;; - pointer_enter (for focus follows mouse)
-  ;; - pressed (giving temporary focus to emacs for one command)
-  (focus-next-id -1)
   ;; Inhibit update focus due to any hooks. This is used in reconcile-focus
   ;; when it changes buffer itself in reaction to an event and this should not
   ;; trigger rau--update-focus-request
@@ -450,6 +443,53 @@ WINDOW-WL."
   (push `(,ewc-object ,request ,args t) (rau--state-manage-queue rau--state))
   (rau--mark-manage-dirty))
 
+
+;;; Focus
+
+(defun rau--request-focus (target-wl &optional force)
+  "Request focus for TARGET-WL.
+Queues the focus-window request and updates Emacs state.  If FORCE is
+non-nil, bypass the comparission with focus-last-id from rau--state for
+situations where focus changed without us knowing (session-lock, layer surface)."
+  (when-let* ((target-id (ewc-object-id target-wl))
+              ((or force
+                   (not (eq target-id (rau--state-focus-last-id rau--state)))))
+              (client (rau--state-client rau--state))
+              (seat-wl (ewc-first-object client 'river-seat-v1)))
+    (rau--log "request focus-window id=%d title=%s"
+              target-id
+              (rau--window-wl-title target-wl))
+
+    ;; Queue the actual Wayland focus request
+    (rau--manage-enqueue-nocache seat-wl 'focus-window `((window . ,target-id)))
+    (setf (rau--state-focus-last-id rau--state) target-id)
+
+    ;; Queue the layer-shell default output update
+    (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-external)
+                              (rau--frame-wl-for-extwin-wl target-wl)
+                            target-wl))
+                (output-wl (rau--outframe-wl-output-wl frame-wl))
+                (ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
+      (rau--manage-enqueue ls-output-wl 'set-default))
+
+    ;; Let Emacs select the underlying emacs-window for the external window
+    (when-let* (((ewc-object-tagged-p target-wl rau--tag-external))
+                (emacs-window (rau--emacs-window-for-window-wl target-wl)))
+      (rau--log "select underlying window")
+      (setf (rau--state-focus-inhibit-update rau--state) t)
+      (select-window emacs-window 'norecord)
+      (setf (rau--state-focus-inhibit-update rau--state) nil))))
+
+(defun rau--request-focus-by-id (&optional target-id force)
+  "Request focus for the window with TARGET-ID or the last focused.
+See `rau--request-focus' for details on FORCE."
+  (let ((id (or target-id (rau--state-focus-last-id rau--state))))
+    (when-let* (id
+                ((not (equal -1 id)))
+                (client (rau--state-client rau--state))
+                (target-wl (ewc-object-get client id)))
+      (rau--request-focus target-wl force))))
+
 ;;; Keybindings
 
 (defconst rau--modifier-bits
@@ -665,12 +705,8 @@ This function should be run from the `rau-ready-hook'."
               (state rau--state)
               ((null (rau--state-focus-inhibit-update state)))
               (emacs-window (selected-window))
-              (target-wl (rau--window-wl-for-emacs-window emacs-window))
-              (target-id (ewc-object-id target-wl))
-              ((not (eq target-id (rau--state-focus-last-id state)))))
-
-    (setf (rau--state-focus-next-id state) target-id)
-    (rau--mark-manage-dirty)))
+              (target-wl (rau--window-wl-for-emacs-window emacs-window)))
+    (rau--request-focus target-wl)))
 
 (defun rau--recover-focus-after-binding-pressed ()
   "Give focus back to external window after it was given to Emacs to handle
@@ -693,8 +729,7 @@ post-command-hook in the enqueued command of the pressed event handler."
       (rau--log "recover focus. focusing window-id=%d title=%s"
                window-id
                (rau--window-wl-title window-wl))
-      (setf (rau--state-focus-next-id rau--state) window-id)
-      (rau--mark-manage-dirty))))
+      (rau--request-focus window-wl))))
 
 (defun rau--buffer-killed ()
   "Request closing of the associated Wayland window when a rau buffer is killed."
@@ -870,7 +905,6 @@ point where also the destroy request is sent."
   (rau--tasks-enqueue #'rau--manage-queue-send)
   (rau--tasks-enqueue #'rau--reconcile-frames)
   (rau--tasks-enqueue #'rau--reconcile-windows)
-  (rau--tasks-enqueue #'rau--reconcile-focus)
 
   (rau--tasks-enqueue #'rau--request wm-wl 'manage-finish))
 
@@ -883,9 +917,8 @@ point where also the destroy request is sent."
   (setf (rau--state-session-locked rau--state) t))
 
 (defun rau--on-river-window-manager-v1-session-unlocked (_wm-wl _)
-  (setf (rau--state-focus-next-id rau--state) (rau--state-focus-last-id rau--state)
-        (rau--state-focus-last-id rau--state) -1
-        (rau--state-session-locked rau--state) nil))
+  (setf (rau--state-session-locked rau--state) nil)
+  (rau--request-focus-by-id nil t))
 
 (defun rau--on-river-window-manager-v1-window (_wm-wl args)
   (pcase-let* (((map id) args)
@@ -1070,10 +1103,8 @@ outputframe or external window."
 ;;;; river-seat-v1 listener
 (defun rau--on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
-    (rau--log "last focused window-wl id: %d" (rau--state-focus-last-id rau--state))
-    (unless (equal window (rau--state-focus-last-id rau--state))
-      (rau--log "window interaction with %d" window)
-      (setf (rau--state-focus-next-id rau--state) window))))
+    (rau--log "window interaction with %d" window)
+    (rau--request-focus-by-id window)))
 
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
@@ -1091,10 +1122,9 @@ outputframe or external window."
                   (client (rau--state-client rau--state))
                   (window-wl (ewc-object-get client window-id))
                   ((ewc-object-tagged-p window-wl rau--tag-external))
-                  (target-wl (rau--frame-wl-for-extwin-wl window-wl))
-                  (target-id (ewc-object-id target-wl)))
+                  (target-wl (rau--frame-wl-for-extwin-wl window-wl)))
         (rau--log "switch focus to emacs frame for key pressed.")
-        (setf (rau--state-focus-next-id rau--state) target-id)))))
+        (rau--request-focus target-wl)))))
 
 ;;;; river-layer-shell-v1 protocol
 ;;;; river-layer-shell-output-v1 listeners
@@ -1106,8 +1136,7 @@ outputframe or external window."
 ;;;; river-layer-shell-seat-v1 listeners
 (defun rau--on-river-layer-shell-seat-v1-focus-none (_ls-seat-wl _)
   "Give focus back to the last window that had it."
-  (setf (rau--state-focus-next-id rau--state) (rau--state-focus-last-id rau--state)
-        (rau--state-focus-last-id rau--state) -1))
+  (rau--request-focus-by-id nil t))
 
 ;;; Manage cycle
 
@@ -1173,43 +1202,6 @@ outputframe or external window."
          (rau--reconcile-window-tiled window-wl)))
       ('killed
        (rau--request window-wl 'close)))))
-
-(defun rau--reconcile-focus ()
-  "Update focus based on either an event or a buffer change.
-See also focus relevant slots in rau STATE."
-  (when-let* (((/=
-                  (rau--state-focus-last-id rau--state)
-                  (rau--state-focus-next-id rau--state)))
-              ((/= -1 (rau--state-focus-next-id rau--state)))
-              (client (rau--state-client rau--state))
-              (target-id (rau--state-focus-next-id rau--state))
-              (target-wl (ewc-object-get client target-id))
-              (seat-wl (ewc-first-object client 'river-seat-v1)))
-
-    (rau--log "request focus-window id=%d title=%s"
-             target-id
-             (rau--window-wl-title target-wl))
-    (rau--request seat-wl
-                  'focus-window
-                  `((window . ,target-id))
-                  t)
-    (setf (rau--state-focus-last-id rau--state) target-id
-          (rau--state-focus-next-id rau--state) -1)
-
-    (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-external)
-                              (rau--frame-wl-for-extwin-wl target-wl)
-                            target-wl))
-                (output-wl (rau--outframe-wl-output-wl frame-wl))
-                (ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
-      (rau--request ls-output-wl 'set-default))
-
-    ;; Let Emacs select the underlying emacs-window for the external window
-    (when-let* (((ewc-object-tagged-p target-wl rau--tag-external))
-                (emacs-window (rau--emacs-window-for-window-wl target-wl)))
-      (rau--log "select underlying window")
-      (setf (rau--state-focus-inhibit-update rau--state) t)
-      (select-window emacs-window 'norecord))
-      (setf (rau--state-focus-inhibit-update rau--state) nil)))
 
 (defun rau--manage-queue-send ()
   "Run the manage-sequence reconciliation."
