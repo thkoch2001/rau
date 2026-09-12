@@ -994,6 +994,9 @@ point where also the destroy request is sent."
         (cl-decf (rau--state-pending-frames rau--state))
       (rau--log "New frame was not requested by WM"))
 
+    (rau--manage-enqueue window-wl 'inform-maximized)
+    (rau--manage-enqueue window-wl 'set-tiled `((edges . ,rau--edges-all)))
+
     (if-let* ((emacs-frame
                (cl-find title (frame-list)
                         :test #'equal
@@ -1161,12 +1164,7 @@ outputframe or external window."
                      (rau--request frame-wl
                                    'propose-dimensions
                                    `((width . ,(car dimensions))
-                                     (height . ,(cdr dimensions))))
-                     (rau--request frame-wl
-                                   'inform-maximized)
-                     (rau--request frame-wl
-                                   'set-tiled
-                                   `((edges . ,rau--edges-all))))
+                                     (height . ,(cdr dimensions)))))
                  ;; No frame on this output yet: request one.
                  (rau--log "request frame.")
                  (cl-incf frame-requests))))
