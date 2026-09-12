@@ -51,29 +51,19 @@ Wayland objects have been registered."
 
 ;;; State structs
 
-(cl-defstruct (rau--fs (:constructor rau--fs) (:copier nil))
-  "Fullscreen state machine for one output.
-STATE is one of: `none', `requested', `fullscreen', `exiting'.
-NEW and PREVIOUS are meaningful only when STATE is `requested'.
-WINDOW is meaningful when STATE is `fullscreen' or `exiting'."
-  (state    'none :type symbol :read-only t)
-  (window   nil   :type ewc-object :read-only t)
-  (previous nil   :type ewc-object :read-only t))
-
 (cl-defstruct (rau--output (:constructor rau--output-make))
   "State for a River output."
   (ls-output-wl nil :type ewc-object)
   (frame-wl nil :type ewc-object)
   (position '(0 . 0))
   (dimensions '(0 . 0))
-  (fullscreen (rau--fs)))
+  (fullscreen-window-wl nil :type (or null ewc-object)))
 
 (cl-defstruct (rau--ls-output (:constructor rau--ls-output-make))
   "State for a River output."
   (output-wl nil :type ewc-object)
   (non-excl-position '(0 . 0))
   (non-excl-dimensions '(0 . 0)))
-
 
 (defconst rau--tag-outputframe :rau-frame
   "Tag for `river-window-v1' objects that are Emacs frames.")
@@ -453,7 +443,11 @@ WINDOW-WL."
                 (rau--request wm-wl 'manage-dirty))))))))
 
 (defun rau--manage-enqueue (ewc-object request &optional args)
-  (push `(,ewc-object ,request ,args) (rau--state-manage-queue rau--state))
+  (push `(,ewc-object ,request ,args nil) (rau--state-manage-queue rau--state))
+  (rau--mark-manage-dirty))
+
+(defun rau--manage-enqueue-nocache (ewc-object request &optional args)
+  (push `(,ewc-object ,request ,args t) (rau--state-manage-queue rau--state))
   (rau--mark-manage-dirty))
 
 ;;; Keybindings
@@ -747,6 +741,41 @@ is completely valid."
             (switch-to-buffer (other-buffer)))))))
   (apply orig win buf r))
 
+;;; Fullscreen toggle
+
+(defun rau--fullscreen-exit (window-wl output-wl)
+  "Exit fullscreen for WINDOW-WL on OUTPUT-WL.
+Also resets the fullscreen-window-wl slot of OUTPUT-WL to nil.  When
+switching fullscreen between windows, call this before
+`rau--fullscreen-enter'."
+  (rau--manage-enqueue window-wl 'inform-not-fullscreen)
+  (rau--manage-enqueue window-wl 'exit-fullscreen)
+  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
+              (dimensions (rau--dimensions-for-emacs-window emacs-window)))
+    (rau--manage-enqueue-nocache window-wl 'propose-dimensions
+                                 `((width . ,(car dimensions))
+                                   (height . ,(cdr dimensions)))))
+  (setf (rau--output-wl-fullscreen-window-wl output-wl) nil))
+
+(defun rau--fullscreen-enter (window-wl output-wl)
+  "Enter fullscreen for WINDOW-WL on OUTPUT-WL."
+  (rau--manage-enqueue window-wl 'inform-fullscreen)
+  (rau--manage-enqueue window-wl 'fullscreen
+                       `((output . ,(ewc-object-id output-wl))))
+  (setf (rau--output-wl-fullscreen-window-wl output-wl) window-wl))
+
+(defun rau-toggle-fullscreen ()
+  "Toggle fullscreen for the currently focused external window."
+  (interactive)
+  (if-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
+            (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
+            (output-wl (rau--outframe-wl-output-wl frame-wl)))
+      (let ((current-fs (rau--output-wl-fullscreen-window-wl output-wl)))
+        (if current-fs
+            (rau--fullscreen-exit current-fs output-wl)
+          (rau--fullscreen-enter window-wl output-wl)))
+    (message "Fullscreen requested, but nothing is focused")))
+
 ;;; Layer shell attachment helpers
 
 (defun rau--ensure-ls-output (output-wl)
@@ -841,7 +870,6 @@ point where also the destroy request is sent."
   (rau--tasks-enqueue #'rau--manage-queue-send)
   (rau--tasks-enqueue #'rau--reconcile-frames)
   (rau--tasks-enqueue #'rau--reconcile-windows)
-  (rau--tasks-enqueue #'rau--reconcile-fullscreen)
   (rau--tasks-enqueue #'rau--reconcile-focus)
 
   (rau--tasks-enqueue #'rau--request wm-wl 'manage-finish))
@@ -906,8 +934,8 @@ point where also the destroy request is sent."
   ;; Reset fullscreen on output if window was fullscreen.
   (when (ewc-object-tagged-p window-wl rau--tag-external)
     (rau--do 'river-output-v1 output-wl rau--state
-             (when (eq (rau--fs-window (rau--output-wl-fullscreen output-wl)) window-wl)
-               (setf (rau--output-wl-fullscreen output-wl) (rau--fs))))))
+      (when (eq (rau--output-wl-fullscreen-window-wl output-wl) window-wl)
+        (setf (rau--output-wl-fullscreen-window-wl output-wl) nil)))))
 
 (defun rau--on-river-window-v1-dimensions-hint (window-wl args)
   (pcase-let (((map min-width min-height max-width max-height) args))
@@ -994,26 +1022,15 @@ outputframe or external window."
                       (rau--outframe-wl-output-wl frame-wl)))))
     (if (not output-wl)
         (message "Fullscreen requested, but no output found")
-      (let* ((fs (rau--output-wl-fullscreen output-wl))
-             (previous
-              (pcase (rau--fs-state fs)
-                ((or 'fullscreen 'exiting)
-                 (rau--fs-window fs))
-                (_ nil))))
-        (setf (rau--output-wl-fullscreen output-wl)
-              (rau--fs :state 'requested
-                       :window window-wl
-                       :previous previous))))))
+      (let ((current-fs (rau--output-wl-fullscreen-window-wl output-wl)))
+        (when (and current-fs (not (eq current-fs window-wl)))
+          (rau--fullscreen-exit current-fs output-wl)))
+      (rau--fullscreen-enter window-wl output-wl))))
 
 (defun rau--on-river-window-v1-exit-fullscreen-requested (window-wl _)
   (rau--do 'river-output-v1 output-wl rau--state
-           (let ((fs (rau--output-wl-fullscreen output-wl)))
-             (when (and (member (rau--fs-state fs)
-                                '(requested fullscreen))
-                        (eq (rau--fs-window fs) window-wl))
-               (setf (rau--output-wl-fullscreen output-wl)
-                     (rau--fs :state 'exiting
-                              :window (rau--fs-window fs)))))))
+    (when (eq (rau--output-wl-fullscreen-window-wl output-wl) window-wl)
+      (rau--fullscreen-exit window-wl output-wl))))
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
@@ -1157,42 +1174,6 @@ outputframe or external window."
       ('killed
        (rau--request window-wl 'close)))))
 
-(defun rau--reconcile-fullscreen ()
-  "Advance fullscreen state machines."
-  (rau--do 'river-output-v1 output-wl rau--state
-    (let ((fs (rau--output-wl-fullscreen output-wl)))
-      (rau--log "reconcile fs on output %d with fs state %s"
-                (ewc-object-id output-wl)
-                (rau--fs-state fs))
-      (pcase (rau--fs-state fs)
-        ('requested
-         (let ((new-wl (rau--fs-window fs))
-               (prev-wl (rau--fs-previous fs)))
-           (when prev-wl
-             (rau--request prev-wl 'inform-not-fullscreen)
-             (rau--request prev-wl 'exit-fullscreen))
-           (when new-wl
-             (rau--request new-wl 'inform-fullscreen)
-             (rau--request new-wl 'fullscreen
-                           `((output . ,(ewc-object-id output-wl)))
-                           t))
-           (setf (rau--output-wl-fullscreen output-wl)
-                 (rau--fs :state 'fullscreen :window new-wl))))
-        ('exiting
-         (let ((window-wl (rau--fs-window fs)))
-           (when (and window-wl (ewc-object-p window-wl))
-             (rau--request window-wl 'inform-not-fullscreen)
-             (rau--request window-wl 'exit-fullscreen)
-             (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
-                         (dimensions (rau--dimensions-for-emacs-window emacs-window)))
-               (rau--request window-wl
-                             'propose-dimensions
-                             `((width . ,(car dimensions))
-                               (height . ,(cdr dimensions)))
-                             t)))
-           (setf (rau--output-wl-fullscreen output-wl) (rau--fs))))
-        (_ nil)))))
-
 (defun rau--reconcile-focus ()
   "Update focus based on either an event or a buffer change.
 See also focus relevant slots in rau STATE."
@@ -1237,8 +1218,7 @@ See also focus relevant slots in rau STATE."
    (let ((manage-requests (nreverse (rau--state-manage-queue rau--state))))
      (setf (rau--state-manage-queue rau--state) nil)
      (dolist (request manage-requests)
-       (rau--request (cl-first request) (cl-second request) (cl-third request))))))
-
+       (rau--request (nth 0 request) (nth 1 request) (nth 2 request) (nth 3 request))))))
 
 ;;; Render cycle
 
@@ -1298,32 +1278,6 @@ See also focus relevant slots in rau STATE."
       (if (rau--extwin-wl-floating window-wl)
           (rau--render-window-floating window-wl)
         (rau--render-window-tiled window-wl)))))
-
-;;; Fullscreen toggle
-
-(defun rau-toggle-fullscreen ()
-  "Toggle fullscreen for the currently focused external window."
-  (interactive)
-  (if-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
-            (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
-            (output-wl (rau--outframe-wl-output-wl frame-wl))
-            (fs (rau--output-wl-fullscreen output-wl)))
-      (pcase (rau--fs-state fs)
-        ('none
-         (setf (rau--output-wl-fullscreen output-wl)
-               (rau--fs :state 'requested
-                        :window window-wl))
-         (rau--mark-manage-dirty))
-
-        ('fullscreen
-         (setf (rau--output-wl-fullscreen output-wl)
-               (rau--fs :state 'exiting
-                        :window (rau--fs-window fs)))
-         (rau--mark-manage-dirty))
-
-        (_
-         (message "Invalid output state for fullscreen toggle")))
-    (message "Fullscreen requested, but nothing is focused")))
 
 ;;; Startup
 ;; NOTE: No need for rau-disable since this Emacs process is serving as a
