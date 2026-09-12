@@ -53,11 +53,12 @@ Wayland objects have been registered."
 
 (cl-defstruct (rau--output (:constructor rau--output-make))
   "State for a River output."
-  (ls-output-wl nil :type ewc-object)
-  (frame-wl nil :type ewc-object)
-  (position '(0 . 0))
   (dimensions '(0 . 0))
-  (fullscreen-window-wl nil :type (or null ewc-object)))
+  (emacs-frame nil)
+  (frame-wl nil :type ewc-object)
+  (fullscreen-window-wl nil :type (or null ewc-object))
+  (ls-output-wl nil :type ewc-object)
+  (position '(0 . 0)))
 
 (cl-defstruct (rau--ls-output (:constructor rau--ls-output-make))
   "State for a River output."
@@ -92,7 +93,6 @@ Not instantiated directly; windows and frames include it."
 
 (cl-defstruct (rau--outputframe (:constructor rau--outputframe-make))
   "State for an Emacs frame managed by rau."
-  emacs-frame
   (output-wl nil :type ewc-object :documentation "displaying this frame"))
 
 (cl-defstruct (rau--seat (:constructor rau--seat-make))
@@ -122,9 +122,6 @@ Not instantiated directly; windows and frames include it."
   ;; when it changes buffer itself in reaction to an event and this should not
   ;; trigger rau--update-focus-request
   (focus-inhibit-update nil)
-
-  ;; Frame request accounting.
-  (pending-frames 1)
 
   ;; task queue: list of (FN ARGS...).
   task-queue
@@ -184,10 +181,6 @@ WINDOW-WL."
               (emacs-frame (window-frame emacs-window))
               ((frame-live-p emacs-frame)))
     (frame-parameter emacs-frame 'rau-frame-wl)))
-
-(defun rau--frame-wl-without-output (state)
-  "Return a frame not associated to any output or nil."
-  (rau--frame-wl-by-cond state (lambda (f) (null (rau--outputframe-output-wl f)))))
 
 (defun rau--dimensions-for-emacs-window (emacs-window)
   (pcase-let ((`(,left ,top ,right ,bottom)
@@ -390,6 +383,24 @@ Also schedule the task execution timer if not yet done so.  Only to be
 used in event listeners."
   (push `(,fn . ,args) (rau--state-task-queue rau--state))
   (rau--tasks-schedule-execution))
+
+(defun rau--task-link-output-to-emacs-frame (output-wl)
+  (unless (rau--output-wl-emacs-frame output-wl)
+    (let ((emacs-frame
+           (or
+            ;; search the initial frame
+            (cl-loop for f being the frames
+                     for name = (frame-parameter f 'name)
+                     for is_rau_frame = (string-prefix-p "rau-frame-" name)
+                     for is_assigned = (frame-parameter f 'rau-output-wl)
+                     if (and is_rau_frame (not is_assigned)) return f)
+            (make-frame (rau--make-outputframe-parameters)))))
+      (set-frame-parameter emacs-frame 'rau-output-wl output-wl)
+      (setf (rau--output-wl-emacs-frame output-wl) emacs-frame)
+      ;; The title of the initial frame gets announced before the first output
+      (when-let* ((frame-wl (frame-parameter emacs-frame 'rau-frame-wl)))
+        (setf (rau--output-wl-frame-wl output-wl) frame-wl
+              (rau--outframe-wl-output-wl frame-wl) output-wl)))))
 
 (defun rau--task-rename-buffer (window-wl)
   "Rename buffer for external window with data taken from
@@ -990,10 +1001,6 @@ point where also the destroy request is sent."
     (setf (rau--window-wl-role-data window-wl) (rau--outputframe-make))
     (ewc-object-tag (rau--state-client rau--state)
                     window-wl rau--tag-outputframe)
-    (if (> (rau--state-pending-frames rau--state) 0)
-        (cl-decf (rau--state-pending-frames rau--state))
-      (rau--log "New frame was not requested by WM"))
-
     (rau--manage-enqueue window-wl 'inform-maximized)
     (rau--manage-enqueue window-wl 'set-tiled `((edges . ,rau--edges-all)))
 
@@ -1002,8 +1009,11 @@ point where also the destroy request is sent."
                         :test #'equal
                         :key (lambda (f) (frame-parameter f 'name)))))
         (progn
-          (setf (rau--outframe-wl-emacs-frame window-wl) emacs-frame)
-          (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl))
+          (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl)
+          (if-let* ((output-wl (frame-parameter emacs-frame 'rau-output-wl)))
+              (setf (rau--output-wl-frame-wl output-wl) window-wl
+                    (rau--outframe-wl-output-wl window-wl) output-wl)
+            (rau--log "Emacs frame %s has not yet an output-wl assigned." title)))
       (error "No emacs frame found for wayland window with title %s." title))))
 
 (defun rau--maybe-new-external-window (window-wl title)
@@ -1084,7 +1094,7 @@ outputframe or external window."
     (when-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
       (setf (rau--outframe-wl-output-wl frame-wl) nil
             (rau--output-wl-frame-wl output-wl) nil)
-      (when-let* ((emacs-frame (rau--outframe-wl-emacs-frame frame-wl))
+      (when-let* ((emacs-frame (rau--output-wl-emacs-frame output-wl))
                   ((frame-live-p emacs-frame)))
         (rau--tasks-enqueue #'delete-frame emacs-frame)))
     ;; TODO: also enqueue the below three actions, look out for race conditions
@@ -1145,32 +1155,18 @@ outputframe or external window."
 
 (defun rau--reconcile-frames ()
   "Ensure each output gets one maximized Emacs frame."
-  (let ((frame-requests 0))
-    (rau--do 'river-output-v1 output-wl rau--state
-             (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
-             (if-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
-                 (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
-                   (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
-                   (rau--request frame-wl
-                                 'propose-dimensions
-                                 `((width . ,(car dimensions))
-                                   (height . ,(cdr dimensions)))))
+  (rau--do 'river-output-v1 output-wl rau--state
+    (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
+    (if-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
+        (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
+          (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
+          (rau--request frame-wl
+                        'propose-dimensions
+                        `((width . ,(car dimensions))
+                          (height . ,(cdr dimensions)))))
 
-               (rau--log "no frame found for output.")
-               (if-let* ((frame-wl (rau--frame-wl-without-output rau--state)))
-                   (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
-                     (setf (rau--outframe-wl-output-wl frame-wl) output-wl
-                           (rau--output-wl-frame-wl output-wl) frame-wl)
-                     (rau--request frame-wl
-                                   'propose-dimensions
-                                   `((width . ,(car dimensions))
-                                     (height . ,(cdr dimensions)))))
-                 ;; No frame on this output yet: request one.
-                 (rau--log "request frame.")
-                 (cl-incf frame-requests))))
-    (dotimes (_ (- frame-requests (rau--state-pending-frames rau--state)))
-      (rau--tasks-enqueue #'make-frame (rau--make-outputframe-parameters))
-      (cl-incf (rau--state-pending-frames rau--state)))))
+      (rau--log "no frame found for output, request emacs-frame.")
+      (rau--tasks-enqueue #'rau--task-link-output-to-emacs-frame output-wl))))
 
 (defun rau--reconcile-window-floating (window-wl)
   (rau--request window-wl 'set-tiled '((edges . 0)))
