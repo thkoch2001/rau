@@ -1003,6 +1003,8 @@ point where also the destroy request is sent."
                     window-wl rau--tag-outputframe)
     (rau--manage-enqueue window-wl 'inform-maximized)
     (rau--manage-enqueue window-wl 'set-tiled `((edges . ,rau--edges-all)))
+    (let ((node-wl (rau--window-wl-node-wl window-wl)))
+      (rau--manage-enqueue node-wl 'place-bottom))
 
     (if-let* ((emacs-frame
                (cl-find title (frame-list)
@@ -1217,7 +1219,6 @@ outputframe or external window."
              (rau--log "render frame %d for output %d."
                       (ewc-object-id frame-wl)
                       (ewc-object-id output-wl))
-             (rau--request node-wl 'place-bottom)
              (rau--request node-wl 'set-position
                            `((x . ,(car position))
                              (y . ,(cdr position)))))))
