@@ -118,10 +118,6 @@ Not instantiated directly; windows and frames include it."
   ;; id of ewc-object for which the last focus request was sent
   ;; This could be a focus_window or a focus_shell_surface request
   (focus-last-id -1)
-  ;; Inhibit update focus due to any hooks. This is used in reconcile-focus
-  ;; when it changes buffer itself in reaction to an event and this should not
-  ;; trigger rau--update-focus-request
-  (focus-inhibit-update nil)
 
   ;; task queue: list of (FN ARGS...).
   task-queue
@@ -486,10 +482,7 @@ situations where focus changed without us knowing (session-lock, layer surface).
     ;; Let Emacs select the underlying emacs-window for the external window
     (when-let* (((ewc-object-tagged-p target-wl rau--tag-external))
                 (emacs-window (rau--emacs-window-for-window-wl target-wl)))
-      (rau--log "select underlying window")
-      (setf (rau--state-focus-inhibit-update rau--state) t)
-      (select-window emacs-window 'norecord)
-      (setf (rau--state-focus-inhibit-update rau--state) nil))))
+      (select-window emacs-window 'norecord))))
 
 (defun rau--request-focus-by-id (&optional target-id force)
   "Request focus for the window with TARGET-ID or the last focused.
@@ -725,7 +718,6 @@ This function should be run from the `rau-ready-hook'."
   (rau--log "update-focus-request %S" args)
   (when-let* (((rau--focus-change-allowed-p))
               (state rau--state)
-              ((null (rau--state-focus-inhibit-update state)))
               (emacs-window (selected-window))
               (target-wl (rau--window-wl-for-emacs-window emacs-window)))
     (rau--request-focus target-wl)))
