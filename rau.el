@@ -817,8 +817,8 @@ switching fullscreen between windows, call this before
 (defun rau--fullscreen-enter (window-wl output-wl)
   "Enter fullscreen for WINDOW-WL on OUTPUT-WL."
   (rau--manage-enqueue window-wl 'inform-fullscreen)
-  (rau--manage-enqueue window-wl 'fullscreen
-                       `((output . ,(ewc-object-id output-wl))))
+  (rau--manage-enqueue-nocache window-wl 'fullscreen
+                               `((output . ,(ewc-object-id output-wl))))
   (setf (rau--output-wl-fullscreen-window-wl output-wl) window-wl))
 
 (defun rau-toggle-fullscreen ()
@@ -1065,26 +1065,26 @@ outputframe or external window."
         (setf (rau--extwin-wl-floating window-wl) t)))))
 
 (defun rau--on-river-window-v1-fullscreen-requested (window-wl args)
-  (pcase-let* (((map output) args)
-               (output-wl
-                ;; Find output for fullscreen window
-                ;; 1. optional event arg output
-                ;; 2. output showing window-wl
-                ;; 3. output currently having focusc
-                (or (and (integerp output)
-                         (not (zerop output))
-                         (ewc-object-get (rau--state-client rau--state) output))
-                    (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-                                (frame-wl (rau--frame-wl-for-extwin-wl window-wl)))
-                      (rau--outframe-wl-output-wl frame-wl))
-                    (when-let* ((frame-wl (frame-parameter (selected-frame) 'rau-frame-wl)))
-                      (rau--outframe-wl-output-wl frame-wl)))))
-    (if (not output-wl)
-        (message "Fullscreen requested, but no output found")
-      (let ((current-fs (rau--output-wl-fullscreen-window-wl output-wl)))
-        (when (and current-fs (not (eq current-fs window-wl)))
-          (rau--fullscreen-exit current-fs output-wl)))
-      (rau--fullscreen-enter window-wl output-wl))))
+  (when (ewc-object-tagged-p window-wl rau--tag-external)
+    (pcase-let* (((map output) args)
+                 (output-wl
+                  ;; Find output for fullscreen window
+                  ;; 1. optional event arg output
+                  ;; 2. output showing window-wl
+                  ;; 3. output currently having focus
+                  (or (ewc-object-get (rau--state-client rau--state) output)
+                      (when-let*
+                          ((frame-wl
+                            (or
+                             (rau--frame-wl-for-extwin-wl window-wl)
+                             (frame-wl (frame-parameter (selected-frame) 'rau-frame-wl)))))
+                        (rau--outframe-wl-output-wl frame-wl)))))
+      (if (not output-wl)
+          (message "Fullscreen requested, but no output found")
+        (let ((current-fs (rau--output-wl-fullscreen-window-wl output-wl)))
+          (when (and current-fs (not (eq current-fs window-wl)))
+            (rau--fullscreen-exit current-fs output-wl)))
+        (rau--fullscreen-enter window-wl output-wl)))))
 
 (defun rau--on-river-window-v1-exit-fullscreen-requested (window-wl _)
   (rau--do 'river-output-v1 output-wl rau--state
