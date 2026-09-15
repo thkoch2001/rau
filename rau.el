@@ -1077,7 +1077,7 @@ outputframe or external window."
                           ((frame-wl
                             (or
                              (rau--frame-wl-for-extwin-wl window-wl)
-                             (frame-wl (frame-parameter (selected-frame) 'rau-frame-wl)))))
+                             (frame-parameter (selected-frame) 'rau-frame-wl))))
                         (rau--outframe-wl-output-wl frame-wl)))))
       (if (not output-wl)
           (message "Fullscreen requested, but no output found")
