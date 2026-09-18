@@ -88,8 +88,7 @@ Not instantiated directly; windows and frames include it."
 (cl-defstruct (rau--external (:constructor rau--external-make))
   "State for a regular external window."
   buffer
-  floating
-  (state 'starting)) ;; 'active 'killed
+  floating)
 
 (cl-defstruct (rau--outputframe (:constructor rau--outputframe-make))
   "State for an Emacs frame managed by rau."
@@ -241,12 +240,10 @@ event handler."
   "Major mode for buffers representing windows managed by rau."
   :group 'rau
   (setq-local buffer-read-only t)
-  (add-hook 'kill-buffer-hook #'rau--buffer-killed nil t)
+  (add-hook 'kill-buffer-query-functions #'rau--buffer-killed nil t)
   (scroll-bar-mode 0)
   (setq-local left-fringe-width 0
               right-fringe-width 0))
-
-
 
 ;;; Protocol loading
 
@@ -380,6 +377,12 @@ used in event listeners."
   (push `(,fn . ,args) (rau--state-task-queue rau--state))
   (rau--tasks-schedule-execution))
 
+(defun rau--task-kill-buffer (buffer)
+  "Remove kill inhibiting hook and kill."
+  (with-current-buffer buffer
+    (remove-hook 'kill-buffer-query-functions #'rau--buffer-killed t))
+  (kill-buffer buffer))
+
 (defun rau--task-link-output-to-emacs-frame (output-wl)
   (unless (rau--output-wl-emacs-frame output-wl)
     (let ((emacs-frame
@@ -416,8 +419,7 @@ WINDOW-WL."
       (setq-local rau--window-wl window-wl)
       (unless (display-buffer buffer)
         (error "display-buffer failed for window-wl %S buffer %S." window-wl buffer)))
-    (setf (rau--extwin-wl-buffer window-wl) buffer)
-    (setf (rau--extwin-wl-state window-wl) 'active)))
+    (setf (rau--extwin-wl-buffer window-wl) buffer)))
 
 (defun rau--task-consume-key-event (event needs-focus)
   "Forward EVENT to emacs and setup to recover focus if NEEDS-FOCUS."
@@ -747,11 +749,10 @@ post-command-hook in the enqueued command of the pressed event handler."
 
 (defun rau--buffer-killed ()
   "Request closing of the associated Wayland window when a rau buffer is killed."
-  (when-let* ((rau--window-wl)
-              ;; avoid sending close request in response to closed event
-              ((eq 'active (rau--extwin-wl-state rau--window-wl))))
-    (setf (rau--extwin-wl-state rau--window-wl) 'killed)
-    (rau--mark-manage-dirty)))
+  (when rau--window-wl
+    (rau--manage-enqueue rau--window-wl 'close)
+    (rau--mark-manage-dirty)
+    nil))
 
 (defun rau--window-configuration-change-handler ()
   "Schedule a river manage cycle and thus a reconciliation cycle.
@@ -966,8 +967,8 @@ point where also the destroy request is sent."
 ;;;; river-window-v1 listeners
 (defun rau--on-river-window-v1-closed (window-wl _)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-              (buf (rau--extwin-wl-buffer window-wl)))
-    (rau--tasks-enqueue #'kill-buffer buf))
+              (buffer (rau--extwin-wl-buffer window-wl)))
+    (rau--tasks-enqueue #'rau--task-kill-buffer buffer))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (rau--tasks-enqueue #'rau--request node-wl 'destroy))
   (rau--tasks-enqueue #'rau--request window-wl 'destroy)
@@ -1193,14 +1194,9 @@ outputframe or external window."
 (defun rau--reconcile-windows ()
   "Close killed windows and propose dimensions for active windows."
   (rau--do rau--tag-external window-wl rau--state
-    (pcase (rau--extwin-wl-state window-wl)
-      ;; nothing to do for window-state 'starting
-      ('active
-       (if (rau--extwin-wl-floating window-wl)
-           (rau--reconcile-window-floating window-wl)
-         (rau--reconcile-window-tiled window-wl)))
-      ('killed
-       (rau--request window-wl 'close)))))
+    (if (rau--extwin-wl-floating window-wl)
+        (rau--reconcile-window-floating window-wl)
+      (rau--reconcile-window-tiled window-wl))))
 
 (defun rau--manage-queue-send ()
   "Run the manage-sequence reconciliation."
@@ -1264,10 +1260,9 @@ outputframe or external window."
 (defun rau--render-windows ()
   "Run the render-sequence reconciliation for windows."
   (rau--do rau--tag-external window-wl rau--state
-    (when-let* (((eq (rau--extwin-wl-state window-wl) 'active)))
-      (if (rau--extwin-wl-floating window-wl)
-          (rau--render-window-floating window-wl)
-        (rau--render-window-tiled window-wl)))))
+    (if (rau--extwin-wl-floating window-wl)
+        (rau--render-window-floating window-wl)
+      (rau--render-window-tiled window-wl))))
 
 ;;; Startup
 ;; NOTE: No need for rau-disable since this Emacs process is serving as a
