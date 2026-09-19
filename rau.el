@@ -221,6 +221,7 @@ frame."
 event handler."
   `((name . ,(make-temp-name "rau-frame-"))
     (undecorated . t)
+    (window-system . pgtk)
     ;; avoid showing the same rau buffer twice
     (buffer-predicate . rau--buffer-predicate)))
 
