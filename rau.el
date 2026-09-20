@@ -165,12 +165,6 @@ ROLE-STRUCT-TYPE via ewc-object's `data' and rau--window's `role-data'."
 
 ;;; Data access helpers
 
-(defun rau--frame-wl-by-cond (state predicate)
-  "Return the first frame ewc-object in STATE matching PREDICATE."
-  (cl-loop for frame-wl in (ewc-objects (rau--state-client state) rau--tag-outputframe)
-           for f = (rau--window-wl-role-data frame-wl)
-           thereis (and f (funcall predicate f) frame-wl)))
-
 (defun rau--frame-wl-for-extwin-wl (window-wl)
   "Return the Emacs outputframe window-wl displaying external
 WINDOW-WL."
