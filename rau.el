@@ -66,11 +66,14 @@ Wayland objects have been registered."
   (non-excl-position '(0 . 0))
   (non-excl-dimensions '(0 . 0)))
 
-(defconst rau--tag-outputframe :rau-frame
+(defconst rau--tag-outputframe :rau--frame
   "Tag for `river-window-v1' objects that are Emacs frames.")
 
-(defconst rau--tag-external :rau-external
+(defconst rau--tag-external :rau--external
   "Tag for `river-window-v1' objects that are external windows.")
+
+(defconst rau--tag-floating :rau--floating
+  "Tag for `river-window-v1' objects that are floating.")
 
 (cl-defstruct (rau--window (:constructor rau--window-make))
   "Common state shared by windows and frames.
@@ -87,8 +90,7 @@ Not instantiated directly; windows and frames include it."
 
 (cl-defstruct (rau--external (:constructor rau--external-make))
   "State for a regular external window."
-  buffer
-  floating)
+  buffer)
 
 (cl-defstruct (rau--outputframe (:constructor rau--outputframe-make))
   "State for an Emacs frame managed by rau."
@@ -1026,9 +1028,10 @@ point where also the destroy request is sent."
 (defun rau--maybe-new-external-window (window-wl title)
   (unless (ewc-object-tagged-p window-wl rau--tag-external)
     (rau--log "Discovered new regular external window with title %s." title)
-    (setf (rau--window-wl-role-data window-wl)
-          (rau--external-make :floating
-                              (not (null (rau--window-wl-parent-wl window-wl)))))
+    (setf (rau--window-wl-role-data window-wl) (rau--external-make))
+    (when (not (null (rau--window-wl-parent-wl window-wl)))
+      (ewc-object-tag (rau--state-client rau--state)
+                      window-wl rau--tag-floating))
     (ewc-object-tag (rau--state-client rau--state)
                     window-wl rau--tag-external)
     (unless (rau--extwin-wl-buffer window-wl)
@@ -1056,7 +1059,7 @@ outputframe or external window."
     (when-let* ((parent-wl (ewc-object-get client object)))
       (setf (rau--window-parent-wl window-wl) parent-wl)
       (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
-        (setf (rau--extwin-wl-floating window-wl) t)))))
+        (ewc-object-tag client rau--tag-floating)))))
 
 (defun rau--on-river-window-v1-fullscreen-requested (window-wl args)
   (when (ewc-object-tagged-p window-wl rau--tag-external)
@@ -1195,7 +1198,7 @@ outputframe or external window."
 (defun rau--reconcile-windows ()
   "Close killed windows and propose dimensions for active windows."
   (rau--do rau--tag-external window-wl rau--state
-    (if (rau--extwin-wl-floating window-wl)
+    (if (ewc-object-tagged-p window-wl rau--tag-floating)
         (rau--reconcile-window-floating window-wl)
       (rau--reconcile-window-tiled window-wl))))
 
@@ -1261,7 +1264,7 @@ outputframe or external window."
 (defun rau--render-windows ()
   "Run the render-sequence reconciliation for windows."
   (rau--do rau--tag-external window-wl rau--state
-    (if (rau--extwin-wl-floating window-wl)
+    (if (ewc-object-tagged-p window-wl rau--tag-floating)
         (rau--render-window-floating window-wl)
       (rau--render-window-tiled window-wl))))
 
