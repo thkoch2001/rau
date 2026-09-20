@@ -210,6 +210,10 @@ frame."
   (when-let* ((buffer (rau--extwin-wl-buffer window-wl)))
     (get-buffer-window buffer 'visible)))
 
+(defun rau--window-wl-edges (window-wl)
+  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl)))
+    (window-inside-absolute-pixel-edges emacs-window)))
+
 ;;; Emacs integration, interaction
 
 (defun rau--make-outputframe-parameters ()
@@ -1239,7 +1243,7 @@ outputframe or external window."
               (frame-node-id (ewc-object-id frame-node-wl))
               (emacs-window (rau--emacs-window-for-window-wl window-wl)))
         (pcase-let* ((`(,left ,top ,_right ,_bottom)
-                      (window-inside-absolute-pixel-edges emacs-window))
+                      (rau--window-wl-edges window-wl))
                      (position (rau--position-for-outputframe output-wl))
                      (dimensions (rau--window-wl-actual-dimensions window-wl))
                      (clip (or dimensions (rau--dimensions-for-emacs-window emacs-window))))
