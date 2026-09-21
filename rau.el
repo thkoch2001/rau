@@ -708,6 +708,12 @@ This function should be run from the `rau-ready-hook'."
   (let ((parsed-keys (rau--parse-keys keys)))
     (rau--bind-parsed-keys parsed-keys)))
 
+(defun rau--global-unset-key-if (key command)
+  "Unset KEY in the global map if it is currently bound to COMMAND."
+  (when-let* ((kbd-key (kbd key))
+              ((eq (lookup-key global-map kbd-key) command)))
+    (global-unset-key kbd-key)))
+
 ;;; Emacs handler functions for hooks
 
 (defun rau--focus-change-allowed-p ()
@@ -1281,6 +1287,12 @@ Call this function once when starting Emacs inside of river."
 
   (unless (eq window-system 'pgtk)
     (user-error "Rau requires a pgtk Emacs on Wayland"))
+
+  (unless confirm-kill-emacs
+    (setq confirm-kill-emacs #'yes-or-no-p))
+  (rau--global-unset-key-if "C-x C-c" 'save-buffers-kill-terminal)
+  (rau--global-unset-key-if "C-z" 'suspend-frame)
+  (rau--global-unset-key-if "C-x C-z" 'suspend-frame)
 
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
