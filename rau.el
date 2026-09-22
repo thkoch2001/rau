@@ -173,10 +173,11 @@ WINDOW-WL."
               ((frame-live-p emacs-frame)))
     (frame-parameter emacs-frame 'rau-frame-wl)))
 
-(defun rau--dimensions-for-emacs-window (emacs-window)
-  (pcase-let ((`(,left ,top ,right ,bottom)
-               (window-inside-absolute-pixel-edges emacs-window)))
-    `(,(- right left) . ,(- bottom top))))
+(defun rau--dimensions-for-window-wl (window-wl)
+  (pcase-let (((and edges `(,left ,top ,right ,bottom))
+               (rau--window-wl-edges window-wl)))
+    (when (and edges (all 'integerp edges))
+      `(,(- right left) . ,(- bottom top)))))
 
 (defun rau--dimensions-for-outputframe (output-wl)
   "Get dimensions from output-wl or its ls-output-wl non-exclusive-area."
@@ -807,8 +808,7 @@ switching fullscreen between windows, call this before
 `rau--fullscreen-enter'."
   (rau--manage-enqueue window-wl 'inform-not-fullscreen)
   (rau--manage-enqueue window-wl 'exit-fullscreen)
-  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
-              (dimensions (rau--dimensions-for-emacs-window emacs-window)))
+  (when-let* ((dimensions (rau--dimensions-for-window-wl window-wl)))
     (rau--manage-enqueue-nocache window-wl 'propose-dimensions
                                  `((width . ,(car dimensions))
                                    (height . ,(cdr dimensions)))))
@@ -1189,11 +1189,10 @@ outputframe or external window."
   (rau--request window-wl 'use-csd))
 
 (defun rau--reconcile-window-tiled (window-wl)
-  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
-              (dimensions (rau--dimensions-for-emacs-window emacs-window)))
-    (rau--request window-wl
-                  'set-tiled
-                  `((edges . ,rau--edges-all)))
+  (rau--request window-wl
+                'set-tiled
+                `((edges . ,rau--edges-all)))
+  (when-let* ((dimensions (rau--dimensions-for-window-wl window-wl)))
     (rau--request window-wl
                   'propose-dimensions
                   `((width . ,(car dimensions))
@@ -1240,13 +1239,12 @@ outputframe or external window."
     (if-let* ((frame-wl (rau--frame-wl-for-extwin-wl window-wl))
               (output-wl (rau--outframe-wl-output-wl frame-wl))
               (frame-node-wl (rau--window-wl-node-wl frame-wl))
-              (frame-node-id (ewc-object-id frame-node-wl))
-              (emacs-window (rau--emacs-window-for-window-wl window-wl)))
+              (frame-node-id (ewc-object-id frame-node-wl)))
         (pcase-let* ((`(,left ,top ,_right ,_bottom)
                       (rau--window-wl-edges window-wl))
                      (position (rau--position-for-outputframe output-wl))
                      (dimensions (rau--window-wl-actual-dimensions window-wl))
-                     (clip (or dimensions (rau--dimensions-for-emacs-window emacs-window))))
+                     (clip (or dimensions (rau--dimensions-for-window-wl window-wl))))
           (rau--request window-wl 'show)
 
           (rau--request node-wl 'set-position
