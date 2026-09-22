@@ -201,7 +201,9 @@ For a window with a rau-mode buffer return window-wl pointing to an
 external window. For all other buffers return the window-wl of the emacs
 frame."
   (if-let* ((buffer (window-buffer emacs-window))
-            (window-wl (buffer-local-value 'rau--window-wl buffer)))
+            (window-id (buffer-local-value 'rau--window-id buffer))
+            (client (rau--state-client rau--state))
+            (window-wl (ewc-object-get client window-id)))
       window-wl
     (let ((emacs-frame (window-frame emacs-window)))
       (frame-parameter emacs-frame 'rau-frame-wl))))
@@ -235,8 +237,8 @@ event handler."
       title-trunc)))
 
 ;; Major mode for rau-managed buffers
-(defvar-local rau--window-wl nil
-  "Window object for this `rau-mode' buffer.")
+(defvar-local rau--window-id nil
+  "Wayland window id for this `rau-mode' buffer.")
 
 (define-derived-mode rau-mode special-mode "Rau"
   "Major mode for buffers representing windows managed by rau."
@@ -343,11 +345,13 @@ See also `rau-on-wl-display-delete-id'."
   (ewc-object-remove (rau--state-client rau--state) object-wl))
 
 (defun rau--request (object-wl request &optional arguments)
-  "Send REQUEST on OBJECT-WL using the current rau Wayland client."
-  (ewc-request (rau--state-client rau--state)
-               object-wl
-               request
-               arguments))
+  "Send REQUEST on OBJECT-WL (or id) using the current rau Wayland client."
+  (let* ((client (rau--state-client rau--state))
+         (o
+          (if (ewc-object-p object-wl)
+              object-wl
+            (ewc-object-get client object-wl))))
+    (ewc-request client o request arguments)))
 
 ;;; task queue
 (defun rau--tasks-execute ()
@@ -414,12 +418,13 @@ WINDOW-WL."
 
 (defun rau--task-setup-new-external-window (window-wl)
   "Create Rau mode buffer for WINDOW-WL."
-  (let ((buffer (get-buffer-create (make-temp-name "rau-external-"))))
+  (let ((buffer (get-buffer-create (make-temp-name "rau-external-")))
+        (window-id (ewc-object-id window-wl)))
     (with-current-buffer buffer
       (rau-mode)
-      (setq-local rau--window-wl window-wl)
+      (setq-local rau--window-id window-id)
       (unless (display-buffer buffer)
-        (error "display-buffer failed for window-wl %S buffer %S." window-wl buffer)))
+        (error "display-buffer failed for window %d buffer %S." window-id buffer)))
     (setf (rau--extwin-wl-buffer window-wl) buffer)))
 
 (defun rau--task-consume-key-event (event needs-focus)
@@ -446,6 +451,7 @@ WINDOW-WL."
                 (rau--request wm-wl 'manage-dirty))))))))
 
 (defun rau--manage-enqueue (ewc-object request &optional args)
+  "Enqueue REQUEST on EWC-OBJECT (or id) with ARGS for next manage cycle."
   (push `(,ewc-object ,request ,args) (rau--state-manage-queue rau--state))
   (rau--mark-manage-dirty))
 
@@ -741,18 +747,17 @@ post-command-hook in the enqueued command of the pressed event handler."
              (zerop (recursion-depth)))
     (rau--log "recover focus. removing post-command-hook.")
     (remove-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)
-    (when-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
-                (window-id (ewc-object-id window-wl))
+    (when-let* ((window-id (buffer-local-value 'rau--window-id (current-buffer)))
                 ((/= window-id (rau--state-focus-last-id rau--state))))
       (rau--log "recover focus. focusing window-id=%d title=%s"
                window-id
-               (rau--window-wl-title window-wl))
-      (rau--request-focus window-wl))))
+               (buffer-name))
+      (rau--request-focus-by-id window-id))))
 
 (defun rau--buffer-killed ()
   "Request closing of the associated Wayland window when a rau buffer is killed."
-  (when rau--window-wl
-    (rau--manage-enqueue rau--window-wl 'close)
+  (when rau--window-id
+    (rau--manage-enqueue rau--window-id 'close)
     (rau--mark-manage-dirty)
     nil))
 
@@ -818,7 +823,8 @@ switching fullscreen between windows, call this before
 (defun rau-toggle-fullscreen ()
   "Toggle fullscreen for the currently focused external window."
   (interactive)
-  (if-let* ((window-wl (buffer-local-value 'rau--window-wl (current-buffer)))
+  (if-let* ((window-id (buffer-local-value 'rau--window-id (current-buffer)))
+            (window-wl (ewc-object-get (rau--state-client rau--state) window-id))
             (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
             (output-wl (rau--outframe-wl-output-wl frame-wl)))
       (let ((current-fs (rau--output-wl-fullscreen-window-wl output-wl)))
