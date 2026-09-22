@@ -342,13 +342,12 @@ STATE is evaluated once and bound to that same name within BODY."
 See also `rau-on-wl-display-delete-id'."
   (ewc-object-remove (rau--state-client rau--state) object-wl))
 
-(defun rau--request (object-wl request &optional arguments nocache)
+(defun rau--request (object-wl request &optional arguments)
   "Send REQUEST on OBJECT-WL using the current rau Wayland client."
   (ewc-request (rau--state-client rau--state)
                object-wl
                request
-               arguments
-               nocache))
+               arguments))
 
 ;;; task queue
 (defun rau--tasks-execute ()
@@ -447,13 +446,8 @@ WINDOW-WL."
                 (rau--request wm-wl 'manage-dirty))))))))
 
 (defun rau--manage-enqueue (ewc-object request &optional args)
-  (push `(,ewc-object ,request ,args nil) (rau--state-manage-queue rau--state))
+  (push `(,ewc-object ,request ,args) (rau--state-manage-queue rau--state))
   (rau--mark-manage-dirty))
-
-(defun rau--manage-enqueue-nocache (ewc-object request &optional args)
-  (push `(,ewc-object ,request ,args t) (rau--state-manage-queue rau--state))
-  (rau--mark-manage-dirty))
-
 
 ;;; Focus
 
@@ -472,7 +466,7 @@ situations where focus changed without us knowing (session-lock, layer surface).
               (rau--window-wl-title target-wl))
 
     ;; Queue the actual Wayland focus request
-    (rau--manage-enqueue-nocache seat-wl 'focus-window `((window . ,target-id)))
+    (rau--manage-enqueue seat-wl 'focus-window `((window . ,target-id)))
     (setf (rau--state-focus-last-id rau--state) target-id)
 
     ;; Queue the layer-shell default output update
@@ -809,16 +803,16 @@ switching fullscreen between windows, call this before
   (rau--manage-enqueue window-wl 'inform-not-fullscreen)
   (rau--manage-enqueue window-wl 'exit-fullscreen)
   (when-let* ((dimensions (rau--dimensions-for-window-wl window-wl)))
-    (rau--manage-enqueue-nocache window-wl 'propose-dimensions
-                                 `((width . ,(car dimensions))
-                                   (height . ,(cdr dimensions)))))
+    (rau--manage-enqueue window-wl 'propose-dimensions
+                         `((width . ,(car dimensions))
+                           (height . ,(cdr dimensions)))))
   (setf (rau--output-wl-fullscreen-window-wl output-wl) nil))
 
 (defun rau--fullscreen-enter (window-wl output-wl)
   "Enter fullscreen for WINDOW-WL on OUTPUT-WL."
   (rau--manage-enqueue window-wl 'inform-fullscreen)
-  (rau--manage-enqueue-nocache window-wl 'fullscreen
-                               `((output . ,(ewc-object-id output-wl))))
+  (rau--manage-enqueue window-wl 'fullscreen
+                       `((output . ,(ewc-object-id output-wl))))
   (setf (rau--output-wl-fullscreen-window-wl output-wl) window-wl))
 
 (defun rau-toggle-fullscreen ()
@@ -1212,7 +1206,7 @@ outputframe or external window."
    (let ((manage-requests (nreverse (rau--state-manage-queue rau--state))))
      (setf (rau--state-manage-queue rau--state) nil)
      (dolist (request manage-requests)
-       (rau--request (nth 0 request) (nth 1 request) (nth 2 request) (nth 3 request))))))
+       (rau--request (nth 0 request) (nth 1 request) (nth 2 request))))))
 
 ;;; Render cycle
 

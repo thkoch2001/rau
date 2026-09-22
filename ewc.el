@@ -171,7 +171,6 @@ The DATA slot is free to use for arbitrary data about this object."
   (events nil :type list :read-only t)
   (requests nil :type list :read-only t)
   (listeners nil :type vector :read-only t)
-  (request-cache nil :type vector :read-only t)
   (data nil)
   (tags nil :type list))
 
@@ -302,7 +301,6 @@ Returns the newly created object."
                           :id id
                           :events events
                           :requests requests
-                          :request-cache (make-vector (length requests) nil)
                           :listeners (cdr (assq interface (ewc-client-listeners client))))))
       (puthash id object (ewc-client-table client))
       (ewc-object-tag client object interface)
@@ -505,11 +503,10 @@ The network process is set in the CONNECTION slot of CLIENT."
                                   (message "ewc: connection sentinel: %s" msg)))))
     (setf (ewc-client-connection client) connection)))
 
-(defun ewc-request (client object request &optional arguments nocache)
+(defun ewc-request (client object request &optional arguments)
   "Issue REQUEST with ARGUMENTS on OBJECT using CLIENT."
   (let* ((connection (ewc-client-connection client))
          (request-def (assq request (ewc-object-requests object)))
-         (cache (ewc-object-request-cache object))
          (id (ewc-object-id object)))
     (unless (and connection (process-live-p connection))
       (error "ewc: No live Wayland connection for request %S" request))
@@ -517,20 +514,15 @@ The network process is set in the CONNECTION slot of CLIENT."
       (error "ewc: Interface %s has no request %S"
              (ewc-object-interface object) request))
     (let ((opcode (cl-second request-def)))
-      (when (or nocache
-                (null arguments)
-                (not (equal arguments (aref cache opcode))))
-        (ewc--log "ewc: rq %s::%s(%s)"
-                 (ewc-object-interface object)
-                 request
-                 (mapconcat (lambda (arg)
-                              (format "%s=%S" (car arg) (cdr arg)))
-                            arguments
-                            " "))
-        (process-send-string connection
-                             (ewc--pack id request-def arguments))
-        (when arguments
-          (aset cache opcode arguments))))))
+      (ewc--log "ewc: rq %s::%s(%s)"
+                (ewc-object-interface object)
+                request
+                (mapconcat (lambda (arg)
+                             (format "%s=%S" (car arg) (cdr arg)))
+                           arguments
+                           " "))
+      (process-send-string connection
+                           (ewc--pack id request-def arguments)))))
 
 (defun ewc-start (interfaces listener-prefix)
   "Setup ewc-client, send get-registry request and return the client.
