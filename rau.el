@@ -202,18 +202,16 @@ WINDOW-WL."
       non-excl-position
     (rau--output-wl-position output-wl)))
 
-(defun rau--window-wl-for-emacs-window (emacs-window)
+(defun rau--window-id-for-emacs-window (emacs-window)
   "Return window-wl for any EMACS-WINDOW rau-mode or not.
 For a window with a rau-mode buffer return window-wl pointing to an
 external window. For all other buffers return the window-wl of the emacs
 frame."
   (if-let* ((buffer (window-buffer emacs-window))
-            (window-id (buffer-local-value 'rau--window-id buffer))
-            (client (rau--state-client rau--state))
-            (window-wl (ewc-object-get client window-id)))
-      window-wl
+            (window-id (buffer-local-value 'rau--window-id buffer)))
+      window-id
     (let ((emacs-frame (window-frame emacs-window)))
-      (frame-parameter emacs-frame 'rau-frame-wl))))
+      (frame-parameter emacs-frame 'rau--window-id))))
 
 (defun rau--emacs-window-for-window-wl (window-wl)
   "Return Emacs window associated with WINDOW-WL."
@@ -730,10 +728,9 @@ This function should be run from the `rau-ready-hook'."
   "Reconcile Wayland focus with the selected window."
   (rau--log "update-focus-request %S" args)
   (when-let* (((rau--focus-change-allowed-p))
-              (state rau--state)
               (emacs-window (selected-window))
-              (target-wl (rau--window-wl-for-emacs-window emacs-window)))
-    (rau--request-focus target-wl)))
+              (target-id (rau--window-id-for-emacs-window emacs-window)))
+    (rau--request-focus-by-id target-id)))
 
 (defun rau--recover-focus-after-binding-pressed ()
   "Give focus back to external window after it was given to Emacs to handle
