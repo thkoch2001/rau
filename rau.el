@@ -403,11 +403,11 @@ used in event listeners."
              (cl-loop for f being the frames
                       for name = (frame-parameter f 'name)
                       for is_rau_frame = (string-prefix-p "rau-frame-" name)
-                      for is_assigned = (frame-parameter f 'rau-output-wl)
+                      for is_assigned = (frame-parameter f 'rau--output-id)
                       if (and is_rau_frame (not is_assigned)) return f)
              (make-frame (rau--make-outputframe-parameters))))
            (frame-id (frame-id emacs-frame)))
-      (set-frame-parameter emacs-frame 'rau-output-wl output-wl)
+      (set-frame-parameter emacs-frame 'rau--output-id (ewc-object-id output-wl))
       (if frame-id
           (setf (rau--output-wl-frame-id output-wl) (frame-id emacs-frame))
         (message "frame without frame-id!"))
@@ -1033,7 +1033,8 @@ point where also the destroy request is sent."
         (let ((window-id (ewc-object-id window-wl)))
           (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl)
           (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau--window-id window-id)
-          (if-let* ((output-wl (frame-parameter emacs-frame 'rau-output-wl)))
+          (if-let* ((output-id (frame-parameter emacs-frame 'rau--output-id))
+                    (output-wl (ewc-object-get (rau--state-client rau--state) output-id)))
               (setf (rau--output-wl-frame-wl output-wl) window-wl
                     (rau--outframe-wl-output-wl window-wl) output-wl)
             (rau--log "Emacs frame %s has not yet an output-wl assigned." title)))
