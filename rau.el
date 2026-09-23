@@ -77,8 +77,7 @@ Wayland objects have been registered."
   "Tag for `river-window-v1' objects that are floating.")
 
 (cl-defstruct (rau--window (:constructor rau--window-make))
-  "Common state shared by windows and frames.
-Not instantiated directly; windows and frames include it."
+  "State for a River window."
   actual-dimensions
   app-id
   (dimensions-hint-max '(0 . 0))
@@ -91,16 +90,7 @@ Not instantiated directly; windows and frames include it."
   (node-wl nil :type ewc-object)
   parent-wl
   pid
-  role-data
   title)
-
-(cl-defstruct (rau--external (:constructor rau--external-make))
-  "State for a regular external window."
-  buffer)
-
-(cl-defstruct (rau--outputframe (:constructor rau--outputframe-make))
-  "State for an Emacs frame managed by rau."
-  (output-wl nil :type ewc-object :documentation "displaying this frame"))
 
 (cl-defstruct (rau--seat (:constructor rau--seat-make))
   "State for a River seat."
@@ -141,32 +131,6 @@ Not instantiated directly; windows and frames include it."
 (ewc-define-data-accessors rau--window)
 (ewc-define-data-accessors rau--seat)
 (ewc-define-data-accessors rau--binding)
-
-(defmacro rau--define-window-role-accessors (role-struct-type prefix)
-  "Define two-level accessors named PREFIX-SLOT for slots of
-ROLE-STRUCT-TYPE via ewc-object's `data' and rau--window's `role-data'."
-  (declare (indent 1))
-  (let* ((struct-str (symbol-name role-struct-type))
-         (slot-names (mapcar #'car (cdr (cl-struct-slot-info role-struct-type))))
-         (forms nil))
-    (dolist (slot slot-names)
-      (let ((accessor-name (intern (format "%s%s" prefix slot)))
-            (role-struct-accessor (intern (format "%s-%s" struct-str slot))))
-        (push `(defsubst ,accessor-name (window-wl)
-                 ,(format "Access `%s' of %s stored in WINDOW-WL's role-data."
-                          slot role-struct-type)
-                 (when-let* ((data (ewc-object-data window-wl))
-                             (role-data (rau--window-role-data data)))
-                   (,role-struct-accessor role-data)))
-              forms)
-        (push `(gv-define-setter ,accessor-name (val window-wl)
-                 `(let* ((data (ewc-object-data ,window-wl))
-                         (role-data (rau--window-role-data data)))
-                    (setf (,',role-struct-accessor role-data) ,val)))
-              forms)))
-    `(progn ,@(nreverse forms))))
-
-(rau--define-window-role-accessors rau--external "rau--extwin-wl-")
 
 ;;; Data access helpers
 
@@ -220,9 +184,14 @@ frame."
     (let ((emacs-frame (window-frame emacs-window)))
       (frame-parameter emacs-frame 'rau--window-id))))
 
-(defun rau--emacs-window-for-window-wl (window-wl)
+(defun rau--buffer-for-window-id (window-id)
+  (cl-find window-id
+           (buffer-list)
+           :key (lambda (b) (buffer-local-value 'rau--window-id b))))
+
+(defun rau--emacs-window-for-window-id (window-id)
   "Return Emacs window associated with WINDOW-WL."
-  (when-let* ((buffer (rau--extwin-wl-buffer window-wl)))
+  (when-let* ((buffer (rau--buffer-for-window-id window-id)))
     (get-buffer-window buffer 'visible)))
 
 ;;; Emacs integration, interaction
@@ -410,11 +379,12 @@ used in event listeners."
   (when-let* ((emacs-frame (frame-by-id frame-id)))
     (delete-frame emacs-frame)))
 
-(defun rau--task-kill-buffer (buffer)
+(defun rau--task-kill-buffer (window-id)
   "Remove kill inhibiting hook and kill."
-  (with-current-buffer buffer
-    (remove-hook 'kill-buffer-query-functions #'rau--buffer-killed t))
-  (kill-buffer buffer))
+  (when-let* ((buffer (rau--buffer-for-window-id window-id)))
+    (with-current-buffer buffer
+      (remove-hook 'kill-buffer-query-functions #'rau--buffer-killed t))
+    (kill-buffer buffer)))
 
 (defun rau--task-link-emacs-frame-to-window (title window-id)
   (let ((emacs-frame
@@ -427,26 +397,26 @@ used in event listeners."
     (set-frame-parameter emacs-frame 'rau--window-id window-id)
     (rau--send-client-state)))
 
-(defun rau--task-rename-buffer (window-wl)
+(defun rau--task-minimize-window (window-id)
+  (when-let* ((buffer (rau--buffer-for-window-id window-id)))
+    (bury-buffer buffer)))
+
+(defun rau--task-rename-buffer (window-id name)
   "Rename buffer for external window with data taken from
 WINDOW-WL."
-  (when-let* ((buffer (rau--extwin-wl-buffer window-wl))
-              (app-id (rau--window-wl-app-id window-wl))
-              (title (rau--window-wl-title window-wl))
-              (name (rau--make-buffer-name app-id title)))
+  (when-let* ((buffer (rau--buffer-for-window-id window-id)))
     (with-current-buffer buffer
       (rename-buffer name t))))
 
-(defun rau--task-setup-new-external-window (window-wl)
+(defun rau--task-setup-new-external-window (window-id)
   "Create Rau mode buffer for WINDOW-WL."
   (let ((buffer (get-buffer-create (make-temp-name "rau-external-")))
-        (window-id (ewc-object-id window-wl)))
+        (window-wl (ewc-object-get (rau--state-client rau--state) window-id)))
     (with-current-buffer buffer
       (rau-mode)
       (setq-local rau--window-id window-id)
       (unless (display-buffer buffer)
-        (error "display-buffer failed for window %d buffer %S." window-id buffer)))
-    (setf (rau--extwin-wl-buffer window-wl) buffer)))
+        (error "display-buffer failed for window %d buffer %S." window-id buffer)))))
 
 (defun rau--task-consume-key-event (event needs-focus)
   "Forward EVENT to emacs and setup to recover focus if NEEDS-FOCUS."
@@ -506,7 +476,7 @@ situations where focus changed without us knowing (session-lock, layer surface).
 
     ;; Let Emacs select the underlying emacs-window for the external window
     (when-let* (((ewc-object-tagged-p target-wl rau--tag-external))
-                (emacs-window (rau--emacs-window-for-window-wl target-wl)))
+                (emacs-window (rau--emacs-window-for-window-id target-id)))
       (select-window emacs-window 'norecord))))
 
 (defun rau--request-focus-by-id (&optional target-id force)
@@ -993,9 +963,8 @@ point where also the destroy request is sent."
 
 ;;;; river-window-v1 listeners
 (defun rau--on-river-window-v1-closed (window-wl _)
-  (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-              (buffer (rau--extwin-wl-buffer window-wl)))
-    (rau--tasks-enqueue #'rau--task-kill-buffer buffer))
+  (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
+    (rau--tasks-enqueue #'rau--task-kill-buffer (ewc-object-id window-wl)))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (rau--tasks-enqueue #'rau--request node-wl 'destroy))
   (rau--tasks-enqueue #'rau--request window-wl 'destroy)
@@ -1024,7 +993,6 @@ point where also the destroy request is sent."
 (defun rau--maybe-new-outputframe-window (window-wl title)
   (unless (ewc-object-tagged-p window-wl rau--tag-outputframe)
     (rau--log "Discovered new Emacs frame by title: %s" title)
-    (setf (rau--window-wl-role-data window-wl) (rau--outputframe-make))
     (ewc-object-tag (rau--state-client rau--state)
                     window-wl rau--tag-outputframe)
     (rau--manage-enqueue window-wl 'inform-maximized)
@@ -1039,14 +1007,12 @@ point where also the destroy request is sent."
 (defun rau--maybe-new-external-window (window-wl title)
   (unless (ewc-object-tagged-p window-wl rau--tag-external)
     (rau--log "Discovered new regular external window with title %s." title)
-    (setf (rau--window-wl-role-data window-wl) (rau--external-make))
     (when (not (null (rau--window-wl-parent-wl window-wl)))
       (ewc-object-tag (rau--state-client rau--state)
                       window-wl rau--tag-floating))
     (ewc-object-tag (rau--state-client rau--state)
                     window-wl rau--tag-external)
-    (unless (rau--extwin-wl-buffer window-wl)
-      (rau--tasks-enqueue #'rau--task-setup-new-external-window window-wl))))
+    (rau--tasks-enqueue #'rau--task-setup-new-external-window (ewc-object-id window-wl))))
 
 (defun rau--on-river-window-v1-title (window-wl args)
   "Handle title event for WINDOW-WL.
@@ -1061,8 +1027,13 @@ outputframe or external window."
       (rau--maybe-new-external-window window-wl title))
 
     ;; Handle title updates for already categorized objects
-    (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
-      (rau--tasks-enqueue #'rau--task-rename-buffer window-wl))))
+    (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
+                (name (rau--make-buffer-name
+                       (rau--window-wl-app-id window-wl)
+                       title)))
+      (rau--tasks-enqueue #'rau--task-rename-buffer
+                          (ewc-object-id window-wl)
+                          name))))
 
 (defun rau--on-river-window-v1-parent (window-wl args)
   (pcase-let* (((map object) args)
@@ -1097,9 +1068,8 @@ outputframe or external window."
       (rau--fullscreen-exit window-wl output-wl))))
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
-  (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
-              (buffer (rau--extwin-wl-buffer window-wl)))
-    (rau--tasks-enqueue #'bury-buffer buffer)))
+  (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
+    (rau--tasks-enqueue #'rau--task-minimize-window (ewc-object-id window-wl))))
 
 (defun rau--on-river-window-v1-unreliable-pid (window-wl args)
   (pcase-let* (((map unreliable-pid) args))
