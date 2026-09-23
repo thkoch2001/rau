@@ -82,6 +82,8 @@ Not instantiated directly; windows and frames include it."
   app-id
   (dimensions-hint-max '(0 . 0))
   (dimensions-hint-min '(0 . 0))
+  edges
+  frame-id ;; emacs frame-id only for external, tiled windows
   (node-wl nil :type ewc-object)
   parent-wl
   pid
@@ -212,10 +214,6 @@ frame."
   "Return Emacs window associated with WINDOW-WL."
   (when-let* ((buffer (rau--extwin-wl-buffer window-wl)))
     (get-buffer-window buffer 'visible)))
-
-(defun rau--window-wl-edges (window-wl)
-  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl)))
-    (window-inside-absolute-pixel-edges emacs-window)))
 
 ;;; Emacs integration, interaction
 
@@ -1270,6 +1268,54 @@ outputframe or external window."
         (rau--render-window-floating window-wl)
       (rau--render-window-tiled window-wl))))
 
+(defun rau--update-window-states (state)
+  ;; TODO here we could build a visibility diff to send show and hide only when necessary
+  (rau--do rau--tag-external window-wl rau--state
+    (setf (rau--window-wl-edges window-wl) nil
+          (rau--window-wl-frame-id window-wl) nil))
+  (let ((client (rau--state-client rau--state)))
+    (dolist (s state)
+      (when-let* ((window-id (alist-get 'window-id s))
+                  (window-wl (ewc-object-get client window-id)))
+        (setf (rau--window-wl-edges window-wl) (alist-get 'edges s)
+              (rau--window-wl-frame-id window-wl) (alist-get 'frame-id s))))))
+  ;; TODO mark-manage-dirty
+
+;;; Emacs client side code
+(defun rau--window-states ()
+  (sort
+   (cl-loop for f being the frames
+            ;; TODO add an if clause to limit to output frames
+            as frame-id = (frame-id f)
+            append
+            (cl-loop
+             for w being the windows of f
+             as buffer = (window-buffer w)
+             as window-id = (buffer-local-value 'rau--window-id buffer)
+             if window-id
+             collect `((window-id . ,window-id)
+                       (frame-id . ,frame-id)
+                       ;; (name . ,(buffer-name buffer)) ; only for debugging
+                       (edges . ,(window-inside-absolute-pixel-edges w)))))
+   :key #'cdar))
+
+(defun rau--send-window-states ()
+  (let ((new-state (rau--window-states)))
+    ;; TODO: only send when not equal last state. Also send nil new-state if different than last state!
+    (rau--update-window-states new-state)))
+
+(defun rau--window-state-change-handler ()
+  (rau--send-window-states)
+  (rau--update-focus-request)
+
+  ;; Schedule a river manage cycle and thus a reconciliation cycle.
+  ;; This is necessary for external windows to resize when the minibuffer
+  ;; expands.  This needs to be added to the global hook since local hooks
+  ;; don't get called for windows that disappear.  Also
+  ;; window-size-change-functions does not get called when minibuffer expands
+  ;; and thus minibuffer ends up below external window.
+  (rau--mark-manage-dirty))
+
 ;;; Startup
 ;; NOTE: No need for rau-disable since this Emacs process is serving as a
 ;; Window Manager and disabling rau while keeping the Emacs process running
@@ -1308,14 +1354,7 @@ Call this function once when starting Emacs inside of river."
          (client (ewc-start interfaces "rau--on-")))
     (setq rau--state (rau--state-make :client client)))
 
-  ;; Layout signals
-  (add-hook 'window-configuration-change-hook #'rau--window-configuration-change-handler)
-
-  ;; Focus signals
-  (add-hook 'window-selection-change-functions #'rau--update-focus-request)
-  (add-hook 'window-buffer-change-functions    #'rau--update-focus-request)
-  (add-hook 'minibuffer-setup-hook             #'rau--update-focus-request)
-  (add-hook 'minibuffer-exit-hook              #'rau--update-focus-request))
+  (add-hook 'window-state-change-hook #'rau--window-state-change-handler))
 
 ;;; Hacks to avoid rau to freeze, TODO find an alternative
 
