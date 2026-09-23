@@ -173,10 +173,12 @@ ROLE-STRUCT-TYPE via ewc-object's `data' and rau--window's `role-data'."
 (defun rau--frame-wl-for-extwin-wl (window-wl)
   "Return the Emacs outputframe window-wl displaying external
 WINDOW-WL."
-  (when-let* ((emacs-window (rau--emacs-window-for-window-wl window-wl))
-              (emacs-frame (window-frame emacs-window))
-              ((frame-live-p emacs-frame)))
-    (frame-parameter emacs-frame 'rau-frame-wl)))
+  (when-let* ((client (rau--state-client rau--state))
+              (outputframes (ewc-objects client rau--tag-outputframe))
+              (frame-id (rau--window-wl-frame-id window-wl)))
+    (cl-loop for frame-wl in outputframes
+             if (eq frame-id (rau--window-wl-frame-id frame-wl))
+             return frame-wl)))
 
 (defun rau--dimensions-for-window-wl (window-wl)
   (pcase-let (((and edges `(,left ,top ,right ,bottom))
