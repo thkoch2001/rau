@@ -82,8 +82,11 @@ Not instantiated directly; windows and frames include it."
   app-id
   (dimensions-hint-max '(0 . 0))
   (dimensions-hint-min '(0 . 0))
+  ;; edges only for external, tiled windows
   edges
-  frame-id ;; emacs frame-id only for external, tiled windows
+  ;; emacs frame-id, either the own for emacs output frame or of the
+  ;; containing frame for tiled external window
+  frame-id
   (node-wl nil :type ewc-object)
   parent-wl
   pid
@@ -1019,8 +1022,9 @@ point where also the destroy request is sent."
                (cl-find title (frame-list)
                         :test #'equal
                         :key (lambda (f) (frame-parameter f 'name)))))
-        (progn
+        (let ((window-id (ewc-object-id window-wl)))
           (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl)
+          (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau--window-id window-id)
           (if-let* ((output-wl (frame-parameter emacs-frame 'rau-output-wl)))
               (setf (rau--output-wl-frame-wl output-wl) window-wl
                     (rau--outframe-wl-output-wl window-wl) output-wl)
@@ -1285,8 +1289,13 @@ outputframe or external window."
 (defun rau--window-states ()
   (sort
    (cl-loop for f being the frames
-            ;; TODO add an if clause to limit to output frames
+            ;; TODO only collect frame info on a frames dirty flag
             as frame-id = (frame-id f)
+            as window-id = (frame-parameter f 'rau--window-id)
+            if window-id
+            collect `((window-id . ,window-id)
+                      (frame-id . ,frame-id)
+                      (edges . nil))
             append
             (cl-loop
              for w being the windows of f
