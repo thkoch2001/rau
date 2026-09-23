@@ -167,9 +167,15 @@ ROLE-STRUCT-TYPE via ewc-object's `data' and rau--window's `role-data'."
     `(progn ,@(nreverse forms))))
 
 (rau--define-window-role-accessors rau--external "rau--extwin-wl-")
-(rau--define-window-role-accessors rau--outputframe "rau--outframe-wl-")
 
 ;;; Data access helpers
+
+(defun rau--outframe-wl-output-wl (frame-wl)
+  (when-let* ((frame-id (rau--window-wl-frame-id frame-wl))
+              (client (rau--state-client rau--state)))
+    (cl-find frame-id
+             (ewc-objects client 'river-output-v1)
+             :key #'rau--output-wl-frame-id)))
 
 (defun rau--frame-wl-for-extwin-wl (window-wl)
   "Return the Emacs outputframe window-wl displaying external
@@ -384,8 +390,23 @@ used in event listeners."
   (push `(,fn . ,args) (rau--state-task-queue rau--state))
   (rau--tasks-schedule-execution))
 
+(defun rau--task-assign-emacs-frame (output-id)
+  "Find initial frame or create one and set OUTPUT-ID in frame-parameter."
+  (let ((emacs-frame
+         (or
+          ;; search the initial frame
+          (cl-loop for f in (frame-list)
+                   for name = (frame-parameter f 'name)
+                   for is_rau_frame = (string-prefix-p "rau-frame-" name)
+                   for is_assigned = (frame-parameter f 'rau--output-id)
+                   if (and is_rau_frame (not is_assigned)) return f)
+          (make-frame (rau--make-outputframe-parameters)))))
+    (set-frame-parameter emacs-frame 'rau--output-id output-id))
+  (rau--send-client-state))
+
 (defun rau--task-delete-frame (frame-id)
   "Delete frame by FRAME-ID."
+  (rau--log "task delete frame with frame-id %S" frame-id)
   (when-let* ((emacs-frame (frame-by-id frame-id)))
     (delete-frame emacs-frame)))
 
@@ -395,26 +416,16 @@ used in event listeners."
     (remove-hook 'kill-buffer-query-functions #'rau--buffer-killed t))
   (kill-buffer buffer))
 
-(defun rau--task-link-output-to-emacs-frame (output-wl)
-  (unless (rau--output-wl-frame-id output-wl)
-    (let* ((emacs-frame
-            (or
-             ;; search the initial frame
-             (cl-loop for f being the frames
-                      for name = (frame-parameter f 'name)
-                      for is_rau_frame = (string-prefix-p "rau-frame-" name)
-                      for is_assigned = (frame-parameter f 'rau--output-id)
-                      if (and is_rau_frame (not is_assigned)) return f)
-             (make-frame (rau--make-outputframe-parameters))))
-           (frame-id (frame-id emacs-frame)))
-      (set-frame-parameter emacs-frame 'rau--output-id (ewc-object-id output-wl))
-      (if frame-id
-          (setf (rau--output-wl-frame-id output-wl) (frame-id emacs-frame))
-        (message "frame without frame-id!"))
-      ;; The title of the initial frame gets announced before the first output
-      (when-let* ((frame-wl (frame-parameter emacs-frame 'rau-frame-wl)))
-        (setf (rau--output-wl-frame-wl output-wl) frame-wl
-              (rau--outframe-wl-output-wl frame-wl) output-wl)))))
+(defun rau--task-link-emacs-frame-to-window (title window-id)
+  (let ((emacs-frame
+         (cl-find title (frame-list)
+                  :test #'equal
+                  :key (lambda (f) (frame-parameter f 'name)))))
+    (unless emacs-frame
+      (error "No emacs frame found for wayland window. id=%d title=%s." window-id title))
+
+    (set-frame-parameter emacs-frame 'rau--window-id window-id)
+    (rau--send-client-state)))
 
 (defun rau--task-rename-buffer (window-wl)
   "Rename buffer for external window with data taken from
@@ -967,8 +978,8 @@ point where also the destroy request is sent."
   (pcase-let* (((map id) args)
                (client (rau--state-client rau--state))
                (output-wl (ewc-object-add client 'river-output-v1 id)))
-    (setf (ewc-object-data output-wl)
-          (rau--output-make))
+    (setf (ewc-object-data output-wl) (rau--output-make))
+    (rau--tasks-enqueue #'rau--task-assign-emacs-frame id)
     (rau--ensure-ls-output output-wl)))
 
 (defun rau--on-river-window-manager-v1-seat (_wm-wl args)
@@ -989,11 +1000,6 @@ point where also the destroy request is sent."
     (rau--tasks-enqueue #'rau--request node-wl 'destroy))
   (rau--tasks-enqueue #'rau--request window-wl 'destroy)
   (rau--tasks-enqueue #'rau--remove window-wl)
-
-  (when-let* (((ewc-object-tagged-p window-wl rau--tag-outputframe))
-              (output-wl (rau--outframe-wl-output-wl window-wl)))
-    (setf (rau--outframe-wl-output-wl window-wl) nil
-          (rau--output-wl-frame-wl output-wl) nil))
 
   ;; Reset fullscreen on output if window was fullscreen.
   (when (ewc-object-tagged-p window-wl rau--tag-external)
@@ -1026,19 +1032,9 @@ point where also the destroy request is sent."
     (let ((node-wl (rau--window-wl-node-wl window-wl)))
       (rau--manage-enqueue node-wl 'place-bottom))
 
-    (if-let* ((emacs-frame
-               (cl-find title (frame-list)
-                        :test #'equal
-                        :key (lambda (f) (frame-parameter f 'name)))))
-        (let ((window-id (ewc-object-id window-wl)))
-          (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau-frame-wl window-wl)
-          (rau--tasks-enqueue #'set-frame-parameter emacs-frame 'rau--window-id window-id)
-          (if-let* ((output-id (frame-parameter emacs-frame 'rau--output-id))
-                    (output-wl (ewc-object-get (rau--state-client rau--state) output-id)))
-              (setf (rau--output-wl-frame-wl output-wl) window-wl
-                    (rau--outframe-wl-output-wl window-wl) output-wl)
-            (rau--log "Emacs frame %s has not yet an output-wl assigned." title)))
-      (error "No emacs frame found for wayland window with title %s." title))))
+    (rau--tasks-enqueue #'rau--task-link-emacs-frame-to-window
+                        title
+                        (ewc-object-id window-wl))))
 
 (defun rau--maybe-new-external-window (window-wl title)
   (unless (ewc-object-tagged-p window-wl rau--tag-external)
@@ -1083,13 +1079,10 @@ outputframe or external window."
                   ;; Find output for fullscreen window
                   ;; 1. optional event arg output
                   ;; 2. output showing window-wl
-                  ;; 3. output currently having focus
+                  ;; 3. TODO: output currently having focus
                   (or (ewc-object-get (rau--state-client rau--state) output)
                       (when-let*
-                          ((frame-wl
-                            (or
-                             (rau--frame-wl-for-extwin-wl window-wl)
-                             (frame-parameter (selected-frame) 'rau-frame-wl))))
+                          ((frame-wl (rau--frame-wl-for-extwin-wl window-wl)))
                         (rau--outframe-wl-output-wl frame-wl)))))
       (if (not output-wl)
           (message "Fullscreen requested, but no output found")
@@ -1116,11 +1109,8 @@ outputframe or external window."
 (defun rau--on-river-output-v1-removed (output-wl _)
   ;; TODO: check whether we lost focus
   (let ((client (rau--state-client rau--state)))
-    (when-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
-      (setf (rau--outframe-wl-output-wl frame-wl) nil
-            (rau--output-wl-frame-wl output-wl) nil)
-      (when-let* ((frame-id (rau--output-wl-frame-id output-wl)))
-        (rau--tasks-enqueue #'rau--task-delete-frame frame-id)))
+    (when-let* ((frame-id (rau--output-wl-frame-id output-wl)))
+      (rau--tasks-enqueue #'rau--task-delete-frame frame-id))
     ;; TODO: also enqueue the below three actions, look out for race conditions
     (when-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
       (rau--request ls-output-wl 'destroy))
@@ -1179,18 +1169,22 @@ outputframe or external window."
 
 (defun rau--reconcile-frames ()
   "Ensure each output gets one maximized Emacs frame."
-  (rau--do 'river-output-v1 output-wl rau--state
-    (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
-    (if-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
-        (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
-          (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
-          (rau--request frame-wl
-                        'propose-dimensions
-                        `((width . ,(car dimensions))
-                          (height . ,(cdr dimensions)))))
+  (let ((client (rau--state-client rau--state)))
+    (rau--do 'river-output-v1 output-wl rau--state
+      (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
+      (if-let* ((frame-id (rau--output-wl-frame-id output-wl))
+                (frame-wl (cl-find
+                           frame-id
+                           (ewc-objects client rau--tag-outputframe)
+                           :key #'rau--window-wl-frame-id)))
+          (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
+            (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
+            (rau--request frame-wl
+                          'propose-dimensions
+                          `((width . ,(car dimensions))
+                            (height . ,(cdr dimensions)))))
 
-      (rau--log "no frame found for output, request emacs-frame.")
-      (rau--tasks-enqueue #'rau--task-link-output-to-emacs-frame output-wl))))
+        (rau--log "no frame found for output, waiting for client state.")))))
 
 (defun rau--reconcile-window-floating (window-wl)
   (rau--request window-wl 'set-tiled '((edges . 0)))
@@ -1280,49 +1274,61 @@ outputframe or external window."
         (rau--render-window-floating window-wl)
       (rau--render-window-tiled window-wl))))
 
-(defun rau--update-window-states (state)
+(defun rau--update-client-state (state)
   ;; TODO here we could build a visibility diff to send show and hide only when necessary
   (rau--do rau--tag-external window-wl rau--state
     (setf (rau--window-wl-edges window-wl) nil
           (rau--window-wl-frame-id window-wl) nil))
-  (let ((client (rau--state-client rau--state)))
-    (dolist (s state)
-      (when-let* ((window-id (alist-get 'window-id s))
+  (let ((extwins (alist-get 'extwins state))
+        (outframes (alist-get 'outframes state))
+        (client (rau--state-client rau--state)))
+    (dolist (win extwins)
+      (when-let* ((window-id (alist-get 'window-id win))
                   (window-wl (ewc-object-get client window-id)))
-        (setf (rau--window-wl-edges window-wl) (alist-get 'edges s)
-              (rau--window-wl-frame-id window-wl) (alist-get 'frame-id s))))))
-  ;; TODO mark-manage-dirty
+        (setf (rau--window-wl-edges window-wl) (alist-get 'edges win)
+              (rau--window-wl-frame-id window-wl) (alist-get 'frame-id win))))
+    (dolist (outframe outframes)
+      (let* ((window-id (alist-get 'window-id outframe))
+             (output-id (alist-get 'output-id outframe))
+             (frame-id (alist-get 'frame-id outframe))
+             (window-wl (ewc-object-get client window-id))
+             (output-wl (ewc-object-get client output-id)))
+        (when window-wl
+          (setf (rau--window-wl-frame-id window-wl) frame-id))
+        (when output-wl
+          (setf (rau--output-wl-frame-id output-wl) frame-id))))))
+  ;; TODO mark-manage-dirty?
 
 ;;; Emacs client side code
-(defun rau--window-states ()
-  (sort
-   (cl-loop for f being the frames
-            ;; TODO only collect frame info on a frames dirty flag
-            as frame-id = (frame-id f)
-            as window-id = (frame-parameter f 'rau--window-id)
-            if window-id
-            collect `((window-id . ,window-id)
-                      (frame-id . ,frame-id)
-                      (edges . nil))
-            append
-            (cl-loop
-             for w being the windows of f
-             as buffer = (window-buffer w)
-             as window-id = (buffer-local-value 'rau--window-id buffer)
-             if window-id
-             collect `((window-id . ,window-id)
-                       (frame-id . ,frame-id)
-                       ;; (name . ,(buffer-name buffer)) ; only for debugging
-                       (edges . ,(window-inside-absolute-pixel-edges w)))))
-   :key #'cdar))
+(defun rau--client-state ()
+  (let (outframes extwins)
+    (dolist (f (frame-list))
+      (let ((frame-id (frame-id f))
+            (window-id (frame-parameter f 'rau--window-id))
+            (output-id (frame-parameter f 'rau--output-id)))
+        (when (or window-id output-id)
+          (push `((window-id . ,window-id)
+                  (output-id . ,output-id)
+                  (frame-id . ,frame-id))
+                outframes))
+        (dolist (w (window-list f))
+          (when-let* ((buffer (window-buffer w))
+                      (window-id (buffer-local-value 'rau--window-id buffer)))
+            (push `((window-id . ,window-id)
+                    (frame-id . ,frame-id)
+                    ;; (name . ,(buffer-name buffer)) ; only for debugging
+                    (edges . ,(window-inside-absolute-pixel-edges w)))
+                  extwins)))))
+    `((outframes . ,outframes)
+      (extwins . ,(sort extwins :key #'cdar)))))
 
-(defun rau--send-window-states ()
-  (let ((new-state (rau--window-states)))
+(defun rau--send-client-state ()
+  (let ((new-state (rau--client-state)))
     ;; TODO: only send when not equal last state. Also send nil new-state if different than last state!
-    (rau--update-window-states new-state)))
+    (rau--update-client-state new-state)))
 
 (defun rau--window-state-change-handler ()
-  (rau--send-window-states)
+  (rau--send-client-state)
   (rau--update-focus-request)
 
   ;; Schedule a river manage cycle and thus a reconciliation cycle.
