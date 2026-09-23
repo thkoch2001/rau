@@ -54,7 +54,8 @@ Wayland objects have been registered."
 (cl-defstruct (rau--output (:constructor rau--output-make))
   "State for a River output."
   (dimensions '(0 . 0))
-  (emacs-frame nil)
+  ;; emacs frame-id
+  (frame-id nil)
   (frame-wl nil :type ewc-object)
   (fullscreen-window-wl nil :type (or null ewc-object))
   (ls-output-wl nil :type ewc-object)
@@ -383,6 +384,11 @@ used in event listeners."
   (push `(,fn . ,args) (rau--state-task-queue rau--state))
   (rau--tasks-schedule-execution))
 
+(defun rau--task-delete-frame (frame-id)
+  "Delete frame by FRAME-ID."
+  (when-let* ((emacs-frame (frame-by-id frame-id)))
+    (delete-frame emacs-frame)))
+
 (defun rau--task-kill-buffer (buffer)
   "Remove kill inhibiting hook and kill."
   (with-current-buffer buffer
@@ -390,18 +396,21 @@ used in event listeners."
   (kill-buffer buffer))
 
 (defun rau--task-link-output-to-emacs-frame (output-wl)
-  (unless (rau--output-wl-emacs-frame output-wl)
-    (let ((emacs-frame
-           (or
-            ;; search the initial frame
-            (cl-loop for f being the frames
-                     for name = (frame-parameter f 'name)
-                     for is_rau_frame = (string-prefix-p "rau-frame-" name)
-                     for is_assigned = (frame-parameter f 'rau-output-wl)
-                     if (and is_rau_frame (not is_assigned)) return f)
-            (make-frame (rau--make-outputframe-parameters)))))
+  (unless (rau--output-wl-frame-id output-wl)
+    (let* ((emacs-frame
+            (or
+             ;; search the initial frame
+             (cl-loop for f being the frames
+                      for name = (frame-parameter f 'name)
+                      for is_rau_frame = (string-prefix-p "rau-frame-" name)
+                      for is_assigned = (frame-parameter f 'rau-output-wl)
+                      if (and is_rau_frame (not is_assigned)) return f)
+             (make-frame (rau--make-outputframe-parameters))))
+           (frame-id (frame-id emacs-frame)))
       (set-frame-parameter emacs-frame 'rau-output-wl output-wl)
-      (setf (rau--output-wl-emacs-frame output-wl) emacs-frame)
+      (if frame-id
+          (setf (rau--output-wl-frame-id output-wl) (frame-id emacs-frame))
+        (message "frame without frame-id!"))
       ;; The title of the initial frame gets announced before the first output
       (when-let* ((frame-wl (frame-parameter emacs-frame 'rau-frame-wl)))
         (setf (rau--output-wl-frame-wl output-wl) frame-wl
@@ -1109,9 +1118,8 @@ outputframe or external window."
     (when-let* ((frame-wl (rau--output-wl-frame-wl output-wl)))
       (setf (rau--outframe-wl-output-wl frame-wl) nil
             (rau--output-wl-frame-wl output-wl) nil)
-      (when-let* ((emacs-frame (rau--output-wl-emacs-frame output-wl))
-                  ((frame-live-p emacs-frame)))
-        (rau--tasks-enqueue #'delete-frame emacs-frame)))
+      (when-let* ((frame-id (rau--output-wl-frame-id output-wl)))
+        (rau--tasks-enqueue #'rau--task-delete-frame frame-id)))
     ;; TODO: also enqueue the below three actions, look out for race conditions
     (when-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
       (rau--request ls-output-wl 'destroy))
