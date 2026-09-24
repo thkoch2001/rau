@@ -40,10 +40,12 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
   (lgr-add-appender lgr (lgr-appender-journald))
   (lgr-set-threshold lgr lgr-level-info)
  )
+(let ((lgr (lgr-get-logger "rau")))
+  (lgr-add-appender lgr (lgr-appender-journald))
+  (lgr-set-threshold lgr lgr-level-info)
+ )
 
 (print "rau enable" #'external-debugging-output)
-
-(setq rau-debug t)
 
 (defun rau-test-bind-keys ()
   (rau-bind-keys

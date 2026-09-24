@@ -3,10 +3,11 @@
 ;; Copyright (C) 2026 Thomas Koch
 
 ;; Author: Thomas Koch <thomas@koch.ro>
-;; Version: 0.2
+;; Version: 0.3
 ;; Keywords: frames
 ;; URL: https://github.com/thkoch2001/rau
-;; Package-Requires: ((emacs "31.1"))
+;; Package-Requires: ((emacs "31.1")
+;;                    (lgr "0.1.0"))
 
 ;;; Commentary:
 ;; Rau is a Wayland Window Manager based on Emacs and River in pure Elisp.  The
@@ -25,6 +26,7 @@
 
 (require 'cl-lib)
 (require 'ewc)
+(require 'lgr)
 (require 'map)          ; needed for `map' pcase pattern
 (require 'pcase)
 (require 'seq)
@@ -43,8 +45,8 @@
 Wayland objects have been registered."
   :type 'hook)
 
-(defvar rau-debug nil
-  "When non-nil, enable verbose rau debugging messages.")
+(defvar rau--lgr nil
+  "lgr instance for rau, assigned in rau-enable.")
 
 (defvar rau--state nil
   "Current global rau WM state.")
@@ -294,17 +296,13 @@ when used from other files (e.g. tests)."
 
 ;;; Basic helpers
 
-
-(defun rau--log (&rest args)
-  "Log ARGS with `message' when `rau-debug' is non-nil."
-  (when rau-debug
-    (apply #'message args)))
+(defvar rau--propagate-errors nil
+  "See rau--condition-case.")
 
 (defmacro rau--condition-case (location &rest body)
-  "Wrap BODY in a condition-case unless `rau-debug' is non-nil.
-LOCATION identifies where the error occurred.  If `rau-debug' is t, BODY
-is executed directly so errors drop into the debugger."
-  `(if rau-debug
+  "Wrap BODY in a condition-case unless `rau--propagate-errors' is non-nil.
+LOCATION identifies where the error occurred."
+  `(if rau--propagate-errors
        (progn ,@body)
      (condition-case err
          (progn ,@body)
@@ -382,7 +380,7 @@ used in event listeners."
 
 (defun rau--task-delete-frame (frame-id)
   "Delete frame by FRAME-ID."
-  (rau--log "task delete frame with frame-id %S" frame-id)
+  (lgr-info rau--lgr "task delete frame with frame-id %S" frame-id)
   (when-let* ((emacs-frame (frame-by-id frame-id)))
     (delete-frame emacs-frame)))
 
@@ -465,9 +463,9 @@ situations where focus changed without us knowing (session-lock, layer surface).
                    (not (eq target-id (rau--state-focus-last-id rau--state)))))
               (client (rau--state-client rau--state))
               (seat-wl (ewc-first-object client 'river-seat-v1)))
-    (rau--log "request focus-window id=%d title=%s"
-              target-id
-              (rau--window-wl-title target-wl))
+    (lgr-debug rau--lgr "request focus-window id=%d title=%s"
+               target-id
+               (rau--window-wl-title target-wl))
 
     ;; Queue the actual Wayland focus request
     (rau--manage-enqueue seat-wl 'focus-window `((window . ,target-id)))
@@ -723,7 +721,7 @@ This function should be run from the `rau-ready-hook'."
 
 (defun rau--update-focus-request (&rest args)
   "Reconcile Wayland focus with the selected window."
-  (rau--log "update-focus-request %S" args)
+  (lgr-debug rau--lgr "update-focus-request %S" args)
   (when-let* (((rau--focus-change-allowed-p))
               (emacs-window (selected-window))
               (target-id (rau--window-id-for-emacs-window emacs-window)))
@@ -733,22 +731,22 @@ This function should be run from the `rau-ready-hook'."
   "Give focus back to external window after it was given to Emacs to handle
 a keybinding pressed event. This function is meant to be bound to
 post-command-hook in the enqueued command of the pressed event handler."
-  (rau--log "recover focus. not t-c=%S u-c-e=%d t-s-c-k=%d m-d=%d r-d=%d"
-           (not this-command)
-           (length unread-command-events)
-           (length (this-single-command-keys))
-           (minibuffer-depth)
-           (recursion-depth))
+  (lgr-debug rau--lgr "recover focus. not t-c=%S u-c-e=%d t-s-c-k=%d m-d=%d r-d=%d"
+             (not this-command)
+             (length unread-command-events)
+             (length (this-single-command-keys))
+             (minibuffer-depth)
+             (recursion-depth))
   (when (and (length= unread-command-events 0)
              (zerop (minibuffer-depth))
              (zerop (recursion-depth)))
-    (rau--log "recover focus. removing post-command-hook.")
+    (lgr-debug rau--lgr "recover focus. removing post-command-hook.")
     (remove-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)
     (when-let* ((window-id (buffer-local-value 'rau--window-id (current-buffer)))
                 ((/= window-id (rau--state-focus-last-id rau--state))))
-      (rau--log "recover focus. focusing window-id=%d title=%s"
-               window-id
-               (buffer-name))
+      (lgr-debug rau--lgr "recover focus. focusing window-id=%d title=%s"
+                 window-id
+                 (buffer-name))
       (rau--request-focus-by-id window-id))))
 
 (defun rau--buffer-killed ()
@@ -897,7 +895,7 @@ point where also the destroy request is sent."
                  (if xml-version (min version xml-version) version))
                 (global (ewc-object-add client ifsym)))
 
-      (rau--log "rau: binding global %s version %s" interface bind-version)
+      (lgr-debug rau--lgr "rau: binding global %s version %s" interface bind-version)
       (rau--request registry-wl 'bind
                      `((name . ,name)
                        (interface-len . ,(1+ (string-bytes interface)))
@@ -999,7 +997,7 @@ point where also the destroy request is sent."
 
 (defun rau--maybe-new-outputframe-window (window-wl title)
   (unless (ewc-object-tagged-p window-wl rau--tag-outputframe)
-    (rau--log "Discovered new Emacs frame by title: %s" title)
+    (lgr-debug rau--lgr "Discovered new Emacs frame by title: %s" title)
     (ewc-object-tag (rau--state-client rau--state)
                     window-wl rau--tag-outputframe)
     (rau--manage-enqueue window-wl 'inform-maximized)
@@ -1013,7 +1011,7 @@ point where also the destroy request is sent."
 
 (defun rau--maybe-new-external-window (window-wl title)
   (unless (ewc-object-tagged-p window-wl rau--tag-external)
-    (rau--log "Discovered new regular external window with title %s." title)
+    (lgr-debug rau--lgr "Discovered new regular external window with title %s." title)
     (when (not (null (rau--window-wl-parent-wl window-wl)))
       (ewc-object-tag (rau--state-client rau--state)
                       window-wl rau--tag-floating))
@@ -1107,7 +1105,7 @@ outputframe or external window."
 ;;;; river-seat-v1 listener
 (defun rau--on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
-    (rau--log "window interaction with %d" window)
+    (lgr-debug rau--lgr "window interaction with %d" window)
     (rau--request-focus-by-id window)))
 
 ;;;; river-xkb-bindings-v1 protocol
@@ -1127,7 +1125,7 @@ outputframe or external window."
                   (window-wl (ewc-object-get client window-id))
                   ((ewc-object-tagged-p window-wl rau--tag-external))
                   (target-wl (rau--frame-wl-for-extwin-wl window-wl)))
-        (rau--log "switch focus to emacs frame for key pressed.")
+        (lgr-debug rau--lgr "switch focus to emacs frame for key pressed.")
         (rau--request-focus target-wl)))))
 
 ;;;; river-layer-shell-v1 protocol
@@ -1148,20 +1146,20 @@ outputframe or external window."
   "Ensure each output gets one maximized Emacs frame."
   (let ((client (rau--state-client rau--state)))
     (rau--do 'river-output-v1 output-wl rau--state
-      (rau--log "reconcile output: id=%d." (ewc-object-id output-wl))
+      (lgr-trace rau--lgr "reconcile output: id=%d." (ewc-object-id output-wl))
       (if-let* ((frame-id (rau--output-wl-frame-id output-wl))
                 (frame-wl (cl-find
                            frame-id
                            (ewc-objects client rau--tag-outputframe)
                            :key #'rau--window-wl-frame-id)))
           (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
-            (rau--log "frame found: id=%d." (ewc-object-id frame-wl))
+            (lgr-trace rau--lgr "frame found: id=%d." (ewc-object-id frame-wl))
             (rau--request frame-wl
                           'propose-dimensions
                           `((width . ,(car dimensions))
                             (height . ,(cdr dimensions)))))
 
-        (rau--log "no frame found for output, waiting for client state.")))))
+        (lgr-debug rau--lgr "no frame found for output, waiting for client state.")))))
 
 (defun rau--reconcile-window-floating (window-wl)
   (rau--request window-wl 'set-tiled '((edges . 0)))
@@ -1203,7 +1201,7 @@ outputframe or external window."
            (when-let* ((node-wl (rau--window-wl-node-wl frame-wl))
                        (output-wl (rau--outframe-wl-output-wl frame-wl))
                        (position (rau--position-for-outputframe output-wl)))
-             (rau--log "render frame %d for output %d."
+             (lgr-trace rau--lgr "render frame %d for output %d."
                       (ewc-object-id frame-wl)
                       (ewc-object-id output-wl))
              (rau--request node-wl 'set-position
@@ -1303,7 +1301,7 @@ outputframe or external window."
   (let ((new-state (rau--fe-ui-state))
         (last-state (rau--fe-state-last-send-state rau--fe-state)))
     (if (equal new-state last-state)
-        (rau--log "new-state and last-state equal, not sending.")
+        (lgr-trace rau--lgr "new-state and last-state equal, not sending.")
       (rau--update-fe-ui-state new-state)
       (setf (rau--fe-state-last-send-state rau--fe-state) new-state))))
 
@@ -1332,7 +1330,8 @@ Call this function once when starting Emacs inside of river."
 
   (when rau--fe-state
     (user-error "Rau is already running"))
-  (setq rau--fe-state (rau--fe-state-make))
+  (setq rau--fe-state (rau--fe-state-make)
+        rau--lgr (lgr-get-logger "rau"))
 
   (unless confirm-kill-emacs
     (setq confirm-kill-emacs #'yes-or-no-p))
