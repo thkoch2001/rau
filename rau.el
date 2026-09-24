@@ -745,11 +745,7 @@ post-command-hook in the enqueued command of the pressed event handler."
              (zerop (recursion-depth)))
     (lgr-debug rau--lgr "recover focus. removing post-command-hook.")
     (remove-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)
-    (when-let* ((window-id (buffer-local-value 'rau--window-id (current-buffer)))
-                ((/= window-id (rau--state-focus-last-id rau--state))))
-      (lgr-debug rau--lgr "recover focus. focusing window-id=%d title=%s"
-                 window-id
-                 (buffer-name))
+    (when-let* ((window-id (buffer-local-value 'rau--window-id (current-buffer))))
       (rau--request-focus-by-id window-id))))
 
 (defun rau--buffer-killed ()
