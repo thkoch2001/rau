@@ -36,12 +36,16 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
 (print "require rau" #'external-debugging-output)
 (require 'rau)
 
+(let ((lgr (lgr-get-logger "ewc")))
+  (lgr-add-appender lgr (lgr-appender-journald))
+  (lgr-set-threshold lgr lgr-level-info)
+ )
+
 (print "rau enable" #'external-debugging-output)
+
 (setq rau-debug t)
-;; (setq ewc-debug t)
 
 (defun rau-test-bind-keys ()
-  (message "rau hook")
   (rau-bind-keys
    '("s-z"
      (:needs-focus "C-x" "C-u" "C-h" "M-x")

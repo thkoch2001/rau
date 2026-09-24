@@ -5,8 +5,9 @@
 ;; Maintainer: Thomas Koch <thomas@koch.ro>
 ;; URL: http://perma-curious.eu/repo-ewx/
 ;; Keywords: unix
-;; Version: 0.3
-;; Package-Requires: ((emacs "28.2"))
+;; Version: 0.4
+;; Package-Requires: ((emacs "28.2")
+;;                    (lgr "0.1.0"))
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -39,21 +40,17 @@
 
 ;;; Code:
 
-(require 'cl-lib)
-(require 'map)          ; needed for `map' pcase pattern
-(require 'seq)
-(require 'pcase)
-(require 'subr-x)
 (require 'bindat)
+(require 'cl-lib)
 (require 'dom)
+(require 'lgr)
+(require 'map)          ; needed for `map' pcase pattern
+(require 'pcase)
+(require 'seq)
+(require 'subr-x)
 
-(defvar ewc-debug nil
-  "When non-nil, enable verbose ewc debugging messages.")
-
-(defun ewc--log (&rest args)
-  "Log ARGS with `message' when `ewc-debug' is non-nil."
-  (when ewc-debug
-    (apply #'message args)))
+(defvar ewc--lgr nil
+  "lgr instance for ewc, assigned in `ewc-connect'.")
 
 ;;; Read Wayland XML protocols
 
@@ -277,9 +274,9 @@ Idempotent: removing an object that was never added (or was already
 removed) is a no-op."
   (let ((index (ewc-client-tags client))
         (id (ewc-object-id object)))
-    (ewc--log "removing object: id=%d, interface=%s"
-             id
-             (ewc-object-interface object))
+    (lgr-info ewc--lgr "removing object: id=%d, interface=%s"
+              id
+              (ewc-object-interface object))
     (dolist (tag (ewc-object-tags object))
       (puthash tag (delq object (gethash tag index)) index))
     (setf (ewc-object-tags object) nil)
@@ -304,7 +301,7 @@ Returns the newly created object."
                           :listeners (cdr (assq interface (ewc-client-listeners client))))))
       (puthash id object (ewc-client-table client))
       (ewc-object-tag client object interface)
-      (ewc--log "ewc: added object id=%s interface=%s" id interface)
+      (lgr-info ewc--lgr "ewc: added object id=%s interface=%s" id interface)
       object)))
 
 (defun ewc--event-index (object event)
@@ -341,26 +338,26 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
     (if-let* ((object (ewc-object-get client id)))
         (let ((listeners (ewc-object-listeners object))
               (spec (nth opcode (ewc-object-events object))))
-          (ewc--log "ewc: event if=%s opcode=%s (%s)"
-                   (ewc-object-interface object)
-                   opcode
-                   (car spec))
+          (lgr-debug ewc--lgr "ewc: event if=%s opcode=%s (%s)"
+                     (ewc-object-interface object)
+                     opcode
+                     (car spec))
           (if (and (< opcode (length listeners))
                    (aref listeners opcode))
               (let* ((listener (aref listeners opcode))
                      (ue (cdr spec))
                      (args (when ue (funcall ue))))
-                (when args (ewc--log "ewc: args %S" args))
+                (when args (lgr-debug ewc--lgr "ewc: args %S" args))
                 (condition-case err
                     (funcall listener object args)
                   (error (message "ewc: listener error for %s opcode %s: %S"
                             (ewc-object-interface object)
                             opcode
                             err))))
-            (ewc--log "ewc: no listener for %s opcode %s"
-                     (ewc-object-interface object)
-                     opcode)))
-      (ewc--log "ewc: event for unknown object id %s" id))))
+            (lgr-trace ewc--lgr "ewc: no listener for %s opcode %s"
+                       (ewc-object-interface object)
+                       opcode)))
+      (lgr-warn ewc--lgr "ewc: event for unknown object id %s" id))))
 
 (defun ewc--pack (object-id request-def arguments)
   "Return Wayland wire message for OBJECT-ID with ARGUMENTS."
@@ -399,7 +396,8 @@ complete ones."
                           (funcall (bindat--type-ue ewc--msg-head))))
               (cond
                ((< len 8)
-                (ewc--log "ewc: invalid message length %s; dropping buffer" len)
+                (lgr-error ewc--lgr
+                  "ewc: invalid message length %s; dropping buffer" len)
                 (setf (ewc-client-rx client) "")
                 (setq progress nil))
 
@@ -482,6 +480,7 @@ SOCKET defaults to the value of WAYLAND_DISPLAY.
 The network process is set in the CONNECTION slot of CLIENT."
   (when-let* ((old (get-process "emacs-wayland-client")))
     (delete-process old))
+  (setf ewc--lgr (lgr-get-logger "ewc"))
 
   (let* ((display (or socket
                       (getenv "WAYLAND_DISPLAY")
@@ -514,13 +513,13 @@ The network process is set in the CONNECTION slot of CLIENT."
       (error "ewc: Interface %s has no request %S"
              (ewc-object-interface object) request))
     (let ((opcode (cl-second request-def)))
-      (ewc--log "ewc: rq %s::%s(%s)"
-                (ewc-object-interface object)
-                request
-                (mapconcat (lambda (arg)
-                             (format "%s=%S" (car arg) (cdr arg)))
-                           arguments
-                           " "))
+      (lgr-debug ewc--lgr "ewc: rq %s::%s(%s)"
+                 (ewc-object-interface object)
+                 request
+                 (mapconcat (lambda (arg)
+                              (format "%s=%S" (car arg) (cdr arg)))
+                            arguments
+                            " "))
       (process-send-string connection
                            (ewc--pack id request-def arguments)))))
 
