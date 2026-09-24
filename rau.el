@@ -49,6 +49,9 @@ Wayland objects have been registered."
 (defvar rau--state nil
   "Current global rau WM state.")
 
+(defvar rau--fe-state nil
+  "Current global rau WM front-end state.")
+
 ;;; State structs
 
 (cl-defstruct (rau--output (:constructor rau--output-make))
@@ -56,7 +59,6 @@ Wayland objects have been registered."
   (dimensions '(0 . 0))
   ;; emacs frame-id
   (frame-id nil)
-  (frame-wl nil :type ewc-object)
   (fullscreen-window-wl nil :type (or null ewc-object))
   (ls-output-wl nil :type ewc-object)
   (position '(0 . 0)))
@@ -117,6 +119,7 @@ Wayland objects have been registered."
   (focus-last-id -1)
 
   ;; task queue: list of (FN ARGS...).
+  ;; TODO: move to rau--fe-state
   task-queue
   task-timer
 
@@ -125,6 +128,10 @@ Wayland objects have been registered."
   ;; manage queue: list of (ewc-object 'request args) for the next manage
   ;; cycle
   manage-queue)
+
+(cl-defstruct (rau--fe-state (:constructor rau--fe-state-make))
+  last-send-state
+  )
 
 (ewc-define-data-accessors rau--output)
 (ewc-define-data-accessors rau--ls-output)
@@ -371,7 +378,7 @@ used in event listeners."
                    if (and is_rau_frame (not is_assigned)) return f)
           (make-frame (rau--make-outputframe-parameters)))))
     (set-frame-parameter emacs-frame 'rau--output-id output-id))
-  (rau--send-client-state))
+  (rau--send-fe-ui-state))
 
 (defun rau--task-delete-frame (frame-id)
   "Delete frame by FRAME-ID."
@@ -395,7 +402,7 @@ used in event listeners."
       (error "No emacs frame found for wayland window. id=%d title=%s." window-id title))
 
     (set-frame-parameter emacs-frame 'rau--window-id window-id)
-    (rau--send-client-state)))
+    (rau--send-fe-ui-state)))
 
 (defun rau--task-minimize-window (window-id)
   (when-let* ((buffer (rau--buffer-for-window-id window-id)))
@@ -1244,7 +1251,7 @@ outputframe or external window."
         (rau--render-window-floating window-wl)
       (rau--render-window-tiled window-wl))))
 
-(defun rau--update-client-state (state)
+(defun rau--update-fe-ui-state (state)
   ;; TODO here we could build a visibility diff to send show and hide only when necessary
   (rau--do rau--tag-external window-wl rau--state
     (setf (rau--window-wl-edges window-wl) nil
@@ -1270,16 +1277,16 @@ outputframe or external window."
   ;; TODO mark-manage-dirty?
 
 ;;; Emacs client side code
-(defun rau--client-state ()
+(defun rau--fe-ui-state ()
   (let (outframes extwins)
     (dolist (f (frame-list))
       (let ((frame-id (frame-id f))
             (window-id (frame-parameter f 'rau--window-id))
             (output-id (frame-parameter f 'rau--output-id)))
         (when (or window-id output-id)
-          (push `((window-id . ,window-id)
-                  (output-id . ,output-id)
-                  (frame-id . ,frame-id))
+          (push `((frame-id . ,frame-id)
+                  (window-id . ,window-id)
+                  (output-id . ,output-id))
                 outframes))
         (dolist (w (window-list f))
           (when-let* ((buffer (window-buffer w))
@@ -1289,16 +1296,19 @@ outputframe or external window."
                     ;; (name . ,(buffer-name buffer)) ; only for debugging
                     (edges . ,(window-inside-absolute-pixel-edges w)))
                   extwins)))))
-    `((outframes . ,outframes)
+    `((outframes . ,(sort outframes :key #'cdar))
       (extwins . ,(sort extwins :key #'cdar)))))
 
-(defun rau--send-client-state ()
-  (let ((new-state (rau--client-state)))
-    ;; TODO: only send when not equal last state. Also send nil new-state if different than last state!
-    (rau--update-client-state new-state)))
+(defun rau--send-fe-ui-state ()
+  (let ((new-state (rau--fe-ui-state))
+        (last-state (rau--fe-state-last-send-state rau--fe-state)))
+    (if (equal new-state last-state)
+        (rau--log "new-state and last-state equal, not sending.")
+      (rau--update-fe-ui-state new-state)
+      (setf (rau--fe-state-last-send-state rau--fe-state) new-state))))
 
 (defun rau--window-state-change-handler ()
-  (rau--send-client-state)
+  (rau--send-fe-ui-state)
   (rau--update-focus-request)
 
   ;; Schedule a river manage cycle and thus a reconciliation cycle.
@@ -1317,11 +1327,12 @@ outputframe or external window."
 (defun rau-enable ()
   "Enable the rau window manager for river.
 Call this function once when starting Emacs inside of river."
-  (when rau--state
-    (user-error "Rau is already running"))
-
   (unless (eq window-system 'pgtk)
     (user-error "Rau requires a pgtk Emacs on Wayland"))
+
+  (when rau--fe-state
+    (user-error "Rau is already running"))
+  (setq rau--fe-state (rau--fe-state-make))
 
   (unless confirm-kill-emacs
     (setq confirm-kill-emacs #'yes-or-no-p))
