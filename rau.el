@@ -413,6 +413,11 @@ WINDOW-WL."
     (with-current-buffer buffer
       (rename-buffer name t))))
 
+(defun rau--task-select-window (window-id)
+  "Let Emacs select the underlying emacs-window for the external WINDOW-ID."
+  (when-let* ((emacs-window (rau--emacs-window-for-window-id window-id)))
+    (select-window emacs-window 'norecord)))
+
 (defun rau--task-setup-new-external-window (window-id)
   "Create Rau mode buffer for WINDOW-WL."
   (let ((buffer (get-buffer-create (make-temp-name "rau-external-")))
@@ -479,10 +484,8 @@ situations where focus changed without us knowing (session-lock, layer surface).
                 (ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
       (rau--manage-enqueue ls-output-wl 'set-default))
 
-    ;; Let Emacs select the underlying emacs-window for the external window
-    (when-let* (((ewc-object-tagged-p target-wl rau--tag-external))
-                (emacs-window (rau--emacs-window-for-window-id target-id)))
-      (select-window emacs-window 'norecord))))
+    (when-let* (((ewc-object-tagged-p target-wl rau--tag-external)))
+      (rau--tasks-enqueue #'rau--task-select-window target-id))))
 
 (defun rau--request-focus-by-id (&optional target-id force)
   "Request focus for the window with TARGET-ID or the last focused.
