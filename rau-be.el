@@ -610,7 +610,7 @@ outputframe or external window."
     (when-let* ((parent-wl (ewc-object-get client object)))
       (setf (rau--window-parent-wl window-wl) parent-wl)
       (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
-        (ewc-object-tag client rau--tag-floating)))))
+        (ewc-object-tag client window-wl rau--tag-floating)))))
 
 (defun rau--on-river-window-v1-fullscreen-requested (window-wl args)
   (when (ewc-object-tagged-p window-wl rau--tag-external)
