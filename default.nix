@@ -6,11 +6,13 @@ in
 pkgs.emacs-pgtk.pkgs.trivialBuild {
   pname = "rau";
   version = "0.1";
+  packageRequires = [ pkgs.emacsPackages.lgr ];
   src = fs.toSource {
     root = ./.;
     fileset = fs.unions [
       ./ewc.el
       ./rau.el
+      ./rau-be.el
       (fs.fileFilter
         (file: file.hasExt "xml")
         ./protocol
