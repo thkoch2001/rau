@@ -13,6 +13,7 @@ pkgs.emacs-pgtk.pkgs.trivialBuild {
       ./ewc.el
       ./rau.el
       ./rau-be.el
+      ./rau-lib.el
       (fs.fileFilter
         (file: file.hasExt "xml")
         ./protocol

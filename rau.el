@@ -25,10 +25,9 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'lgr)
+(require 'rau-lib)
 ;; TODO (require 'map)          ; needed for `map' pcase pattern
 ;; TODO (require 'pcase)
-(require 'rau-be)
 ;; TODO (require 'seq)
 ;; TODO (require 'subr-x)
 
@@ -42,10 +41,6 @@
 Wayland objects have been registered."
   :type 'hook)
 
-;; TODO uncomment after split
-;; (defvar rau--lgr nil
-;;   "lgr instance for rau, assigned in rau-enable.")
-
 (defvar rau--fe-state nil
   "Current global rau WM front-end state.")
 
@@ -55,11 +50,6 @@ Wayland objects have been registered."
   ;; TODO: move to rau--fe-state
   task-queue
   task-timer)
-
-(defun rau--be (fn &rest args)
-  "Execute FN with ARGS on the backend."
-  ;; TODO: just apply for now
-  (apply fn args))
 
 ;;; Data access helpers
 
@@ -252,14 +242,13 @@ used in event listeners."
             (error "Duplicate key binding: %s" key))
           (puthash key t seen)
           (let ((xkb (rau--key-to-xkb key)))
-            (push (rau--binding-make
-                   :event (cl-first xkb)
-                   :key key
-                   :keysym (rau--resolve-keysym (cl-second xkb))
-                   :modifiers (cl-third xkb)
-                   :needs-focus   (cdr (assq :needs-focus flags))
-                   :allow-when-locked (cdr (assq :allow-when-locked flags))
-                   :layout        (cdr (assq :layout flags)))
+            (push `(:event ,(cl-first xkb)
+                   :key ,key
+                   :keysym ,(rau--resolve-keysym (cl-second xkb))
+                   :modifiers ,(cl-third xkb)
+                   :needs-focus   ,(cdr (assq :needs-focus flags))
+                   :allow-when-locked ,(cdr (assq :allow-when-locked flags))
+                   :layout        ,(cdr (assq :layout flags)))
                   result)))))
     (nreverse result)))
 
@@ -375,6 +364,7 @@ This function should be run from the `rau-ready-hook'."
   ;; (unless rau--state
   ;;   (error "Rau has not yet been started."))
   (let ((parsed-keys (rau--parse-keys keys)))
+    (message "parsed keys: %S" parsed-keys)
     (rau--be #'rau--bind-parsed-keys parsed-keys)))
 
 (defun rau--global-unset-key-if (key command)
@@ -497,7 +487,7 @@ is completely valid."
         (last-state (rau--fe-state-last-send-state rau--fe-state)))
     (if (equal new-state last-state)
         (lgr-trace rau--lgr "new-state and last-state equal, not sending.")
-      (rau--update-fe-ui-state new-state)
+      (rau--be #'rau--update-fe-ui-state new-state)
       (setf (rau--fe-state-last-send-state rau--fe-state) new-state))))
 
 (defun rau--window-state-change-handler ()
@@ -510,9 +500,12 @@ is completely valid."
   ;; don't get called for windows that disappear.  Also
   ;; window-size-change-functions does not get called when minibuffer expands
   ;; and thus minibuffer ends up below external window.
-  (rau--mark-manage-dirty))
+  (rau--be #'rau--mark-manage-dirty))
 
 ;;; Startup
+
+
+
 ;; NOTE: No need for rau-disable since this Emacs process is serving as a
 ;; Window Manager and disabling rau while keeping the Emacs process running
 ;; would result in an unresponsive user environment.
@@ -548,26 +541,87 @@ Call this function once when starting Emacs inside of river."
 
   (modify-frame-parameters nil (rau--make-outputframe-parameters))
 
-  (rau--be #'rau--be-start)
+  (rau--rpc-start-backend)
 
   (add-hook 'window-state-change-hook #'rau--window-state-change-handler))
 
-;;; Hacks to avoid rau to freeze, TODO find an alternative
+;;; RPC State
+(defvar rau--rpc-proc nil "Network process connected to the backend.")
+(defvar rau--rpc-backend-proc nil "The backend subprocess itself.")
+(defvar rau--rpc-read-marker nil "Marker for tracking complete lines in the RPC buffer.")
 
-(defun x-popup-menu(_position _menu)
-  (message "x-popup-menu does not work with rau and is therefor overwritten.")
-  nil)
+(defun rau--rpc-start-backend ()
+  "Start the rau backend subprocess and connect via Unix socket."
+  ;; TODO create socket in users run dir
+  (let* ((sock-file (make-temp-name "/tmp/rau-be-"))
+         (proc (make-process
+                :name "rau-backend"
+                :command (list (expand-file-name invocation-name invocation-directory)
+                               "-Q" "--fg-daemon=rau-be"
+                               "-l" (locate-library "ewc")
+                               "-l" (locate-library "rau-lib")
+                               "-l" (locate-library "rau-be")
+                               "--eval=(rau-be-main)"
+                               sock-file)
+                :buffer " *rau-backend*"
+                :noquery t
+                :stderr " *rau-backend-err*"))
+         (_ (sleep-for 1)) ;; TODO react on something from the child instead
+         (conn (make-network-process
+                :name "rau-rpc"
+                :buffer " *rau-rpc*"
+                :family 'local
+                :service nil
+                :remote sock-file
+                :filter #'rau--rpc-filter
+                :noquery t)))
+    (setq rau--rpc-proc conn
+          rau--rpc-backend-proc proc)
+    (add-hook 'kill-emacs-hook (lambda () (ignore-errors (delete-file sock-file))))
+    proc))
 
-(defun popup-menu(_menu &optional _position _prefix _from-menu-bar)
-  (message "popup-menu does not work with rau and is therefor overwritten.")
-  nil)
+(defun rau--rpc-send (sexp)
+  "Send SEXP to the backend using Base64 encoding."
+  (when (and rau--rpc-proc (process-live-p rau--rpc-proc))
+    (with-temp-buffer
+      (let (print-level print-length
+            (print-escape-nonascii t)
+            (print-circle t))
+        (prin1 sexp (current-buffer))
+        (encode-coding-region (point-min) (point-max) 'utf-8-emacs-unix)
+        (base64-encode-region (point-min) (point-max) t)
+        (goto-char (point-min)) (insert ?\")
+        (goto-char (point-max)) (insert ?\" ?\n)
+        (process-send-region rau--rpc-proc (point-min) (point-max))))))
 
-(defun x-popup-dialog(_position _contents &optional _header)
-  (message "x-popup-dialog does not work with rau and is therefor overwritten.")
-  nil)
+(defun rau--be (fn &rest args)
+  "Call FN with ARGS on the backend. Return values are ignored."
+  (rau--rpc-send (cons fn args)))
 
-(defun display-popup-menus-p (&optional _display)
-  nil)
+(defun rau--rpc-filter (proc string)
+  "Process filter for backend RPC. Handles chunked reads safely."
+  (with-current-buffer (process-buffer proc)
+    (goto-char (point-max))
+    (save-excursion (insert string))
+    (unless rau--rpc-read-marker
+      (setq rau--rpc-read-marker (point-min-marker)))
+    (while (search-forward "\n" nil t)
+      (let ((line (buffer-substring-no-properties rau--rpc-read-marker (1- (point)))))
+        (set-marker rau--rpc-read-marker (point))
+        (when (string-match "^\"\\(.*\\)\"$" line)
+          (let* ((b64 (match-string 1 line))
+                 (decoded (ignore-errors (decode-coding-string
+                                          (base64-decode-string b64)
+                                          'utf-8-emacs-unix)))
+                 (sexp (and decoded (ignore-errors (car (read-from-string decoded))))))
+            (when sexp
+              (rau--rpc-handle-message sexp))))))))
+
+(defun rau--rpc-handle-message (msg)
+  "Execute incoming messages (function calls) from the backend."
+  (condition-case err
+      (apply (car msg) (cdr msg))
+    (error (message "Rau frontend error handling %S: %S" msg err))))
 
 (provide 'rau)
 ;;; rau.el ends here

@@ -15,9 +15,9 @@
 
 (require 'cl-lib)
 (require 'ewc)
-(require 'lgr)
 (require 'map)          ; needed for `map' pcase pattern
 (require 'pcase)
+(require 'rau-lib)
 (require 'seq)
 (require 'subr-x)
 
@@ -214,18 +214,6 @@ when used from other files (e.g. tests)."
     (if app-id (concat title-trunc " - " app-id)
       title-trunc)))
 
-(defvar rau--propagate-errors nil
-  "See rau--condition-case.")
-
-(defmacro rau--condition-case (location &rest body)
-  "Wrap BODY in a condition-case unless `rau--propagate-errors' is non-nil.
-LOCATION identifies where the error occurred."
-  `(if rau--propagate-errors
-       (progn ,@body)
-     (condition-case err
-         (progn ,@body)
-       (error (message "Error at %s: %S" ,location err)))))
-
 (cl-defmacro rau--do (tag obj state &body body)
   "Iterate over the ewc objects in STATE tagged with TAG.
 TAG is a form that evaluates to or is an ewc-object tag, for example
@@ -304,7 +292,7 @@ situations where focus changed without us knowing (session-lock, layer surface).
       (rau--manage-enqueue ls-output-wl 'set-default))
 
     (when-let* (((ewc-object-tagged-p target-wl rau--tag-external)))
-      (rau--tasks-enqueue #'rau--task-select-window target-id))))
+      (rau--fe #'rau--tasks-enqueue #'rau--task-select-window target-id))))
 
 (defun rau--request-focus-by-id (&optional target-id force)
   "Request focus for the window with TARGET-ID or the last focused.
@@ -323,14 +311,12 @@ See `rau--request-focus' for details on FORCE."
   (when-let* ((client (rau--state-client rau--state))
               (xkb-bindings-wl (ewc-first-object client 'river-xkb-bindings-v1))
               (seat-wl (ewc-first-object client 'river-seat-v1))
-              (seat-id (ewc-object-id seat-wl))
-              )
-    (let ((existing-bindings
+              (seat-id (ewc-object-id seat-wl)))
+    (let ((bindings (mapcar (lambda (k) (apply #'rau--binding-make k)) parsed-keys))
+          (existing-bindings
            (mapcar #'ewc-object-data (ewc-objects client 'river-xkb-binding-v1))))
-      (dolist (binding parsed-keys)
+      (dolist (binding bindings)
         (dolist (existing existing-bindings)
-          (message "binding: %S" binding)
-          (message "existing: %S" existing)
           (when (or (equal (rau--binding-key binding)
                            (rau--binding-key existing))
                     (and
@@ -365,6 +351,9 @@ See `rau--request-focus' for details on FORCE."
 Also resets the fullscreen-window-wl slot of OUTPUT-WL to nil.  When
 switching fullscreen between windows, call this before
 `rau--fullscreen-enter'."
+  (lgr-debug rau--lgr "fs exit window-id=%d output-id=%d"
+             (ewc-object-id window-wl)
+             (ewc-object-id output-wl))
   (rau--manage-enqueue window-wl 'inform-not-fullscreen)
   (rau--manage-enqueue window-wl 'exit-fullscreen)
   (when-let* ((dimensions (rau--dimensions-for-window-wl window-wl)))
@@ -375,6 +364,9 @@ switching fullscreen between windows, call this before
 
 (defun rau--fullscreen-enter (window-wl output-wl)
   "Enter fullscreen for WINDOW-WL on OUTPUT-WL."
+  (lgr-debug rau--lgr "fs enter window-id=%d output-id=%d"
+             (ewc-object-id window-wl)
+             (ewc-object-id output-wl))
   (rau--manage-enqueue window-wl 'inform-fullscreen)
   (rau--manage-enqueue window-wl 'fullscreen
                        `((output . ,(ewc-object-id output-wl))))
@@ -382,6 +374,7 @@ switching fullscreen between windows, call this before
 
 (defun rau--toggle-fullscreen-by-window-id (window-id)
   "Toggle fullscreen for WINDOW-ID."
+  (lgr-debug rau--lgr "Toggle fs window-id=%S" window-id)
   (if-let* ((window-wl (ewc-object-get (rau--state-client rau--state) window-id))
             (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
             (output-wl (rau--outframe-wl-output-wl frame-wl)))
@@ -418,7 +411,8 @@ switching fullscreen between windows, call this before
     (rau--request ls-wl 'get-seat
                    `((id . ,(ewc-object-id ls-seat-wl))
                      (seat . ,(ewc-object-id seat-wl))))
-    (rau--tasks-enqueue #'run-hooks 'rau-ready-hook)))
+    (rau--fe #'rau--tasks-enqueue #'run-hooks 'rau-ready-hook)
+    (rau--mark-manage-dirty)))
 
 ;;; Listeners
 
@@ -483,16 +477,16 @@ point where also the destroy request is sent."
   (message "rau: WM event finished"))
 
 (defun rau--on-river-window-manager-v1-manage-start (wm-wl _)
-  (rau--tasks-enqueue #'rau--manage-queue-send)
-  (rau--tasks-enqueue #'rau--reconcile-frames)
-  (rau--tasks-enqueue #'rau--reconcile-windows)
+  (rau--manage-queue-send)
+  (rau--reconcile-frames)
+  (rau--reconcile-windows)
 
-  (rau--tasks-enqueue #'rau--request wm-wl 'manage-finish))
+  (rau--request wm-wl 'manage-finish))
 
 (defun rau--on-river-window-manager-v1-render-start (wm-wl _)
-  (rau--tasks-enqueue #'rau--render-frames)
-  (rau--tasks-enqueue #'rau--render-windows)
-  (rau--tasks-enqueue #'rau--request wm-wl 'render-finish))
+  (rau--render-frames)
+  (rau--render-windows)
+  (rau--request wm-wl 'render-finish))
 
 (defun rau--on-river-window-manager-v1-session-locked (_wm-wl _)
   (setf (rau--state-session-locked rau--state) t))
@@ -518,7 +512,7 @@ point where also the destroy request is sent."
                (client (rau--state-client rau--state))
                (output-wl (ewc-object-add client 'river-output-v1 id)))
     (setf (ewc-object-data output-wl) (rau--output-make))
-    (rau--tasks-enqueue #'rau--task-assign-emacs-frame id)
+    (rau--fe #'rau--tasks-enqueue #'rau--task-assign-emacs-frame id)
     (rau--ensure-ls-output output-wl)))
 
 (defun rau--on-river-window-manager-v1-seat (_wm-wl args)
@@ -533,11 +527,11 @@ point where also the destroy request is sent."
 ;;;; river-window-v1 listeners
 (defun rau--on-river-window-v1-closed (window-wl _)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
-    (rau--tasks-enqueue #'rau--task-kill-buffer (ewc-object-id window-wl)))
+    (rau--fe #'rau--tasks-enqueue #'rau--task-kill-buffer (ewc-object-id window-wl)))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
-    (rau--tasks-enqueue #'rau--request node-wl 'destroy))
-  (rau--tasks-enqueue #'rau--request window-wl 'destroy)
-  (rau--tasks-enqueue #'rau--remove window-wl)
+    (rau--request node-wl 'destroy))
+  (rau--request window-wl 'destroy)
+  (rau--remove window-wl)
 
   ;; Reset fullscreen on output if window was fullscreen.
   (when (ewc-object-tagged-p window-wl rau--tag-external)
@@ -569,7 +563,7 @@ point where also the destroy request is sent."
     (let ((node-wl (rau--window-wl-node-wl window-wl)))
       (rau--manage-enqueue node-wl 'place-bottom))
 
-    (rau--tasks-enqueue #'rau--task-link-emacs-frame-to-window
+    (rau--fe #'rau--tasks-enqueue #'rau--task-link-emacs-frame-to-window
                         title
                         (ewc-object-id window-wl))))
 
@@ -581,7 +575,7 @@ point where also the destroy request is sent."
                       window-wl rau--tag-floating))
     (ewc-object-tag (rau--state-client rau--state)
                     window-wl rau--tag-external)
-    (rau--tasks-enqueue #'rau--task-setup-new-external-window (ewc-object-id window-wl))))
+    (rau--fe #'rau--tasks-enqueue #'rau--task-setup-new-external-window (ewc-object-id window-wl))))
 
 (defun rau--on-river-window-v1-title (window-wl args)
   "Handle title event for WINDOW-WL.
@@ -600,7 +594,7 @@ outputframe or external window."
                 (name (rau--make-buffer-name
                        (rau--window-wl-app-id window-wl)
                        title)))
-      (rau--tasks-enqueue #'rau--task-rename-buffer
+      (rau--fe #'rau--tasks-enqueue #'rau--task-rename-buffer
                           (ewc-object-id window-wl)
                           name))))
 
@@ -638,7 +632,7 @@ outputframe or external window."
 
 (defun rau--on-river-window-v1-minimize-requested (window-wl _)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
-    (rau--tasks-enqueue #'rau--task-minimize-window (ewc-object-id window-wl))))
+    (rau--fe #'rau--tasks-enqueue #'rau--task-minimize-window (ewc-object-id window-wl))))
 
 (defun rau--on-river-window-v1-unreliable-pid (window-wl args)
   (pcase-let* (((map unreliable-pid) args))
@@ -649,12 +643,12 @@ outputframe or external window."
   ;; TODO: check whether we lost focus
   (let ((client (rau--state-client rau--state)))
     (when-let* ((frame-id (rau--output-wl-frame-id output-wl)))
-      (rau--tasks-enqueue #'rau--task-delete-frame frame-id))
+      (rau--fe #'rau--tasks-enqueue #'rau--task-delete-frame frame-id))
     ;; TODO: also enqueue the below three actions, look out for race conditions
     (when-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
       (rau--request ls-output-wl 'destroy))
     (rau--request output-wl 'destroy)
-    (ewc-object-remove client output-wl)))
+    (rau--remove output-wl)))
 
 ;; TODO: listener for wl_output, e.g. to get monitor names
 
@@ -679,7 +673,7 @@ outputframe or external window."
                (not (rau--binding-wl-allow-when-locked binding-wl)))
     (let* ((event (rau--binding-wl-event binding-wl))
            (needs-focus (rau--binding-wl-needs-focus binding-wl)))
-      (rau--tasks-enqueue #'rau--task-consume-key-event event needs-focus)
+      (rau--fe #'rau--tasks-enqueue #'rau--task-consume-key-event event needs-focus)
 
       ;; If focus is with external window then switch to underlying emacs
       ;; frame such that following keypresses go to emacs
@@ -840,9 +834,108 @@ outputframe or external window."
           (setf (rau--output-wl-frame-id output-wl) frame-id))))))
   ;; TODO mark-manage-dirty?
 
-(defun rau--be-start ()
+(defun rau--connect-river ()
   (let* ((interfaces (rau--read-protocols))
          (client (ewc-start interfaces "rau--on-")))
     (setq rau--state (rau--state-make :client client))))
+
+;;; Backend RPC State
+(defvar rau--rpc-client-proc nil
+  "Frontend client process.")
+(defvar rau--rpc-read-marker nil)
+(defvar rau--rpc-recv-buffer nil)
+
+(defun rau--rpc-server-log (server connection msg)
+  (setq rau--rpc-client-proc connection
+        rau--rpc-recv-buffer (get-buffer-create "*rau--rpc-recv-buffer*"))
+  (lgr-info rau--lgr "new connection: %S" msg)
+  (rau--connect-river))
+
+(defun rau-be-main ()
+  "Entry point for the backend subprocess."
+
+  ;; TODO add a way to load a config file for the backend
+  (let ((appender
+         (lgr-set-layout
+          (lgr-appender-journald)
+          (lgr-layout-format
+           :format "%m"))))
+    (let ((lgr (lgr-get-logger "ewc")))
+      (lgr-add-appender lgr appender)
+      (lgr-set-threshold lgr lgr-level-trace))
+    (let ((lgr (lgr-get-logger "rau")))
+      (lgr-add-appender lgr appender)
+      (lgr-set-threshold lgr lgr-level-trace)
+      (setf rau--lgr lgr)))
+
+  (let ((sock-file (pop command-line-args-left)))
+    (lgr-info rau--lgr "creating socket at %S" sock-file)
+    (make-network-process
+     :name "rau-be-rpc"
+     :buffer " *rau-be-rpc*" ;; TODO remove?
+     :family 'local
+     :service sock-file
+     ;; TODO try instead of family and service:
+     ;; :local sock-file
+     :server t
+     :filter #'rau--be-rpc-filter
+     :noquery t
+     :log #'rau--rpc-server-log))
+
+  (lgr-debug rau--lgr "looping")
+  (while nil
+    ;; TODO: sleep-for?
+    ;; https://github.com/nicferrier/elnode/blob/master/elnode.el#L2491
+    ;; https://github.com/skeeto/emacs-web-server/blob/master/simple-httpd.el#L360
+    ;; Maybe don't run in batch mode?
+    (accept-process-output nil 0.1)))
+
+(defun rau--be-rpc-handle-message (proc msg)
+  "Execute the requested function. Return values are ignored."
+  (condition-case err
+      (apply (car msg) (cdr msg))
+    (error (message "Rau backend error handling %S: %S" msg err))))
+
+(defun rau--be-rpc-filter (proc string)
+  "Process filter for incoming frontend requests."
+  (with-current-buffer rau--rpc-recv-buffer
+    (goto-char (point-max))
+    (save-excursion (insert string))
+    (unless rau--rpc-read-marker
+      (setq rau--rpc-read-marker (point-min-marker)))
+    (while (search-forward "\n" nil t)
+      (let ((line (buffer-substring-no-properties rau--rpc-read-marker (1- (point)))))
+        (set-marker rau--rpc-read-marker (point))
+        (when (string-match "^\"\\(.*\\)\"$" line)
+          (let* ((b64 (match-string 1 line))
+                 (decoded (ignore-errors (decode-coding-string
+                                          (base64-decode-string b64)
+                                          'utf-8-emacs-unix)))
+                 (sexp (and decoded (ignore-errors (car (read-from-string decoded))))))
+            (when sexp
+              (lgr-trace rau--lgr "recv sexp: %S" sexp)
+              (rau--be-rpc-handle-message proc sexp))))))))
+
+(defun rau--be-rpc-send (proc sexp)
+  "Send SEXP to the frontend using Base64 encoding."
+  (if (process-live-p proc)
+      (with-temp-buffer
+        (message "sending sexp to fe: %S" sexp)
+      (let (print-level print-length
+            (print-escape-nonascii t)
+            (print-circle t))
+        (prin1 sexp (current-buffer))
+        (encode-coding-region (point-min) (point-max) 'utf-8-emacs-unix)
+        (base64-encode-region (point-min) (point-max) t)
+        (goto-char (point-min)) (insert ?\")
+        (goto-char (point-max)) (insert ?\" ?\n)
+        (process-send-region proc (point-min) (point-max))))
+    (error "process not live")))
+
+(defun rau--fe (event &rest args)
+  "Send an asynchronous function call/event to the frontend."
+  (if rau--rpc-client-proc
+      (rau--be-rpc-send rau--rpc-client-proc (cons event args))
+    (error "rau--rpc-client-proc nil")))
 
 (provide 'rau-be)
