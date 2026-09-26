@@ -512,16 +512,15 @@ The network process is set in the CONNECTION slot of CLIENT."
     (unless request-def
       (error "ewc: Interface %s has no request %S"
              (ewc-object-interface object) request))
-    (let ((opcode (cl-second request-def)))
-      (lgr-debug ewc--lgr "ewc: rq %s::%s(%s)"
-                 (ewc-object-interface object)
-                 request
-                 (mapconcat (lambda (arg)
-                              (format "%s=%S" (car arg) (cdr arg)))
-                            arguments
-                            " "))
-      (process-send-string connection
-                           (ewc--pack id request-def arguments)))))
+    (lgr-debug ewc--lgr "ewc: rq %s::%s(%s)"
+               (ewc-object-interface object)
+               request
+               (mapconcat (lambda (arg)
+                            (format "%s=%S" (car arg) (cdr arg)))
+                          arguments
+                          " "))
+    (process-send-string connection
+                         (ewc--pack id request-def arguments))))
 
 (defun ewc-start (interfaces listener-prefix)
   "Setup ewc-client, send get-registry request and return the client.
