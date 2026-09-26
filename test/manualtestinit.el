@@ -36,14 +36,19 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
 (print "require rau" #'external-debugging-output)
 (require 'rau)
 
-(let ((lgr (lgr-get-logger "ewc")))
-  (lgr-add-appender lgr (lgr-appender-journald))
-  (lgr-set-threshold lgr lgr-level-info)
- )
-(let ((lgr (lgr-get-logger "rau")))
-  (lgr-add-appender lgr (lgr-appender-journald))
-  (lgr-set-threshold lgr lgr-level-info)
- )
+(let ((appender
+       (lgr-set-layout
+        (lgr-appender-journald)
+        (lgr-layout-format
+         :format "%m"))))
+  (let ((lgr (lgr-get-logger "ewc")))
+    (lgr-add-appender lgr appender)
+    (lgr-set-threshold lgr lgr-level-debug)
+    )
+  (let ((lgr (lgr-get-logger "rau")))
+    (lgr-add-appender lgr appender)
+    (lgr-set-threshold lgr lgr-level-trace)
+    ))
 
 (print "rau enable" #'external-debugging-output)
 

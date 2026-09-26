@@ -25,12 +25,14 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'lgr)
-;; TODO (require 'map)          ; needed for `map' pcase pattern
-;; TODO (require 'pcase)
-(require 'rau-be)
-;; TODO (require 'seq)
-;; TODO (require 'subr-x)
+(require 'rau-lib)
+
+(declare-function rau--bind-parsed-keys "rau-be" (parsed-keys))
+(declare-function rau--manage-enqueue "rau-be" (ewc-object request &optional args))
+(declare-function rau--mark-manage-dirty "rau-be" ())
+(declare-function rau--request-focus-by-id "rau-be" (&optional target-id force))
+(declare-function rau--toggle-fullscreen-by-window-id "rau-be" (window-id))
+(declare-function rau--update-fe-ui-state "rau-be" (state))
 
 (defgroup rau nil
   "Rau - Emacs swimming in the river."
@@ -42,10 +44,6 @@
 Wayland objects have been registered."
   :type 'hook)
 
-;; TODO uncomment after split
-;; (defvar rau--lgr nil
-;;   "lgr instance for rau, assigned in rau-enable.")
-
 (defvar rau--fe-state nil
   "Current global rau WM front-end state.")
 
@@ -55,11 +53,6 @@ Wayland objects have been registered."
   ;; TODO: move to rau--fe-state
   task-queue
   task-timer)
-
-(defun rau--be (fn &rest args)
-  "Execute FN with ARGS on the backend."
-  ;; TODO: just apply for now
-  (apply fn args))
 
 ;;; Data access helpers
 
@@ -252,14 +245,13 @@ used in event listeners."
             (error "Duplicate key binding: %s" key))
           (puthash key t seen)
           (let ((xkb (rau--key-to-xkb key)))
-            (push (rau--binding-make
-                   :event (cl-first xkb)
-                   :key key
-                   :keysym (rau--resolve-keysym (cl-second xkb))
-                   :modifiers (cl-third xkb)
-                   :needs-focus   (cdr (assq :needs-focus flags))
-                   :allow-when-locked (cdr (assq :allow-when-locked flags))
-                   :layout        (cdr (assq :layout flags)))
+            (push `(:event ,(cl-first xkb)
+                   :key ,key
+                   :keysym ,(rau--resolve-keysym (cl-second xkb))
+                   :modifiers ,(cl-third xkb)
+                   :needs-focus   ,(cdr (assq :needs-focus flags))
+                   :allow-when-locked ,(cdr (assq :allow-when-locked flags))
+                   :layout        ,(cdr (assq :layout flags)))
                   result)))))
     (nreverse result)))
 
@@ -497,7 +489,7 @@ is completely valid."
         (last-state (rau--fe-state-last-send-state rau--fe-state)))
     (if (equal new-state last-state)
         (lgr-trace rau--lgr "new-state and last-state equal, not sending.")
-      (rau--update-fe-ui-state new-state)
+      (rau--be #'rau--update-fe-ui-state new-state)
       (setf (rau--fe-state-last-send-state rau--fe-state) new-state))))
 
 (defun rau--window-state-change-handler ()
@@ -510,9 +502,12 @@ is completely valid."
   ;; don't get called for windows that disappear.  Also
   ;; window-size-change-functions does not get called when minibuffer expands
   ;; and thus minibuffer ends up below external window.
-  (rau--mark-manage-dirty))
+  (rau--be #'rau--mark-manage-dirty))
 
 ;;; Startup
+
+
+
 ;; NOTE: No need for rau-disable since this Emacs process is serving as a
 ;; Window Manager and disabling rau while keeping the Emacs process running
 ;; would result in an unresponsive user environment.
@@ -548,26 +543,61 @@ Call this function once when starting Emacs inside of river."
 
   (modify-frame-parameters nil (rau--make-outputframe-parameters))
 
-  (rau--be #'rau--be-start)
+  ;; TODO catch errors, log and return
+  (rau--rpc-start-backend)
 
   (add-hook 'window-state-change-hook #'rau--window-state-change-handler))
 
-;;; Hacks to avoid rau to freeze, TODO find an alternative
+;;; RPC State
 
-(defun x-popup-menu(_position _menu)
-  (message "x-popup-menu does not work with rau and is therefor overwritten.")
-  nil)
+(defvar rau--rpc-backend-proc nil
+  "The backend Emacs subprocess.")
 
-(defun popup-menu(_menu &optional _position _prefix _from-menu-bar)
-  (message "popup-menu does not work with rau and is therefor overwritten.")
-  nil)
+(defun rau--make-be-server-name (&optional number)
+  "Create unique server-name for be-server, iterating recursively with
+NUMBER + 1. Multiple rau-be servers happen mostly during development.
+This function assumes that server-socket-dir will be the same in the be
+emacs instance!"
+  (let* ((server-name (format "rau-be-%d" (or number 1)))
+        (server-file (expand-file-name server-name server-socket-dir)))
+    (if (file-exists-p server-file)
+        (rau--make-be-server-name (+ 1 number))
+      server-name)))
 
-(defun x-popup-dialog(_position _contents &optional _header)
-  (message "x-popup-dialog does not work with rau and is therefor overwritten.")
-  nil)
-
-(defun display-popup-menus-p (&optional _display)
-  nil)
+(defun rau--rpc-start-backend ()
+  "Start the rau backend subprocess and connect via Unix socket."
+  ;; TODO create socket in users run dir
+  (let* ((sock-file (make-temp-name "/tmp/rau-be-"))
+         (be-server-name (rau--make-be-server-name))
+         (coding-system-for-read 'utf-8-emacs-unix)
+         (coding-system-for-write 'utf-8-emacs-unix)
+         (proc (make-process
+                :name "rau-backend"
+                :command (list (expand-file-name invocation-name invocation-directory)
+                               "-Q"
+                               (format "--fg-daemon=%s" be-server-name) ; race-condition
+                               "-l" (locate-library "ewc")
+                               "-l" (locate-library "rau-lib")
+                               "-l" (locate-library "rau-be")
+                               "--eval=(rau-be-main)"
+                               sock-file)
+                :buffer " *rau-backend-stdout*"
+                :noquery t
+                :stderr " *rau-backend-stderr*"))
+         (_ (sleep-for 1)) ;; TODO react on something from the child instead
+         (conn (make-network-process
+                :name "rau-rpc"
+                :service nil
+                :remote sock-file
+                :filter #'rau--rpc-filter
+                :noquery t)))
+    (setq rau--rpc-proc conn
+          rau--rpc-backend-proc proc)
+    (rau--rpc-create-recv-buffer)
+    ;; The Emacs subprocess probably gets killed and might not have time to
+    ;; clean up the socket
+    (add-hook 'kill-emacs-hook (lambda () (ignore-errors (delete-file sock-file))))
+    proc))
 
 (provide 'rau)
 ;;; rau.el ends here
