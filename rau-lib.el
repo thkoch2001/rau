@@ -23,9 +23,6 @@ LOCATION identifies where the error occurred."
 
 (defvar rau--rpc-recv-buffer nil)
 
-(defvar rau--rpc-read-marker nil
-  "Marker to track complete lines in rau--rpc-recv-buffer.")
-
 (defconst rau--rpc-prin1-overrides
   '(t
     (escape-newlines . t)
@@ -54,25 +51,25 @@ LOCATION identifies where the error occurred."
   "Execute the requested function. Return values are ignored."
   (condition-case err
       (apply fn args)
-    (error (message "Rau backend error handling %S with %S: %S" fn args err))))
+    (lgr-error rau--lgr "RPC error %S with %S: %S" fn args err)))
 
 (defun rau--rpc-filter (proc string)
-  "Process filter for incoming frontend requests."
+  "Process filter for incoming RPCs."
   (let ((coding-system-for-read 'utf-8-emacs-unix))
     (with-current-buffer rau--rpc-recv-buffer
       (goto-char (point-max))
       (save-excursion (insert string))
-      (unless rau--rpc-read-marker
-        (setq rau--rpc-read-marker (point-min-marker)))
-      (while (search-forward "\n" nil t)
-        (let ((line (buffer-substring-no-properties rau--rpc-read-marker (1- (point)))))
-          (set-marker rau--rpc-read-marker (point))
-          ;; TODO delete read lines
-          (lgr-trace rau--lgr "be recv: %s" line)
-          (let* ((r (read-from-string line))
-                 (sexp (car r))
-                 (fn (car sexp))
-                 (args (cdr sexp)))
-          (rau--rpc-handle fn args)))))))
+      (let ((end-pos (point-min-marker)))
+        (while (search-forward "\n" nil t)
+          (let ((line (buffer-substring-no-properties end-pos (1- (point)))))
+            (setq end-pos (point))
+            (lgr-trace rau--lgr "be recv: %s" line)
+            (let* ((r (read-from-string line))
+                   (sexp (car r))
+                   (fn (car sexp))
+                   (args (cdr sexp)))
+              (rau--rpc-handle fn args))))
+        (when (> end-pos (point-min))
+          (delete-region (point-min) end-pos))))))
 
 (provide 'rau-lib)
