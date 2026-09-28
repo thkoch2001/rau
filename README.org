@@ -14,18 +14,6 @@ stays in the background. Every external Wayland Window gets one Emacs buffer
 assigned. When this buffer is displayed, the external Wayland Window for this
 buffer gets displayed exactly on top of the buffer.
 
-** Status
-
-I already use Râu however there are still some issues:
-
-- Every other day there is an endless loop of keypresses and I have to switch
-  to a tty and back to stop it.
-- Only minimal support for floating windows: no move, resize or minimize.
-- No protection against accidental closing of Emacs, just one C-x C-c away.
-- Tab titles don't get updated when in background.
-- Clicking on a x-popup-menu or x-popup-dialog (e.g. from flyspell) freezes
-  Râu and Emacs needs to be restarted.
-
 ** Roadmap
 
 - Get it into Melpa.
