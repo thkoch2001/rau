@@ -564,6 +564,17 @@ emacs instance!"
         (rau--make-be-server-name (+ 1 number))
       server-name)))
 
+(defun rau--wait-for-file (path interval times)
+  "Wait for PATH to exist TIMES x INTERVAL before raising an error."
+  (let ((count 0))
+    (while (and (not (file-exists-p path))
+                (< count times))
+      (cl-incf count)
+      (sleep-for interval))
+    (lgr-debug rau--lgr "Waited %d x %.2f seconds for %s" count interval path)
+    (unless (file-exists-p path)
+      (error "File did not show up: %s" path))))
+
 (defun rau--rpc-start-backend ()
   "Start the rau backend subprocess and connect via Unix socket."
   ;; TODO create socket in users run dir
@@ -584,7 +595,7 @@ emacs instance!"
                 :buffer " *rau-backend-stdout*"
                 :noquery t
                 :stderr " *rau-backend-stderr*"))
-         (_ (sleep-for 1)) ;; TODO react on something from the child instead
+         (_ (rau--wait-for-file sock-file 0.1 30))
          (conn (make-network-process
                 :name "rau-rpc"
                 :service nil
