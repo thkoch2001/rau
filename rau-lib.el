@@ -14,7 +14,7 @@ LOCATION identifies where the error occurred."
          (progn ,@body)
        (error (message "Error at %s: %S" ,location err)))))
 
-(defvar rau--lgr nil)
+(defvar rau--lgr (lgr-get-logger "rau"))
 
 ;;; Remote Procedure Calls between front-end and back-end
 

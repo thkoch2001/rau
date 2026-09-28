@@ -859,21 +859,6 @@ outputframe or external window."
 
 (defun rau-be-main ()
   "Entry point for the backend subprocess."
-
-  ;; TODO add a way to load a config file for the backend
-  (let ((appender
-         (lgr-set-layout
-          (lgr-appender-journald)
-          (lgr-layout-format
-           :format "%m"))))
-    (let ((lgr (lgr-get-logger "ewc")))
-      (lgr-add-appender lgr appender)
-      (lgr-set-threshold lgr lgr-level-info))
-    (let ((lgr (lgr-get-logger "rau")))
-      (lgr-add-appender lgr appender)
-      (lgr-set-threshold lgr lgr-level-info)
-      (setf rau--lgr lgr)))
-
   (let ((sock-file (pop command-line-args-left))
         (coding-system-for-read 'utf-8-emacs-unix)
         (coding-system-for-write 'utf-8-emacs-unix))

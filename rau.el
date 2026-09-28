@@ -44,6 +44,12 @@
 Wayland objects have been registered."
   :type 'hook)
 
+(defcustom rau-backend-init-file nil
+  "Emacs lisp init file for the backend Emacs instance.  Logging can be
+configured there."
+  :type 'file
+  :risky t)
+
 (defvar rau--fe-state nil
   "Current global rau WM front-end state.")
 
@@ -520,8 +526,7 @@ Call this function once when starting Emacs inside of river."
 
   (when rau--fe-state
     (user-error "Rau is already running"))
-  (setq rau--fe-state (rau--fe-state-make)
-        rau--lgr (lgr-get-logger "rau"))
+  (setq rau--fe-state (rau--fe-state-make))
 
   (unless confirm-kill-emacs
     (setq confirm-kill-emacs #'yes-or-no-p))
@@ -582,16 +587,22 @@ emacs instance!"
          (be-server-name (rau--make-be-server-name))
          (coding-system-for-read 'utf-8-emacs-unix)
          (coding-system-for-write 'utf-8-emacs-unix)
+         (init-file-args (when rau-backend-init-file
+                           (unless (file-readable-p rau-backend-init-file)
+                             (error "rau-backend-init-file not readable: %S" rau-backend-init-file))
+                           `("-l" ,rau-backend-init-file)))
+         (command `(,(expand-file-name invocation-name invocation-directory)
+                    "-Q"
+                    ,(format "--fg-daemon=%s" be-server-name) ; race-condition
+                    "-l" ,(locate-library "ewc")
+                    "-l" ,(locate-library "rau-lib")
+                    "-l" ,(locate-library "rau-be")
+                    ,@init-file-args
+                    "--eval=(rau-be-main)"
+                    ,sock-file))
          (proc (make-process
                 :name "rau-backend"
-                :command (list (expand-file-name invocation-name invocation-directory)
-                               "-Q"
-                               (format "--fg-daemon=%s" be-server-name) ; race-condition
-                               "-l" (locate-library "ewc")
-                               "-l" (locate-library "rau-lib")
-                               "-l" (locate-library "rau-be")
-                               "--eval=(rau-be-main)"
-                               sock-file)
+                :command command
                 :buffer " *rau-backend-stdout*"
                 :noquery t
                 :stderr " *rau-backend-stderr*"))

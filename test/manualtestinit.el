@@ -50,7 +50,7 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
     (lgr-set-threshold lgr lgr-level-trace)
     ))
 
-(print "rau enable" #'external-debugging-output)
+(print "rau configure" #'external-debugging-output)
 
 (defun rau-test-bind-keys ()
   (rau-bind-keys
@@ -59,6 +59,10 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
      )))
 
 (add-hook 'rau-ready-hook #'rau-test-bind-keys)
+(setopt rau-backend-init-file
+        (expand-file-name "rau-be-init.el" (file-name-directory load-file-name)))
+
+(print "rau enable" #'external-debugging-output)
 
 (keymap-global-set "s-z" #'rau-toggle-fullscreen)
 (rau-enable)
