@@ -14,20 +14,6 @@ stays in the background. Every external Wayland Window gets one Emacs buffer
 assigned. When this buffer is displayed, the external Wayland Window for this
 buffer gets displayed exactly on top of the buffer.
 
-** Roadmap
-
-- Get it into Melpa.
-- Try to do socket communication in a separate thread in a dynamic module to
-  avoid deadlocks in x-popup-menu.
-- Performance, this might fix the endless keypress loops.
-- avoid user accidentally closing emacs, e.g. with confirm-kill-emacs
-- smaller reconcile functions that check whether requests should be sent
-
-*** Ideas
-
-- https://joshblais.com/blog/i-built-a-launcher-in-emacs/
-- Try filechooser.el https://codeberg.org/rahguzar/filechooser/pulls/23
-
 ** Name
 
 "Râu" means "River" in Romanian and is not to be confused with "rău" meaning
