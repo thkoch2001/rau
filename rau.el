@@ -563,7 +563,7 @@ Call this function once when starting Emacs inside of river."
 NUMBER + 1. Multiple rau-be servers happen mostly during development.
 This function assumes that server-socket-dir will be the same in the be
 emacs instance!"
-  (let* ((server-name (format "rau-be-%d" (or number 1)))
+  (let* ((server-name (format "rau-backend-%d" (or number 1)))
         (server-file (expand-file-name server-name server-socket-dir)))
     (if (file-exists-p server-file)
         (rau--make-be-server-name (+ 1 number))
@@ -583,7 +583,10 @@ emacs instance!"
 (defun rau--rpc-start-backend ()
   "Start the rau backend subprocess and connect via Unix socket."
   ;; TODO create socket in users run dir
-  (let* ((sock-file (make-temp-name "/tmp/rau-be-"))
+  (let* ((sock-file
+          (make-temp-name
+           (expand-file-name "rau--backend-internal-"
+                             server-socket-dir)))
          (be-server-name (rau--make-be-server-name))
          (coding-system-for-read 'utf-8-emacs-unix)
          (coding-system-for-write 'utf-8-emacs-unix)
