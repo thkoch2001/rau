@@ -756,10 +756,15 @@ outputframe or external window."
   "Run the manage-sequence reconciliation."
   (rau--condition-case
    "reconcile-manage-requests"
-   (let ((manage-requests (nreverse (rau--state-manage-queue rau--state))))
+   (let ((client (rau--state-client rau--state))
+         (manage-requests (nreverse (rau--state-manage-queue rau--state))))
      (setf (rau--state-manage-queue rau--state) nil)
      (dolist (request manage-requests)
-       (rau--request (nth 0 request) (nth 1 request) (nth 2 request))))))
+       (pcase-let* ((`(,obj ,rq ,args) request)
+                    (id (ewc-object-id obj)))
+         (if (ewc-object-get client id)
+             (rau--request obj rq args)
+           (lgr-error rau--lgr "enqueued manage-rq on destroyed obj: %S %S %S" obj rq args)))))))
 
 ;;; Render cycle
 
