@@ -541,8 +541,8 @@ point where also the destroy request is sent."
     (rau--fe #'rau--tasks-enqueue #'rau--task-kill-buffer (ewc-object-id window-wl)))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (rau--request node-wl 'destroy))
-  (rau--request window-wl 'destroy)
   (rau--remove window-wl)
+  (rau--request window-wl 'destroy)
 
   ;; Reset fullscreen on output if window was fullscreen.
   (when (ewc-object-tagged-p window-wl rau--tag-external)
@@ -657,8 +657,9 @@ outputframe or external window."
   ;; TODO: also enqueue the below three actions, look out for race conditions
   (when-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
     (rau--request ls-output-wl 'destroy))
-  (rau--request output-wl 'destroy)
-  (rau--remove output-wl))
+  (rau--remove output-wl)
+  (rau--request output-wl 'destroy))
+  ;; TODO invalidate emacs-state, request new state
 
 ;; TODO: listener for wl_output, e.g. to get monitor names
 
