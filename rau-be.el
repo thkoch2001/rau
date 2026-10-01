@@ -290,6 +290,7 @@ situations where focus changed without us knowing (session-lock, layer surface).
                target-id
                (rau--window-wl-title target-wl))
 
+    ;; TODO: double check, whether the window is still in the client
     ;; Queue the actual Wayland focus request
     (rau--manage-enqueue seat-wl 'focus-window `((window . ,target-id)))
     (setf (rau--state-focus-last-id rau--state) target-id)
@@ -433,16 +434,16 @@ switching fullscreen between windows, call this before
 ;;;; wl-display listeners
 (defun rau--on-wl-display-error (_display-wl args)
   (pcase-let (((map object-id code message) args))
-    (message "wl_display error: object-id=%d code=%d message=%s"
-             object-id
-             code
-             (ewc-to-utf8 message))
+    (lgr-error rau--lgr "wl_display error: object-id=%d code=%d message=%s"
+               object-id
+               code
+               (ewc-to-utf8 message))
     (when-let* ((client (rau--state-client rau--state))
                 (object (ewc-object-get client object-id)))
-      (message "object id=%d interface=%s tags=%S"
-               object-id
-               (ewc-object-interface object)
-               (ewc-object-tags object)))))
+      (lgr-error rau--lgr "object id=%d interface=%s tags=%S"
+                 object-id
+                 (ewc-object-interface object)
+                 (ewc-object-tags object)))))
 
 (defun rau--on-wl-display-delete-id (_display-wl args)
   "Server acknowledges deletion of object created by client.
@@ -629,8 +630,11 @@ outputframe or external window."
                       (when-let*
                           ((frame-wl (rau--frame-wl-for-extwin-wl window-wl)))
                         (rau--outframe-wl-output-wl frame-wl)))))
+      (lgr-debug rau--lgr "Fullscreen requested for window %d, output %S."
+        (ewc-object-id window-wl) output)
       (if (not output-wl)
-          (message "Fullscreen requested, but no output found")
+          (lgr-error rau--lgr "Fullscreen requested for window %d, but no output found"
+                     (ewc-object-id window-wl))
         (let ((current-fs (rau--output-wl-fullscreen-window-wl output-wl)))
           (when (and current-fs (not (eq current-fs window-wl)))
             (rau--fullscreen-exit current-fs output-wl)))
