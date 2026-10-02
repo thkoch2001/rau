@@ -563,8 +563,9 @@ Call this function once when starting Emacs inside of river."
 NUMBER + 1. Multiple rau-be servers happen mostly during development.
 This function assumes that server-socket-dir will be the same in the be
 emacs instance!"
-  (let* ((server-name (format "rau-backend-%d" (or number 1)))
-        (server-file (expand-file-name server-name server-socket-dir)))
+  (let* ((number (or number 1))
+         (server-name (format "rau-backend-%d" number))
+         (server-file (expand-file-name server-name server-socket-dir)))
     (if (file-exists-p server-file)
         (rau--make-be-server-name (+ 1 number))
       server-name)))
