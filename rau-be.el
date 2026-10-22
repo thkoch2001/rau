@@ -775,11 +775,13 @@ outputframe or external window."
          (manage-requests (nreverse (rau--state-manage-queue rau--state))))
      (setf (rau--state-manage-queue rau--state) nil)
      (dolist (request manage-requests)
-       (pcase-let* ((`(,obj ,rq ,args) request)
-                    (id (ewc-object-id obj)))
-         (if (ewc-object-get client id)
-             (rau--request obj rq args)
-           (lgr-error rau--lgr "enqueued manage-rq on destroyed obj: %S %S %S" obj rq args)))))))
+       (pcase-let* ((`(,obj-or-id ,rq ,args) request)
+                    (object-id (if (ewc-object-p obj-or-id)
+                                   (ewc-object-id obj-or-id)
+                                 obj-or-id)))
+         (if-let* ((object-wl (ewc-object-get client object-id)))
+             (rau--request object-wl rq args)
+           (lgr-error rau--lgr "enqueued manage-rq on destroyed obj: %S %S %S" object-id rq args)))))))
 
 ;;; Render cycle
 
