@@ -30,7 +30,7 @@
 (declare-function rau--bind-parsed-keys "rau-be" (parsed-keys))
 (declare-function rau--manage-enqueue "rau-be" (ewc-object request &optional args))
 (declare-function rau--mark-manage-dirty "rau-be" ())
-(declare-function rau--request-focus-by-id "rau-be" (&optional target-id force))
+(declare-function rau--request-focus "rau-be" (target))
 (declare-function rau--toggle-fullscreen-by-window-id "rau-be" (window-id))
 (declare-function rau--update-fe-ui-state "rau-be" (state))
 
@@ -184,6 +184,9 @@ used in event listeners."
 (defun rau--task-minimize-window (window-id)
   (when-let* ((buffer (rau--buffer-for-window-id window-id)))
     (bury-buffer buffer)))
+
+(defun rau--task-recover-focus ()
+  (rau--update-focus-request))
 
 (defun rau--task-rename-buffer (window-id name)
   "Rename buffer for external window to NAME."
@@ -397,7 +400,7 @@ This function should be run from the `rau-ready-hook'."
   (when-let* (((rau--focus-change-allowed-p))
               (emacs-window (selected-window))
               (target-id (rau--window-id-for-emacs-window emacs-window)))
-    (rau--be #'rau--request-focus-by-id target-id)))
+    (rau--be #'rau--request-focus target-id)))
 
 (defun rau--recover-focus-after-binding-pressed ()
   "Give focus back to external window after it was given to Emacs to handle
@@ -415,7 +418,7 @@ post-command-hook in the enqueued command of the pressed event handler."
     (lgr-debug rau--lgr "recover focus. removing post-command-hook.")
     (remove-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)
     (when-let* ((window-id (buffer-local-value 'rau--window-id (current-buffer))))
-      (rau--be #'rau--request-focus-by-id window-id))))
+      (rau--be #'rau--request-focus window-id))))
 
 (defun rau--buffer-killed ()
   "Request closing of the associated Wayland window when a rau buffer is killed."

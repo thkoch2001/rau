@@ -103,6 +103,9 @@
   ;; This could be a focus_window or a focus_shell_surface request
   (focus-last-id -1)
 
+  ;; nil or either an id or t for focus-last-id
+  focus-requested
+
   manage-dirty-timer
   ;; manage queue: list of (ewc-object 'request args) for the next manage
   ;; cycle
@@ -276,45 +279,51 @@ See also `rau-on-wl-display-delete-id'."
 
 ;;; Focus
 
-(defun rau--request-focus (target-wl &optional force)
-  "Request focus for TARGET-WL.
-Queues the focus-window request and updates Emacs state.  If FORCE is
-non-nil, bypass the comparission with focus-last-id from rau--state for
-situations where focus changed without us knowing (session-lock, layer surface)."
-  (when-let* ((target-id (ewc-object-id target-wl))
-              ((or force
-                   (not (eq target-id (rau--state-focus-last-id rau--state)))))
-              (client (rau--state-client rau--state))
-              (seat-wl (ewc-first-object client 'river-seat-v1)))
-    (lgr-debug rau--lgr "request focus-window id=%d title=%s"
-               target-id
-               (rau--window-wl-title target-wl))
+(defun rau--get-focus-target-wl ()
+  (unwind-protect
+      (when-let* ((requested (rau--state-focus-requested rau--state))
+                  (requested-id (if (equal requested t)
+                                    (rau--state-focus-last-id rau--state)
+                                  requested))
+                  ((not (equal -1 requested-id)))
+                  (client (rau--state-client rau--state)))
+        (if-let* ((target-wl (ewc-object-get client requested-id)))
+            target-wl
+          (rau--fe #'rau--tasks-enqueue #'rau--task-recover-focus)
+          (lgr-warning rau--lgr "focus target gone: requested=%S" requested)
+          (throw 'focus-target-gone nil)))
+    (setf (rau--state-focus-requested rau--state) nil)))
 
-    ;; TODO: double check, whether the window is still in the client
-    ;; Queue the actual Wayland focus request
-    (rau--manage-enqueue seat-wl 'focus-window `((window . ,target-id)))
-    (setf (rau--state-focus-last-id rau--state) target-id)
-
-    ;; Queue the layer-shell default output update
-    (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-external)
-                              (rau--frame-wl-for-extwin-wl target-wl)
-                            target-wl))
-                (output-wl (rau--outframe-wl-output-wl frame-wl))
-                (ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
-      (rau--manage-enqueue ls-output-wl 'set-default))
-
-    (when-let* (((ewc-object-tagged-p target-wl rau--tag-external)))
-      (rau--fe #'rau--tasks-enqueue #'rau--task-select-window target-id))))
-
-(defun rau--request-focus-by-id (&optional target-id force)
-  "Request focus for the window with TARGET-ID or the last focused.
-See `rau--request-focus' for details on FORCE."
-  (let ((id (or target-id (rau--state-focus-last-id rau--state))))
-    (when-let* (id
-                ((not (equal -1 id)))
+(defun rau--reconcile-focus ()
+  "Set focus as rau--state-focus-requested."
+  (catch 'focus-target-gone
+    (when-let* ((target-wl (rau--get-focus-target-wl))
+                (target-id (ewc-object-id target-wl))
                 (client (rau--state-client rau--state))
-                (target-wl (ewc-object-get client id)))
-      (rau--request-focus target-wl force))))
+                (seat-wl (ewc-first-object client 'river-seat-v1)))
+      (lgr-debug rau--lgr "reconcile focus-window id=%d title=%s"
+                 target-id
+                 (rau--window-wl-title target-wl))
+
+      (rau--request seat-wl 'focus-window `((window . ,target-id)))
+      (setf (rau--state-focus-last-id rau--state) target-id)
+
+      (when-let* ((frame-wl (if (ewc-object-tagged-p target-wl rau--tag-external)
+                                (rau--frame-wl-for-extwin-wl target-wl)
+                              target-wl))
+                  (output-wl (rau--outframe-wl-output-wl frame-wl))
+                  (ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
+        (rau--request ls-output-wl 'set-default))
+
+      (when-let* (((ewc-object-tagged-p target-wl rau--tag-external)))
+        (rau--fe #'rau--tasks-enqueue #'rau--task-select-window target-id)))))
+
+(defun rau--request-focus (target)
+  "Request focus for TARGET, either ewc-object, object id or t for
+last focused."
+  (when-let* ((id (if (ewc-object-p target) (ewc-object-id target) target)))
+    (setf (rau--state-focus-requested rau--state) id)
+    (rau--mark-manage-dirty)))
 
 ;;; Keybindings
 
@@ -492,6 +501,7 @@ point where also the destroy request is sent."
   (rau--manage-queue-send)
   (rau--reconcile-frames)
   (rau--reconcile-windows)
+  (rau--reconcile-focus)
 
   (rau--request wm-wl 'manage-finish))
 
@@ -505,7 +515,7 @@ point where also the destroy request is sent."
 
 (defun rau--on-river-window-manager-v1-session-unlocked (_wm-wl _)
   (setf (rau--state-session-locked rau--state) nil)
-  (rau--request-focus-by-id nil t))
+  (rau--request-focus t))
 
 (defun rau--on-river-window-manager-v1-window (_wm-wl args)
   (pcase-let* (((map id) args)
@@ -679,7 +689,7 @@ outputframe or external window."
 (defun rau--on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
     (lgr-debug rau--lgr "window interaction with %d" window)
-    (rau--request-focus-by-id window)))
+    (rau--request-focus window)))
 
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
@@ -711,7 +721,7 @@ outputframe or external window."
 ;;;; river-layer-shell-seat-v1 listeners
 (defun rau--on-river-layer-shell-seat-v1-focus-none (_ls-seat-wl _)
   "Give focus back to the last window that had it."
-  (rau--request-focus-by-id nil t))
+  (rau--request-focus t))
 
 ;;; Manage cycle
 
