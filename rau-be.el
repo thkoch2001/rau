@@ -290,7 +290,7 @@ See also `rau-on-wl-display-delete-id'."
         (if-let* ((target-wl (ewc-object-get client requested-id)))
             target-wl
           (rau--fe #'rau--tasks-enqueue #'rau--task-recover-focus)
-          (lgr-warning rau--lgr "focus target gone: requested=%S" requested)
+          (lgr-warn rau--lgr "focus target gone: requested=%S" requested)
           (throw 'focus-target-gone nil)))
     (setf (rau--state-focus-requested rau--state) nil)))
 
