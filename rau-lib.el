@@ -16,6 +16,30 @@ LOCATION identifies where the error occurred."
 
 (defvar rau--lgr (lgr-get-logger "rau"))
 
+(defconst rau--modifier-bits
+  '((shift   . 1)
+    (control . 4)
+    (meta    . 8)
+    (super   . 64)
+    (hyper   . 128))
+  "Modifier bits as per river_seat_v1.modifiers / XKB.")
+
+(defun rau--modifiers-bitmap (modifier-symbols)
+  "Get bitmap for binding modifiers as defined in rau--modifier-bits."
+  (let ((modifier-bits (seq-keep (lambda (mod)
+                                   (alist-get mod rau--modifier-bits))
+                                 modifier-symbols)))
+    (apply #'logior modifier-bits)))
+
+(defun rau--cons-add (c1 c2)
+  "Add two cons cells element-wise."
+  (cons (+ (car c1) (car c2))
+        (+ (cdr c1) (cdr c2))))
+
+(defun rau--cons-as-xy (cons)
+  `((x . ,(car cons))
+    (y . ,(cdr cons))))
+
 ;;; Remote Procedure Calls between front-end and back-end
 
 (defvar rau--rpc-proc nil

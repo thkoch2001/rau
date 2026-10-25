@@ -211,23 +211,13 @@ used in event listeners."
 
 ;;; Keybindings
 
-(defconst rau--modifier-bits
-  '((shift   . 1)
-    (control . 4)
-    (meta    . 8)
-    (super   . 64)
-    (hyper   . 128))
-  "Modifier bits as per river_seat_v1.modifiers / XKB.")
-
 (defun rau--key-to-xkb (key-string)
   "Decompose KEY-STRING into (EVENT KEY MODIFIERS)."
   (let* ((event (aref (kbd key-string) 0))
          (basic (event-basic-type event))
-         (mods (seq-keep (lambda (mod)
-                           (alist-get mod rau--modifier-bits))
-                         (event-modifiers event)))
+         (mods (rau--modifiers-bitmap (event-modifiers event)))
          (key (if (characterp basic) basic (symbol-name basic))))
-    (list event key (apply #'logior mods))))
+    (list event key mods)))
 
 (defun rau--parse-keys (keys)
   "Parse KEYS into a list of rau--binding structs. See `rau-bind-keys'."

@@ -71,18 +71,19 @@
 
 (cl-defstruct (rau--window (:constructor rau--window-make))
   "State for a River window."
+  absolute-position ; todo: maybe move into node?
   actual-dimensions
   app-id
+  dimensions
   dimensions-hint-max
   dimensions-hint-min
-  ;; edges only for external, tiled windows
-  edges
   ;; emacs frame-id, either the own for emacs output frame or of the
   ;; containing frame for tiled external window
   frame-id
   (node-wl nil :type ewc-object)
   parent-wl
   pid
+  position
   title)
 
 (cl-defstruct (rau--seat (:constructor rau--seat-make))
@@ -98,6 +99,17 @@
   needs-focus
   layout
   allow-when-locked)
+
+;; see linux include/uapi/linux/input-event-codes.h
+;; used to bind pointer-bindings
+(defconst rau--btn-left #x110)
+(defconst rau--btn-right #x111)
+(defconst rau--btn-middle #x112)
+
+(cl-defstruct (rau--pointer-binding (:constructor rau--pointer-binding-make))
+  "State for one pointer binding."
+  on-pressed
+  on-released)
 
 (cl-defstruct (rau--state (:constructor rau--state-make))
   "Holds the state of the rau Wayland client."
@@ -116,13 +128,18 @@
   manage-dirty-timer
   ;; manage queue: list of (ewc-object 'request args) for the next manage
   ;; cycle
-  manage-queue)
+  manage-queue
+  pointer-op
+  pointer-op-delta
+  pointer-op-window-wl
+  pointer-in-window-id)
 
 (ewc-define-data-accessors rau--output)
 (ewc-define-data-accessors rau--ls-output)
 (ewc-define-data-accessors rau--window)
 (ewc-define-data-accessors rau--seat)
 (ewc-define-data-accessors rau--binding)
+(ewc-define-data-accessors rau--pointer-binding)
 
 ;;; Data access helpers
 
@@ -142,12 +159,6 @@ WINDOW-WL."
     (cl-loop for frame-wl in outputframes
              if (eq frame-id (rau--window-wl-frame-id frame-wl))
              return frame-wl)))
-
-(defun rau--dimensions-for-window-wl (window-wl)
-  (pcase-let (((and edges `(,left ,top ,right ,bottom))
-               (rau--window-wl-edges window-wl)))
-    (when (and edges (all 'integerp edges))
-      `(,(- right left) . ,(- bottom top)))))
 
 (defun rau--dimensions-for-outputframe (output-wl)
   "Get dimensions from output-wl or its ls-output-wl non-exclusive-area."
@@ -386,7 +397,7 @@ switching fullscreen between windows, call this before
              (ewc-object-id output-wl))
   (rau--manage-enqueue window-wl 'inform-not-fullscreen)
   (rau--manage-enqueue window-wl 'exit-fullscreen)
-  (when-let* ((dimensions (rau--dimensions-for-window-wl window-wl)))
+  (when-let* ((dimensions (rau--window-wl-dimensions window-wl)))
     (rau--manage-enqueue window-wl 'propose-dimensions
                          `((width . ,(car dimensions))
                            (height . ,(cdr dimensions)))))
@@ -415,6 +426,40 @@ switching fullscreen between windows, call this before
     (lgr-error rau--lgr "toggle-fs: boundp window-wl=%S, frame-wl=%S, output-wl=%S"
                (boundp window-wl) (boundp frame-wl) (boundp output-wl))))
 
+;;; Floating windows
+
+;;;; Move floating window
+
+(defun rau--floating-on-move-start ()
+  (when-let* ((client (rau--state-client rau--state))
+              (seat-wl (ewc-first-object client 'river-seat-v1))
+              (window-id (rau--state-pointer-in-window-id rau--state))
+              (window-wl (ewc-object-get client window-id))
+              ((ewc-object-tagged-p window-wl rau--tag-floating)))
+    (setf (rau--state-pointer-op rau--state) #'rau--floating-on-op-delta-move
+          (rau--state-pointer-op-window-wl rau--state) window-wl)
+    (rau--manage-enqueue seat-wl 'op-start-pointer)))
+
+(defun rau--floating-on-op-delta-move (dx dy)
+  (when-let* ((window-wl (rau--state-pointer-op-window-wl rau--state))
+              (node-wl (rau--window-wl-node-wl window-wl))
+              (position (rau--window-wl-absolute-position window-wl))
+              (delta `(,dx . ,dy))
+              (new-position (rau--cons-add position delta)))
+    (setf (rau--state-pointer-op-delta rau--state) delta)
+    (rau--manage-enqueue node-wl 'set-position (rau--cons-as-xy new-position))))
+
+(defun rau--floating-on-move-end ()
+  (when-let* ((client (rau--state-client rau--state))
+              (seat-wl (ewc-first-object client 'river-seat-v1))
+              (window-wl (rau--state-pointer-op-window-wl rau--state))
+              (delta (rau--state-pointer-op-delta rau--state))
+              (position (rau--window-wl-absolute-position window-wl)))
+    (setf (rau--state-pointer-op rau--state) nil
+          (rau--state-pointer-op-window-wl rau--state) nil
+          (rau--window-wl-absolute-position window-wl) (rau--cons-add delta position))
+    (rau--manage-enqueue seat-wl 'op-end)))
+
 ;;; Layer shell attachment helpers
 
 (defun rau--ensure-ls-output (output-wl)
@@ -430,6 +475,17 @@ switching fullscreen between windows, call this before
                   `((id . ,(ewc-object-id ls-output-wl))
                     (output . ,(ewc-object-id output-wl))))))
 
+(defun rau--init-pointer-binding (seat-wl modifiers button data)
+  (let* ((client (rau--state-client rau--state))
+         (pb-wl (ewc-object-add client 'river-pointer-binding-v1)))
+    (setf (ewc-object-data pb-wl)
+          (apply #'rau--pointer-binding-make data))
+    (rau--request seat-wl 'get-pointer-binding
+                  `((id . ,(ewc-object-id pb-wl))
+                    (button . ,button)
+                    (modifiers . ,(rau--modifiers-bitmap modifiers))))
+    (rau--manage-enqueue pb-wl 'enable)))
+
 (defun rau--ensure-ls-seat (seat-wl)
   "Create a layer-shell seat object for the current seat if possible."
   (when-let* (((null (rau--seat-wl-ls-seat-wl seat-wl)))
@@ -442,7 +498,11 @@ switching fullscreen between windows, call this before
                    `((id . ,(ewc-object-id ls-seat-wl))
                      (seat . ,(ewc-object-id seat-wl))))
     (rau--fe #'rau--tasks-enqueue #'run-hooks 'rau-ready-hook)
-    (rau--mark-manage-dirty)))
+    (rau--init-pointer-binding seat-wl
+                               '(super)
+                               rau--btn-left
+                               '(:on-pressed rau--floating-on-move-start
+                                 :on-released rau--floating-on-move-end))))
 
 ;;; Listeners
 
@@ -696,11 +756,36 @@ outputframe or external window."
   (pcase-let (((map width height) args))
     (setf (rau--output-wl-dimensions output-wl) `(,width . ,height))))
 
-;;;; river-seat-v1 listener
+;;;; river-seat-v1 listeners
+
+(defun rau--on-river-seat-v1-pointer-enter (_seat-wl args)
+  (pcase-let* (((map window) args))
+    (setf (rau--state-pointer-in-window-id rau--state) window)))
+
+(defun rau--on-river-seat-v1-pointer-leave (_seat-wl args)
+  (setf (rau--state-pointer-in-window-id rau--state) nil))
+
 (defun rau--on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
     (lgr-debug rau--lgr "window interaction with %d" window)
     (rau--request-focus window)))
+
+(defun rau--on-river-seat-v1-op-delta (_seat-wl args)
+  (pcase-let* (((map dx dy) args))
+    (funcall (rau--state-pointer-op rau--state) dx dy)))
+
+(defun rau--on-river-seat-v1-op-release (_seat-wl args)
+  )
+
+;;;; river-pointer-binding-v1 listeners
+
+(defun rau--on-river-pointer-binding-v1-pressed (pb-wl _)
+  (lgr-debug rau--lgr "pb pressed")
+  (funcall (rau--pointer-binding-wl-on-pressed pb-wl)))
+
+(defun rau--on-river-pointer-binding-v1-released (pb-wl _)
+  (lgr-debug rau--lgr "pb released")
+  (funcall (rau--pointer-binding-wl-on-released pb-wl)))
 
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
@@ -765,15 +850,14 @@ outputframe or external window."
               (client (rau--state-client rau--state))
               (output-wl (ewc-object-get client output-id))
               (position (rau--position-for-outputframe output-wl)))
-    (rau--request node-wl 'set-position
-                  `((x . ,(car position))
-                    (y . ,(cdr position))))))
+    (setf (rau--window-wl-absolute-position window-wl) position)
+    (rau--request node-wl 'set-position (rau--cons-as-xy position))))
 
 (defun rau--reconcile-window-tiled (window-wl)
   (rau--request window-wl
                 'set-tiled
                 `((edges . ,rau--edges-all)))
-  (when-let* ((dimensions (rau--dimensions-for-window-wl window-wl)))
+  (when-let* ((dimensions (rau--window-wl-dimensions window-wl)))
     (rau--request window-wl
                   'propose-dimensions
                   `((width . ,(car dimensions))
@@ -804,7 +888,7 @@ outputframe or external window."
                 title)))))
 
 (defun rau--reconcile-windows ()
-  "Close killed windows and propose dimensions for active windows."
+  "TODO update Close killed windows and propose dimensions for active windows."
   (rau--do rau--tag-external window-wl rau--state
     (cond
      ((ewc-object-tagged-p window-wl rau--tag-new-external)
@@ -843,9 +927,7 @@ outputframe or external window."
              (lgr-trace rau--lgr "render frame %d for output %d."
                       (ewc-object-id frame-wl)
                       (ewc-object-id output-wl))
-             (rau--request node-wl 'set-position
-                           `((x . ,(car position))
-                             (y . ,(cdr position)))))))
+             (rau--request node-wl 'set-position (rau--cons-as-xy position)))))
 
 (defun rau--render-window-floating (window-wl)
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
@@ -858,16 +940,15 @@ outputframe or external window."
               (output-wl (rau--outframe-wl-output-wl frame-wl))
               (frame-node-wl (rau--window-wl-node-wl frame-wl))
               (frame-node-id (ewc-object-id frame-node-wl)))
-        (pcase-let* ((`(,left ,top ,_right ,_bottom)
-                      (rau--window-wl-edges window-wl))
-                     (position (rau--position-for-outputframe output-wl))
+        (pcase-let* ((win-position (rau--window-wl-position window-wl))
+                     (frame-position (rau--position-for-outputframe output-wl))
+                     (position (rau--cons-add win-position frame-position))
                      (dimensions (rau--window-wl-actual-dimensions window-wl))
-                     (clip (or dimensions (rau--dimensions-for-window-wl window-wl))))
+                     (clip (or dimensions (rau--window-wl-dimensions window-wl))))
           (rau--request window-wl 'show)
 
-          (rau--request node-wl 'set-position
-                        `((x . ,(+ left (car position)))
-                          (y . ,(+ top (cdr position)))))
+          (setf (rau--window-wl-absolute-position window-wl) position)
+          (rau--request node-wl 'set-position (rau--cons-as-xy position))
 
           ;; Place window above the Emacs outputframe window but not at the top
           ;; In theory this should leave the top for floating windows
@@ -893,15 +974,22 @@ outputframe or external window."
 (defun rau--update-fe-ui-state (state)
   ;; TODO here we could build a visibility diff to send show and hide only when necessary
   (rau--do rau--tag-external window-wl rau--state
-    (setf (rau--window-wl-edges window-wl) nil
+    (setf (rau--window-wl-dimensions window-wl) nil
+          (rau--window-wl-position window-wl) nil
           (rau--window-wl-frame-id window-wl) nil))
   (let ((extwins (alist-get 'extwins state))
         (outframes (alist-get 'outframes state))
         (client (rau--state-client rau--state)))
     (dolist (win extwins)
       (when-let* ((window-id (alist-get 'window-id win))
-                  (window-wl (ewc-object-get client window-id)))
-        (setf (rau--window-wl-edges window-wl) (alist-get 'edges win)
+                  (window-wl (ewc-object-get client window-id))
+                  (edges (alist-get 'edges win))
+                  (left (nth 0 edges))
+                  (top (nth 1 edges))
+                  (right (nth 2 edges))
+                  (bottom (nth 3 edges)))
+        (setf (rau--window-wl-dimensions window-wl) `(,(- right left) . ,(- bottom top))
+              (rau--window-wl-position window-wl) `(,left . ,top)
               (rau--window-wl-frame-id window-wl) (alist-get 'frame-id win))))
     (dolist (outframe outframes)
       (let* ((window-id (alist-get 'window-id outframe))
