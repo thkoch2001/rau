@@ -37,6 +37,9 @@
 (defvar rau--state nil
   "Current global rau WM state.")
 
+(defcustom rau-pointer-bindings-modifiers '(super)
+  "modifiers for pointer bindings")
+
 ;;; State structs
 
 (cl-defstruct (rau--output (:constructor rau--output-make))
@@ -485,7 +488,7 @@ switching fullscreen between windows, call this before
                      (seat . ,(ewc-object-id seat-wl))))
     (rau--fe #'rau--tasks-enqueue #'run-hooks 'rau-ready-hook)
     (rau--init-pointer-binding seat-wl
-                               '(super)
+                               rau-pointer-bindings-modifiers
                                rau--btn-left
                                '(:on-pressed rau--floating-on-move-start
                                  :on-released rau--floating-on-move-end))))

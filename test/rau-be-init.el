@@ -11,3 +11,5 @@
       (lgr-add-appender lgr appender)
       (lgr-set-threshold lgr lgr-level-debug)
       ))
+
+(setopt rau-pointer-bindings-modifiers '(shift))
