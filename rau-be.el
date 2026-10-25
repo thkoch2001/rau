@@ -430,34 +430,20 @@ switching fullscreen between windows, call this before
 
 ;;;; Move floating window
 
-(defun rau--floating-on-move-start ()
-  (when-let* ((client (rau--state-client rau--state))
-              (seat-wl (ewc-first-object client 'river-seat-v1))
-              (window-id (rau--state-pointer-in-window-id rau--state))
-              (window-wl (ewc-object-get client window-id))
-              ((ewc-object-tagged-p window-wl rau--tag-floating)))
-    (setf (rau--state-pointer-op rau--state) #'rau--floating-on-op-delta-move
-          (rau--state-pointer-op-window-wl rau--state) window-wl)
+(defun rau--floating-on-move-start (window-wl seat-wl)
+  (when (ewc-object-tagged-p window-wl rau--tag-floating)
+    (setf (rau--state-pointer-op rau--state) #'rau--floating-on-op-delta-move)
     (rau--manage-enqueue seat-wl 'op-start-pointer)))
 
-(defun rau--floating-on-op-delta-move (dx dy)
-  (when-let* ((window-wl (rau--state-pointer-op-window-wl rau--state))
-              (node-wl (rau--window-wl-node-wl window-wl))
-              (position (rau--window-wl-absolute-position window-wl))
-              (delta `(,dx . ,dy))
-              (new-position (rau--cons-add position delta)))
-    (setf (rau--state-pointer-op-delta rau--state) delta)
+(defun rau--floating-on-op-delta-move (window-wl delta)
+  (let* ((node-wl (rau--window-wl-node-wl window-wl))
+         (position (rau--window-wl-absolute-position window-wl))
+         (new-position (rau--cons-add position delta)))
     (rau--manage-enqueue node-wl 'set-position (rau--cons-as-xy new-position))))
 
-(defun rau--floating-on-move-end ()
-  (when-let* ((client (rau--state-client rau--state))
-              (seat-wl (ewc-first-object client 'river-seat-v1))
-              (window-wl (rau--state-pointer-op-window-wl rau--state))
-              (delta (rau--state-pointer-op-delta rau--state))
-              (position (rau--window-wl-absolute-position window-wl)))
-    (setf (rau--state-pointer-op rau--state) nil
-          (rau--state-pointer-op-window-wl rau--state) nil
-          (rau--window-wl-absolute-position window-wl) (rau--cons-add delta position))
+(defun rau--floating-on-move-end (window-wl seat-wl delta)
+  (let* ((position (rau--window-wl-absolute-position window-wl)))
+    (setf (rau--window-wl-absolute-position window-wl) (rau--cons-add position delta))
     (rau--manage-enqueue seat-wl 'op-end)))
 
 ;;; Layer shell attachment helpers
@@ -771,8 +757,13 @@ outputframe or external window."
     (rau--request-focus window)))
 
 (defun rau--on-river-seat-v1-op-delta (_seat-wl args)
-  (pcase-let* (((map dx dy) args))
-    (funcall (rau--state-pointer-op rau--state) dx dy)))
+  (pcase-let* (((map dx dy) args)
+               (delta `(,dx . ,dy))
+               (window-wl (rau--state-pointer-op-window-wl rau--state)))
+    (if (not window-wl)
+        (lgr-error rau--lgr "op-delta but no pointer-op-window-wl")
+      (setf (rau--state-pointer-op-delta rau--state) delta)
+      (funcall (rau--state-pointer-op rau--state) window-wl delta))))
 
 (defun rau--on-river-seat-v1-op-release (_seat-wl args)
   )
@@ -780,12 +771,25 @@ outputframe or external window."
 ;;;; river-pointer-binding-v1 listeners
 
 (defun rau--on-river-pointer-binding-v1-pressed (pb-wl _)
-  (lgr-debug rau--lgr "pb pressed")
-  (funcall (rau--pointer-binding-wl-on-pressed pb-wl)))
+  (let* ((client (rau--state-client rau--state))
+         (window-id (rau--state-pointer-in-window-id rau--state))
+         (window-wl (ewc-object-get client window-id))
+         (seat-wl (ewc-first-object client 'river-seat-v1)))
+    (lgr-debug rau--lgr "pb pressed: window-id=%S" window-id)
+    (when-let* ((on-pressed (rau--pointer-binding-wl-on-pressed pb-wl)))
+      (setf (rau--state-pointer-op-window-wl rau--state) window-wl)
+      (funcall on-pressed window-wl seat-wl))))
 
 (defun rau--on-river-pointer-binding-v1-released (pb-wl _)
   (lgr-debug rau--lgr "pb released")
-  (funcall (rau--pointer-binding-wl-on-released pb-wl)))
+  (let* ((client (rau--state-client rau--state))
+         (seat-wl (ewc-first-object client 'river-seat-v1))
+         (window-wl (rau--state-pointer-op-window-wl rau--state))
+         (delta (rau--state-pointer-op-delta rau--state)))
+    (setf (rau--state-pointer-op rau--state) nil
+          (rau--state-pointer-op-window-wl rau--state) nil)
+    (when-let* ((on-released (rau--pointer-binding-wl-on-released pb-wl)))
+      (funcall on-released window-wl seat-wl delta))))
 
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
@@ -871,7 +875,9 @@ outputframe or external window."
          (title (rau--window-wl-title window-wl))
          (floating (or
                     (ewc-object-p parent-wl)
-                    (and max (not (equal max '(0 . 0)))))) ; TODO only (eq max min)?
+                    (and max
+                         (not (equal max '(0 . 0)))
+                         (equal min max))))
          (client (rau--state-client rau--state)))
     (lgr-debug rau--lgr
       "New external window: id=%d title=%S max=%S min=%S parent=%S floating=%S"
