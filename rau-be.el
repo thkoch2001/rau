@@ -102,6 +102,7 @@
 (cl-defstruct (rau--state (:constructor rau--state-make))
   "Holds the state of the rau Wayland client."
   (client nil :type ewc-client)
+  default-output-id
   session-locked
 
   ;;; Focus tracking.
@@ -320,7 +321,8 @@ See also `rau-on-wl-display-delete-id'."
                               target-wl))
                   (output-wl (rau--outframe-wl-output-wl frame-wl))
                   (ls-output-wl (rau--output-wl-ls-output-wl output-wl)))
-        (rau--request ls-output-wl 'set-default))
+        (rau--request ls-output-wl 'set-default)
+        (setf (rau--state-default-output-id rau--state) (ewc-object-id output-wl)))
 
       (when-let* (((ewc-object-tagged-p target-wl rau--tag-external)))
         (rau--fe #'rau--tasks-enqueue #'rau--task-select-window target-id)))))
@@ -753,11 +755,19 @@ outputframe or external window."
 
         (lgr-debug rau--lgr "no frame found for output, waiting for client state.")))))
 
-(defun rau--reconcile-window-floating (window-wl)
+(defun rau--setup-window-floating (window-wl)
   (rau--request window-wl 'set-tiled '((edges . 0)))
   ;; propose 0, allow window do decide its own dimensions
   (rau--request window-wl 'propose-dimensions '((width . 0) (height . 0)))
-  (rau--request window-wl 'use-csd))
+  (rau--request window-wl 'use-csd)
+  (when-let* ((output-id (rau--state-default-output-id rau--state))
+              (node-wl (rau--window-wl-node-wl window-wl))
+              (client (rau--state-client rau--state))
+              (output-wl (ewc-object-get client output-id))
+              (position (rau--position-for-outputframe output-wl)))
+    (rau--request node-wl 'set-position
+                  `((x . ,(car position))
+                    (y . ,(cdr position))))))
 
 (defun rau--reconcile-window-tiled (window-wl)
   (rau--request window-wl
@@ -785,7 +795,7 @@ outputframe or external window."
     (ewc-object-untag client window-wl rau--tag-new-external)
     (ewc-object-tag client window-wl (if floating rau--tag-floating rau--tag-tiled))
     (if floating
-        (rau--reconcile-window-floating window-wl)
+        (rau--setup-window-floating window-wl)
       (rau--reconcile-window-tiled window-wl)
       (rau--fe #'rau--tasks-enqueue #'rau--task-setup-new-external-window
                id
@@ -800,7 +810,7 @@ outputframe or external window."
      ((ewc-object-tagged-p window-wl rau--tag-new-external)
       (rau--reconcile-new-external window-wl))
      ((ewc-object-tagged-p window-wl rau--tag-floating)
-      (rau--reconcile-window-floating window-wl))
+      nil)
      ((ewc-object-tagged-p window-wl rau--tag-tiled)
       (rau--reconcile-window-tiled window-wl))
      (t
