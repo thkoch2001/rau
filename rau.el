@@ -199,9 +199,10 @@ used in event listeners."
   (when-let* ((emacs-window (rau--emacs-window-for-window-id window-id)))
     (select-window emacs-window 'norecord)))
 
-(defun rau--task-setup-new-external-window (window-id)
+(defun rau--task-setup-new-external-window (window-id title)
   "Create and display Rau mode buffer for WINDOW-ID."
-  (let ((buffer (get-buffer-create (make-temp-name "rau-external-"))))
+  (let* ((name (or title (make-temp-name "rau-external-")))
+         (buffer (get-buffer-create name)))
     (with-current-buffer buffer
       (rau-mode)
       (setq-local rau--window-id window-id)

@@ -338,7 +338,8 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
     (if-let* ((object (ewc-object-get client id)))
         (let ((listeners (ewc-object-listeners object))
               (spec (nth opcode (ewc-object-events object))))
-          (lgr-debug ewc--lgr "ewc: event if=%s opcode=%s (%s)"
+          (lgr-debug ewc--lgr "ewc: event id=%d if=%s opcode=%s (%s)"
+                     id
                      (ewc-object-interface object)
                      opcode
                      (car spec))
@@ -350,7 +351,8 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
                 (when args (lgr-debug ewc--lgr "ewc: args %S" args))
                 (condition-case err
                     (funcall listener object args)
-                  (error (message "ewc: listener error for %s opcode %s: %S"
+                  (error (message "ewc: listener error id=%d if=%s opcode=%s: %S"
+                            id
                             (ewc-object-interface object)
                             opcode
                             err))))

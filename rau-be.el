@@ -29,7 +29,7 @@
 (declare-function rau--task-minimize-window "rau" (window-id))
 (declare-function rau--task-rename-buffer "rau" (window-id name))
 (declare-function rau--task-select-window "rau" (window-id))
-(declare-function rau--task-setup-new-external-window "rau" (window-id))
+(declare-function rau--task-setup-new-external-window "rau" (window-id) title)
 (declare-function rau--tasks-enqueue "rau" (fn &rest args))
 
 ;;; Configuration and state
@@ -63,12 +63,18 @@
 (defconst rau--tag-floating :rau--floating
   "Tag for `river-window-v1' objects that are floating.")
 
+(defconst rau--tag-new-external :rau--new-external-window
+  "Tag for `river-window-v1' objects that are not yet categorized.")
+
+(defconst rau--tag-tiled :rau--tiled
+  "Tag for `river-window-v1' objects that are not floating but tiled.")
+
 (cl-defstruct (rau--window (:constructor rau--window-make))
   "State for a River window."
   actual-dimensions
   app-id
-  (dimensions-hint-max '(0 . 0))
-  (dimensions-hint-min '(0 . 0))
+  dimensions-hint-max
+  dimensions-hint-min
   ;; edges only for external, tiled windows
   edges
   ;; emacs frame-id, either the own for emacs output frame or of the
@@ -225,7 +231,8 @@ when used from other files (e.g. tests)."
   (let ((title-trunc (if (> (length title) 40)
                          (format "%s…" (substring title 0 40))
                        title)))
-    (if app-id (concat title-trunc " - " app-id)
+    (if app-id
+        (concat title-trunc " - " app-id)
       title-trunc)))
 
 (cl-defmacro rau--do (tag obj state &body body)
@@ -575,7 +582,7 @@ point where also the destroy request is sent."
     (when-let* ((app-id (ewc-to-utf8 app-id)))
       (setf (rau--window-wl-app-id window-wl) app-id))))
 
-(defun rau--maybe-new-outputframe-window (window-wl title)
+(defun rau--new-outputframe-window (window-wl title)
   (unless (ewc-object-tagged-p window-wl rau--tag-outputframe)
     (lgr-debug rau--lgr "Discovered new Emacs frame by title: %s" title)
     (ewc-object-tag (rau--state-client rau--state)
@@ -589,30 +596,24 @@ point where also the destroy request is sent."
                         title
                         (ewc-object-id window-wl))))
 
-(defun rau--maybe-new-external-window (window-wl title)
-  (unless (ewc-object-tagged-p window-wl rau--tag-external)
-    (lgr-debug rau--lgr "Discovered new regular external window with title %s." title)
-    (when (not (null (rau--window-wl-parent-wl window-wl)))
-      (ewc-object-tag (rau--state-client rau--state)
-                      window-wl rau--tag-floating))
-    (ewc-object-tag (rau--state-client rau--state)
-                    window-wl rau--tag-external)
-    (rau--fe #'rau--tasks-enqueue #'rau--task-setup-new-external-window (ewc-object-id window-wl))))
-
 (defun rau--on-river-window-v1-title (window-wl args)
   "Handle title event for WINDOW-WL.
 Also categorizes the window based on the title prefix into Emacs
 outputframe or external window."
   (pcase-let* (((map title) args)
-               (title (ewc-to-utf8 title)))
+               (title (ewc-to-utf8 title))
+	       (client (rau--state-client rau--state)))
     (setf (rau--window-wl-title window-wl) title)
 
     (if (string-prefix-p "rau-frame-" title)
-        (rau--maybe-new-outputframe-window window-wl title)
-      (rau--maybe-new-external-window window-wl title))
+        (rau--new-outputframe-window window-wl title)
+      (unless (ewc-object-tagged-p window-wl rau--tag-external)
+        (ewc-object-tag client window-wl rau--tag-external)
+        (ewc-object-tag client window-wl rau--tag-new-external)))
 
     ;; Handle title updates for already categorized objects
     (when-let* (((ewc-object-tagged-p window-wl rau--tag-external))
+                ((not (ewc-object-tagged-p window-wl rau--tag-new-external)))
                 (name (rau--make-buffer-name
                        (rau--window-wl-app-id window-wl)
                        title)))
@@ -621,12 +622,20 @@ outputframe or external window."
                           name))))
 
 (defun rau--on-river-window-v1-parent (window-wl args)
-  (pcase-let* (((map object) args)
-               (client (rau--state-client rau--state)))
-    (when-let* ((parent-wl (ewc-object-get client object)))
-      (setf (rau--window-parent-wl window-wl) parent-wl)
-      (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
-        (ewc-object-tag client window-wl rau--tag-floating)))))
+  (pcase-let* (((map parent) args))
+    (lgr-debug rau--lgr "parent event for id=%d title=%S parent=%S type-of parent=%S"
+               (ewc-object-id window-wl)
+               (rau--window-wl-title window-wl)
+               parent
+               (type-of parent))
+    (when-let* ((client (rau--state-client rau--state))
+                (parent-wl (ewc-object-get client parent)))
+      (lgr-debug rau--lgr "Set parent for id=%d title=%S to id=%d title=%S"
+                 (ewc-object-id window-wl)
+                 (rau--window-wl-title window-wl)
+                 (ewc-object-id parent-wl)
+                 (rau--window-wl-title parent-wl))
+      (setf (rau--window-wl-parent-wl window-wl) parent-wl))))
 
 (defun rau--on-river-window-v1-fullscreen-requested (window-wl args)
   (when (ewc-object-tagged-p window-wl rau--tag-external)
@@ -760,12 +769,42 @@ outputframe or external window."
                   `((width . ,(car dimensions))
                     (height . ,(cdr dimensions))))))
 
+(defun rau--reconcile-new-external (window-wl)
+  (let* ((id (ewc-object-id window-wl))
+         (max (rau--window-wl-dimensions-hint-max window-wl))
+         (min (rau--window-wl-dimensions-hint-min window-wl))
+         (parent-wl (rau--window-wl-parent-wl window-wl))
+         (title (rau--window-wl-title window-wl))
+         (floating (or
+                    (ewc-object-p parent-wl)
+                    (and max (not (equal max '(0 . 0)))))) ; TODO only (eq max min)?
+         (client (rau--state-client rau--state)))
+    (lgr-debug rau--lgr
+      "New external window: id=%d title=%S max=%S min=%S parent=%S floating=%S"
+      id title max min (not (not parent-wl)) floating)
+    (ewc-object-untag client window-wl rau--tag-new-external)
+    (ewc-object-tag client window-wl (if floating rau--tag-floating rau--tag-tiled))
+    (if floating
+        (rau--reconcile-window-floating window-wl)
+      (rau--reconcile-window-tiled window-wl)
+      (rau--fe #'rau--tasks-enqueue #'rau--task-setup-new-external-window
+               id
+               (rau--make-buffer-name
+                (rau--window-wl-app-id window-wl)
+                title)))))
+
 (defun rau--reconcile-windows ()
   "Close killed windows and propose dimensions for active windows."
   (rau--do rau--tag-external window-wl rau--state
-    (if (ewc-object-tagged-p window-wl rau--tag-floating)
-        (rau--reconcile-window-floating window-wl)
-      (rau--reconcile-window-tiled window-wl))))
+    (cond
+     ((ewc-object-tagged-p window-wl rau--tag-new-external)
+      (rau--reconcile-new-external window-wl))
+     ((ewc-object-tagged-p window-wl rau--tag-floating)
+      (rau--reconcile-window-floating window-wl))
+     ((ewc-object-tagged-p window-wl rau--tag-tiled)
+      (rau--reconcile-window-tiled window-wl))
+     (t
+      (lgr-error "Unknown state for window %d." (ewc-object-id window-wl))))))
 
 (defun rau--manage-queue-send ()
   "Run the manage-sequence reconciliation."
