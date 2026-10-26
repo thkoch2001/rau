@@ -565,7 +565,8 @@ point where also the destroy request is sent."
 
 (defun rau--on-river-window-manager-v1-render-start (wm-wl _)
   (rau--render-frames)
-  (rau--render-windows)
+  (rau--do rau--tag-tiled window-wl rau--state
+    (rau--render-window-tiled window-wl))
   (rau--request wm-wl 'render-finish))
 
 (defun rau--on-river-window-manager-v1-session-locked (_wm-wl _)
@@ -852,13 +853,15 @@ outputframe or external window."
   ;; propose 0, allow window do decide its own dimensions
   (rau--request window-wl 'propose-dimensions '((width . 0) (height . 0)))
   (rau--request window-wl 'use-csd)
-  (when-let* ((output-id (rau--state-default-output-id rau--state))
-              (node-wl (rau--window-wl-node-wl window-wl))
-              (client (rau--state-client rau--state))
-              (output-wl (ewc-object-get client output-id))
-              (position (rau--position-for-outputframe output-wl)))
+  (rau--request window-wl 'show)
+  (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
+    (rau--request node-wl 'place-top)
+    (when-let* ((output-id (rau--state-default-output-id rau--state))
+                (client (rau--state-client rau--state))
+                (output-wl (ewc-object-get client output-id))
+                (position (rau--position-for-outputframe output-wl)))
     (setf (rau--window-wl-absolute-position window-wl) position)
-    (rau--request node-wl 'set-position (rau--cons-as-xy position))))
+    (rau--request node-wl 'set-position (rau--cons-as-xy position)))))
 
 (defun rau--reconcile-window-tiled (window-wl)
   (rau--request window-wl
@@ -938,11 +941,6 @@ outputframe or external window."
                       (ewc-object-id output-wl))
              (rau--request node-wl 'set-position (rau--cons-as-xy position)))))
 
-(defun rau--render-window-floating (window-wl)
-  (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
-    (rau--request window-wl 'show)
-    (rau--request node-wl 'place-top)))
-
 (defun rau--render-window-tiled (window-wl)
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (if-let* ((frame-wl (rau--frame-wl-for-extwin-wl window-wl))
@@ -970,13 +968,6 @@ outputframe or external window."
                           (height . ,(cdr clip)))))
 
       (rau--request window-wl 'hide))))
-
-(defun rau--render-windows ()
-  "Run the render-sequence reconciliation for windows."
-  (rau--do rau--tag-external window-wl rau--state
-    (if (ewc-object-tagged-p window-wl rau--tag-floating)
-        (rau--render-window-floating window-wl)
-      (rau--render-window-tiled window-wl))))
 
 ;;; Receive fe-ui-state
 
