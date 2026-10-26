@@ -132,6 +132,7 @@
   ;; manage queue: list of (ewc-object 'request args) for the next manage
   ;; cycle
   manage-queue
+  render-queue
   pointer-op
   pointer-op-delta
   pointer-op-window-wl
@@ -298,6 +299,10 @@ See also `rau-on-wl-display-delete-id'."
   "Enqueue REQUEST on EWC-OBJECT (or id) with ARGS for next manage cycle."
   (push `(,ewc-object ,request ,args) (rau--state-manage-queue rau--state))
   (rau--mark-manage-dirty))
+
+(defun rau--render-enqueue (ewc-object request &optional args)
+  "Enqueue REQUEST on EWC-OBJECT (or id) with ARGS for next render cycle."
+  (push `(,ewc-object ,request ,args) (rau--state-render-queue rau--state)))
 
 ;;; Focus
 
@@ -556,7 +561,8 @@ point where also the destroy request is sent."
   (message "rau: WM event finished"))
 
 (defun rau--on-river-window-manager-v1-manage-start (wm-wl _)
-  (rau--manage-queue-send)
+  (rau--queue-send (rau--state-manage-queue rau--state))
+  (setf (rau--state-manage-queue rau--state) nil)
   (rau--reconcile-frames)
   (rau--reconcile-windows)
   (rau--reconcile-focus)
@@ -564,6 +570,8 @@ point where also the destroy request is sent."
   (rau--request wm-wl 'manage-finish))
 
 (defun rau--on-river-window-manager-v1-render-start (wm-wl _)
+  (rau--queue-send (rau--state-render-queue rau--state))
+  (setf (rau--state-render-queue rau--state) nil)
   (rau--render-frames)
   (rau--do rau--tag-tiled window-wl rau--state
     (rau--render-window-tiled window-wl))
@@ -625,9 +633,28 @@ point where also the destroy request is sent."
     (setf (rau--window-wl-dimensions-hint-min window-wl) `(,min-width . ,min-height)
           (rau--window-wl-dimensions-hint-max window-wl) `(,max-width . ,max-height))))
 
+(defun rau--center-position (op od wd)
+  (let ((args `(,op ,od ,wd))
+        (fn (lambda (op od wd) (+ op (/ od 2) (- (/ wd 2))))))
+    `(,(apply fn (mapcar #'car args)) .
+      ,(apply fn (mapcar #'cdr args)))))
+
 (defun rau--on-river-window-v1-dimensions (window-wl args)
-  (pcase-let (((map width height) args))
-    (setf (rau--window-wl-actual-dimensions window-wl) `(,width . ,height))))
+  (pcase-let* (((map width height) args)
+               (dimensions `(,width . ,height)))
+    (when-let* (((and (ewc-object-tagged-p window-wl rau--tag-floating)
+                      (null (rau--window-wl-actual-dimensions window-wl))))
+                (node-wl (rau--window-wl-node-wl window-wl))
+                (output-id (rau--state-default-output-id rau--state))
+                (client (rau--state-client rau--state))
+                (output-wl (ewc-object-get client output-id))
+                (o-pos (rau--position-for-outputframe output-wl))
+                (o-dim (rau--output-wl-dimensions output-wl))
+                (position (rau--center-position o-pos o-dim dimensions)))
+      (setf (rau--window-wl-absolute-position window-wl) position)
+      (rau--render-enqueue node-wl 'set-position (rau--cons-as-xy position))
+      (rau--render-enqueue window-wl 'show))
+    (setf (rau--window-wl-actual-dimensions window-wl) dimensions)))
 
 (defun rau--on-river-window-v1-app-id (window-wl args)
   (pcase-let (((map app-id) args))
@@ -853,15 +880,8 @@ outputframe or external window."
   ;; propose 0, allow window do decide its own dimensions
   (rau--request window-wl 'propose-dimensions '((width . 0) (height . 0)))
   (rau--request window-wl 'use-csd)
-  (rau--request window-wl 'show)
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
-    (rau--request node-wl 'place-top)
-    (when-let* ((output-id (rau--state-default-output-id rau--state))
-                (client (rau--state-client rau--state))
-                (output-wl (ewc-object-get client output-id))
-                (position (rau--position-for-outputframe output-wl)))
-    (setf (rau--window-wl-absolute-position window-wl) position)
-    (rau--request node-wl 'set-position (rau--cons-as-xy position)))))
+    (rau--request node-wl 'place-top)))
 
 (defun rau--reconcile-window-tiled (window-wl)
   (rau--request window-wl
@@ -912,22 +932,20 @@ outputframe or external window."
      (t
       (lgr-error "Unknown state for window %d." (ewc-object-id window-wl))))))
 
-(defun rau--manage-queue-send ()
-  "Run the manage-sequence reconciliation."
+(defun rau--queue-send (queue)
+  "Send the requests from the given queue."
   (rau--condition-case
-   "reconcile-manage-requests"
+   "run-queue"
    (let ((client (rau--state-client rau--state))
-         (manage-requests (nreverse (rau--state-manage-queue rau--state))))
-     (setf (rau--state-manage-queue rau--state) nil)
-     (dolist (request manage-requests)
+         (requests (nreverse queue)))
+     (dolist (request requests)
        (pcase-let* ((`(,obj-or-id ,rq ,args) request)
                     (object-id (if (ewc-object-p obj-or-id)
                                    (ewc-object-id obj-or-id)
                                  obj-or-id)))
          (if-let* ((object-wl (ewc-object-get client object-id)))
              (rau--request object-wl rq args)
-           (lgr-error rau--lgr "enqueued manage-rq on destroyed obj: %S %S %S" object-id rq args)))))))
-
+           (lgr-error rau--lgr "enqueued rq on destroyed obj: %S %S %S" object-id rq args)))))))
 ;;; Render cycle
 
 (defun rau--render-frames ()
