@@ -446,12 +446,12 @@ switching fullscreen between windows, call this before
 (defun rau--floating-on-op-delta-move (window-wl delta)
   (let* ((node-wl (rau--window-wl-node-wl window-wl))
          (position (rau--window-wl-absolute-position window-wl))
-         (new-position (rau--cons-add position delta)))
+         (new-position (rau--apply-cons #'+ position delta)))
     (rau--manage-enqueue node-wl 'set-position (rau--cons-as-xy new-position))))
 
 (defun rau--floating-on-move-end (window-wl seat-wl delta)
   (let* ((position (rau--window-wl-absolute-position window-wl)))
-    (setf (rau--window-wl-absolute-position window-wl) (rau--cons-add position delta))
+    (setf (rau--window-wl-absolute-position window-wl) (rau--apply-cons #'+ position delta))
     (rau--manage-enqueue seat-wl 'op-end)))
 
 ;;; Layer shell attachment helpers
@@ -633,12 +633,6 @@ point where also the destroy request is sent."
     (setf (rau--window-wl-dimensions-hint-min window-wl) `(,min-width . ,min-height)
           (rau--window-wl-dimensions-hint-max window-wl) `(,max-width . ,max-height))))
 
-(defun rau--center-position (op od wd)
-  (let ((args `(,op ,od ,wd))
-        (fn (lambda (op od wd) (+ op (/ od 2) (- (/ wd 2))))))
-    `(,(apply fn (mapcar #'car args)) .
-      ,(apply fn (mapcar #'cdr args)))))
-
 (defun rau--on-river-window-v1-dimensions (window-wl args)
   (pcase-let* (((map width height) args)
                (dimensions `(,width . ,height)))
@@ -650,7 +644,10 @@ point where also the destroy request is sent."
                 (output-wl (ewc-object-get client output-id))
                 (o-pos (rau--position-for-outputframe output-wl))
                 (o-dim (rau--output-wl-dimensions output-wl))
-                (position (rau--center-position o-pos o-dim dimensions)))
+                (position (rau--apply-cons
+                           (lambda (op od wd)
+                             (+ op (/ od 2) (- (/ wd 2))))
+                           o-pos o-dim dimensions)))
       (setf (rau--window-wl-absolute-position window-wl) position)
       (rau--render-enqueue node-wl 'set-position (rau--cons-as-xy position))
       (rau--render-enqueue window-wl 'show))
@@ -967,7 +964,7 @@ outputframe or external window."
               (frame-node-id (ewc-object-id frame-node-wl)))
         (pcase-let* ((win-position (rau--window-wl-position window-wl))
                      (frame-position (rau--position-for-outputframe output-wl))
-                     (position (rau--cons-add win-position frame-position))
+                     (position (rau--apply-cons #'+ win-position frame-position))
                      (dimensions (rau--window-wl-actual-dimensions window-wl))
                      (clip (or dimensions (rau--window-wl-dimensions window-wl))))
           (rau--request window-wl 'show)

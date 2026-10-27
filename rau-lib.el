@@ -31,10 +31,10 @@ LOCATION identifies where the error occurred."
                                  modifier-symbols)))
     (apply #'logior modifier-bits)))
 
-(defun rau--cons-add (c1 c2)
-  "Add two cons cells element-wise."
-  (cons (+ (car c1) (car c2))
-        (+ (cdr c1) (cdr c2))))
+(defun rau--apply-cons (fn &rest args)
+  "map FN over cars and cdrs of ARGS separately."
+  `(,(apply fn (mapcar #'car args)) .
+    ,(apply fn (mapcar #'cdr args))))
 
 (defun rau--cons-as-xy (cons)
   `((x . ,(car cons))
