@@ -50,7 +50,7 @@
 (require 'subr-x)
 
 (defvar ewc--lgr nil
-  "lgr instance for ewc, assigned in `ewc-connect'.")
+  "The lgr instance for ewc, assigned in `ewc-connect'.")
 
 ;;; Read Wayland XML protocols
 
@@ -173,11 +173,11 @@ The DATA slot is free to use for arbitrary data about this object."
 
 (defmacro ewc-define-data-accessors (struct-type &optional prefix)
   "Define accessor functions for slots of STRUCT-TYPE stored in ewc-object data.
-STRUCT-TYPE is a cl-defstruct name.  PREFIX is an optional symbol used as
-the function name prefix; if nil, defaults to STRUCT-TYPE-wl.
-For each slot, defines PREFIX-SLOT that takes an ewc-object and returns
-the value of that slot from the struct in its data slot.
-Also defines setf-able places."
+STRUCT-TYPE is a `cl-defstruct' name.  PREFIX is an optional symbol used
+as the function name prefix; if nil, defaults to STRUCT-TYPE-wl.  For
+each slot, defines PREFIX-SLOT that takes an ewc-object and returns the
+value of that slot from the struct in its data slot.  Also defines
+setf-able places."
   (declare (indent 1))
   (let* ((prefix (or prefix (intern (format "%s-wl" struct-type))))
          (prefix-str (symbol-name prefix))
@@ -263,7 +263,7 @@ objects from CLIENT while iterating over it."
   (copy-sequence (gethash tag (ewc-client-tags client))))
 
 (defun ewc-object-remove-id (client id)
-  "Shorthand to get object with ID and call ewc-object-remove."
+  "Shorthand to get object of CLIENT with ID and call ewc-object-remove."
   (if-let* ((object (ewc-object-get client id)))
       (ewc-object-remove client object)
     (message "ewc: no object to remove with id %d." id)))
@@ -362,7 +362,7 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
       (lgr-warn ewc--lgr "ewc: event for unknown object id %s" id))))
 
 (defun ewc--pack (object-id request-def arguments)
-  "Return Wayland wire message for OBJECT-ID with ARGUMENTS."
+  "Build message for OBJECT-ID and REQUEST-DEF with ARGUMENTS."
   (pcase-let* ((`(,_ ,opcode ,le . ,pe) request-def)
                 (bindat-idx 0)
                 (len (+ 8 (if le (funcall le arguments) 0)))
@@ -527,7 +527,7 @@ The network process is set in the CONNECTION slot of CLIENT."
 
 (defun ewc-start (interfaces listener-prefix)
   "Setup ewc-client, send get-registry request and return the client.
-INTERFACES are the interfaces as read by ewc-read. LISTENER-PREFIX is
+INTERFACES are the interfaces as read by ewc-read.  LISTENER-PREFIX is
 the prefix string of event listener functions to be registered with the
 client."
   (let ((client (ewc-client-make :interfaces interfaces)))
