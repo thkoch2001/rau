@@ -289,7 +289,7 @@ If no ID is provided, a client initiated id is generated.
 Returns the newly created object."
   (let* ((interface-def (gethash interface (ewc-client-interfaces client))))
     (unless interface-def
-      (error "ewc: Unknown interface %s" interface))
+      (error "ewc: Unknown interface %s (underline?)" interface))
 
     (pcase-let* ((`(,_version ,events ,requests) interface-def)
                  (id (or id (cl-incf (ewc-client-new-id client))))
@@ -470,7 +470,7 @@ typos at startup rather than silently dropping events."
            (unless found
              (push sym unmatched))))))
     (when unmatched
-      (error "ewc: Listener(s) match no known interface/event: %s"
+      (error "ewc: Listener(s) match no known interface/event: %s (underline?)"
              (mapconcat #'symbol-name unmatched ", ")))
     (setf (ewc-client-listeners client) table)
     table))
@@ -512,10 +512,11 @@ The network process is set in the CONNECTION slot of CLIENT."
     (unless (and connection (process-live-p connection))
       (error "ewc: No live Wayland connection for request %S" request))
     (unless request-def
-      (error "ewc: Interface %s has no request %S"
+      (error "ewc: Interface %s has no request %S (underline?)"
              (ewc-object-interface object) request))
-    (lgr-debug ewc--lgr "ewc: rq %s::%s(%s)"
+    (lgr-debug ewc--lgr "ewc: rq %s(%d)::%s(%s)"
                (ewc-object-interface object)
+               id
                request
                (mapconcat (lambda (arg)
                             (format "%s=%S" (car arg) (cdr arg)))
