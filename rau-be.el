@@ -615,7 +615,7 @@ point where also the destroy request is sent."
 
 ;;;; river-window-v1 listeners
 (defun rau--on-river-window-v1-closed (window-wl _)
-  (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
+  (when-let* (((ewc-object-tagged-p window-wl rau--tag-tiled)))
     (rau--fe #'rau--tasks-enqueue #'rau--task-kill-buffer (ewc-object-id window-wl)))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (rau--request node-wl 'destroy))
