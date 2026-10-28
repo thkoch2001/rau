@@ -643,7 +643,7 @@ point where also the destroy request is sent."
                 (client (rau--state-client rau--state))
                 (output-wl (ewc-object-get client output-id))
                 (o-pos (rau--position-for-outputframe output-wl))
-                (o-dim (rau--output-wl-dimensions output-wl))
+                (o-dim (rau--dimensions-for-outputframe output-wl))
                 (position (rau--apply-cons
                            (lambda (op od wd)
                              (+ op (/ od 2) (- (/ wd 2))))
@@ -876,6 +876,14 @@ outputframe or external window."
   ;; propose 0, allow window do decide its own dimensions
   (rau--request window-wl 'propose-dimensions '((width . 0) (height . 0)))
   (rau--request window-wl 'use-csd)
+  ;; There's a race condition since the default-output-id could change before
+  ;; the window gets positioned in the dimensions event.
+  (when-let* ((output-id (rau--state-default-output-id rau--state))
+              (client (rau--state-client rau--state))
+              (output-wl (ewc-object-get client output-id))
+              (o-dim (rau--dimensions-for-outputframe output-wl)))
+    (rau--request window-wl 'set-dimension-bounds
+                  (rau--cons-as o-dim 'max-width 'max-height)))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (rau--request node-wl 'place-top)))
 
