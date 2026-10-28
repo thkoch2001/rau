@@ -876,14 +876,21 @@ outputframe or external window."
   ;; propose 0, allow window do decide its own dimensions
   (rau--request window-wl 'propose-dimensions '((width . 0) (height . 0)))
   (rau--request window-wl 'use-csd)
-  ;; There's a race condition since the default-output-id could change before
-  ;; the window gets positioned in the dimensions event.
-  (when-let* ((output-id (rau--state-default-output-id rau--state))
-              (client (rau--state-client rau--state))
-              (output-wl (ewc-object-get client output-id))
-              (o-dim (rau--dimensions-for-outputframe output-wl)))
-    (rau--request window-wl 'set-dimension-bounds
-                  (rau--cons-as o-dim 'max-width 'max-height)))
+  ;; TODO make border customizable
+  (let* ((border-width 1))
+    (rau--request window-wl 'set-borders `((edges . ,rau--edges-all)
+					   (width . ,border-width)
+					   (r . #xffffffff) (g . 0) (b . 0)
+					   (a . #xffffffff)))
+    ;; There's a race condition since the default-output-id could change before
+    ;; the window gets positioned in the dimensions event.
+    (when-let* ((output-id (rau--state-default-output-id rau--state))
+		(client (rau--state-client rau--state))
+		(output-wl (ewc-object-get client output-id))
+		(o-dim (rau--dimensions-for-outputframe output-wl))
+		(max-dim (rau--apply-cons #'- o-dim (+ 10 border-width))))
+      (rau--request window-wl 'set-dimension-bounds
+                    (rau--cons-as max-dim 'max-width 'max-height))))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
     (rau--request node-wl 'place-top)))
 

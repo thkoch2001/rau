@@ -31,10 +31,18 @@ LOCATION identifies where the error occurred."
                                  modifier-symbols)))
     (apply #'logior modifier-bits)))
 
+(defun rau--map-if (cond-p fn xs)
+  "Apply FN only to those elements of XS where COND-P is true."
+  (mapcar (lambda (x)
+            (if (funcall cond-p x)
+                 (funcall fn x)
+               x))
+          xs))
+
 (defun rau--apply-cons (fn &rest args)
   "map FN over cars and cdrs of ARGS separately."
-  `(,(apply fn (mapcar #'car args)) .
-    ,(apply fn (mapcar #'cdr args))))
+  `(,(apply fn (rau--map-if #'listp #'car args)) .
+    ,(apply fn (rau--map-if #'listp #'cdr args))))
 
 (defun rau--cons-as (cons symbol1 symbol2)
   `((,symbol1 . ,(car cons))
