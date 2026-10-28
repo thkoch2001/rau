@@ -463,7 +463,7 @@ is completely valid."
 ;;; fe-state
 
 (defun rau--fe-ui-state ()
-  (let (outframes extwins)
+  (let (frames wins)
     (dolist (f (frame-list))
       (let ((frame-id (frame-id f))
             (window-id (frame-parameter f 'rau--window-id))
@@ -472,7 +472,7 @@ is completely valid."
           (push `((frame-id . ,frame-id)
                   (window-id . ,window-id)
                   (output-id . ,output-id))
-                outframes))
+                frames))
         (dolist (w (window-list f))
           (when-let* ((buffer (window-buffer w))
                       (window-id (buffer-local-value 'rau--window-id buffer)))
@@ -480,9 +480,9 @@ is completely valid."
                     (frame-id . ,frame-id)
                     ;; (name . ,(buffer-name buffer)) ; only for debugging
                     (edges . ,(window-inside-absolute-pixel-edges w)))
-                  extwins)))))
-    `((outframes . ,(sort outframes :key #'cdar))
-      (extwins . ,(sort extwins :key #'cdar)))))
+                  wins)))))
+    `((frames . ,(sort frames :key #'cdar))
+      (wins . ,(sort wins :key #'cdar)))))
 
 (defun rau--send-fe-ui-state ()
   (let ((new-state (rau--fe-ui-state))

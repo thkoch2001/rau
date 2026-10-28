@@ -1001,14 +1001,14 @@ outputframe or external window."
 
 (defun rau--update-fe-ui-state (state)
   ;; TODO here we could build a visibility diff to send show and hide only when necessary
-  (rau--do rau--tag-external window-wl rau--state
+  (rau--do rau--tag-tiled window-wl rau--state
     (setf (rau--window-wl-dimensions window-wl) nil
           (rau--window-wl-position window-wl) nil
           (rau--window-wl-frame-id window-wl) nil))
-  (let ((extwins (alist-get 'extwins state))
-        (outframes (alist-get 'outframes state))
+  (let ((wins (alist-get 'wins state))
+        (frames (alist-get 'frames state))
         (client (rau--state-client rau--state)))
-    (dolist (win extwins)
+    (dolist (win wins)
       (when-let* ((window-id (alist-get 'window-id win))
                   (window-wl (ewc-object-get client window-id))
                   (edges (alist-get 'edges win))
@@ -1019,10 +1019,10 @@ outputframe or external window."
         (setf (rau--window-wl-dimensions window-wl) `(,(- right left) . ,(- bottom top))
               (rau--window-wl-position window-wl) `(,left . ,top)
               (rau--window-wl-frame-id window-wl) (alist-get 'frame-id win))))
-    (dolist (outframe outframes)
-      (let* ((window-id (alist-get 'window-id outframe))
-             (output-id (alist-get 'output-id outframe))
-             (frame-id (alist-get 'frame-id outframe))
+    (dolist (frame frames)
+      (let* ((window-id (alist-get 'window-id frame))
+             (output-id (alist-get 'output-id frame))
+             (frame-id (alist-get 'frame-id frame))
              (window-wl (ewc-object-get client window-id))
              (output-wl (ewc-object-get client output-id)))
         (when window-wl
