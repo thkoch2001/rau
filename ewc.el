@@ -334,32 +334,36 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
   (pcase-let* ((bindat-idx idx)
                (bindat-raw str)
                ((map id opcode _len)
-                (funcall (bindat--type-ue ewc--msg-head))))
-    (if-let* ((object (ewc-object-get client id)))
-        (let ((listeners (ewc-object-listeners object))
-              (spec (nth opcode (ewc-object-events object))))
-          (lgr-debug ewc--lgr "ewc: event id=%d if=%s opcode=%s (%s)"
-                     id
-                     (ewc-object-interface object)
-                     opcode
-                     (car spec))
-          (if (and (< opcode (length listeners))
-                   (aref listeners opcode))
-              (let* ((listener (aref listeners opcode))
-                     (ue (cdr spec))
-                     (args (when ue (funcall ue))))
-                (when args (lgr-debug ewc--lgr "ewc: args %S" args))
-                (condition-case-unless-debug err
-                    (funcall listener object args)
-                  (error (message "ewc: listener error id=%d if=%s opcode=%s: %S"
-                            id
-                            (ewc-object-interface object)
-                            opcode
-                            err))))
-            (lgr-trace ewc--lgr "ewc: no listener for %s opcode %s"
-                       (ewc-object-interface object)
-                       opcode)))
-      (lgr-warn ewc--lgr "ewc: event for unknown object id %s" id))))
+                (funcall (bindat--type-ue ewc--msg-head)))
+               (object (ewc-object-get client id))
+               (_ (unless (ewc-object-p object)
+                    (error "ewc: event for unknown object id=%s" id)))
+               (events (ewc-object-events object))
+               (_ (unless (< opcode (length events))
+                    (error "ewc: illegal event opcode=%d for if=%s"
+                           opcode (ewc-object-interface object))))
+               (spec (nth opcode events))
+               (listeners (ewc-object-listeners object))
+               ;; listeners vector is as long as ewc-object-events
+               (listener (aref listeners opcode))
+               (ue (cdr spec))
+               (args (and listener ue (funcall ue))))
+
+    (lgr-debug ewc--lgr "ewc: event id=%d if=%s opcode=%s (%s) args=%S"
+               id
+               (ewc-object-interface object)
+               opcode (car spec) args)
+
+    (if listener
+        (condition-case-unless-debug err
+            (funcall listener object args)
+          (error (message "ewc: listener error id=%d if=%s opcode=%s (%s): %S"
+                          id
+                          (ewc-object-interface object)
+                          opcode (car spec) err)))
+      (lgr-trace ewc--lgr "ewc: no listener if=%s opcode=%s (%s)"
+                 (ewc-object-interface object)
+                 opcode (car spec)))))
 
 (defun ewc--pack (object-id request-def arguments)
   "Build message for OBJECT-ID and REQUEST-DEF with ARGUMENTS."
