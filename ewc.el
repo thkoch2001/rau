@@ -349,7 +349,7 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
                      (ue (cdr spec))
                      (args (when ue (funcall ue))))
                 (when args (lgr-debug ewc--lgr "ewc: args %S" args))
-                (condition-case err
+                (condition-case-unless-debug err
                     (funcall listener object args)
                   (error (message "ewc: listener error id=%d if=%s opcode=%s: %S"
                             id
@@ -411,7 +411,7 @@ complete ones."
                 (let ((msg (substring buf 0 len)))
                   (setf (ewc-client-rx client)
                         (substring buf len))
-                  (condition-case err
+                  (condition-case-unless-debug err
                       (ewc--event client msg len 0)
                     (error (message "ewc: dispatch error: %S" err)))))))))))))
 
