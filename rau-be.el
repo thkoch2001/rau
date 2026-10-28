@@ -27,6 +27,7 @@
 (declare-function rau--task-kill-buffer "rau" (window-id))
 (declare-function rau--task-link-emacs-frame-to-window "rau" (title window-id))
 (declare-function rau--task-minimize-window "rau" (window-id))
+(declare-function rau--task-recover-focus "rau" (window-id name))
 (declare-function rau--task-rename-buffer "rau" (window-id name))
 (declare-function rau--task-select-window "rau" (window-id))
 (declare-function rau--task-setup-new-external-window "rau" (window-id) title)
@@ -407,8 +408,7 @@ switching fullscreen between windows, call this before
   (rau--manage-enqueue window-wl 'exit-fullscreen)
   (when-let* ((dimensions (rau--window-wl-dimensions window-wl)))
     (rau--manage-enqueue window-wl 'propose-dimensions
-                         `((width . ,(car dimensions))
-                           (height . ,(cdr dimensions)))))
+                         (rau--cons-as dimensions 'width 'height)))
   (setf (rau--output-wl-fullscreen-window-wl output-wl) nil))
 
 (defun rau--fullscreen-enter (window-wl output-wl)
@@ -447,7 +447,7 @@ switching fullscreen between windows, call this before
   (let* ((node-wl (rau--window-wl-node-wl window-wl))
          (position (rau--window-wl-absolute-position window-wl))
          (new-position (rau--apply-cons #'+ position delta)))
-    (rau--manage-enqueue node-wl 'set-position (rau--cons-as-xy new-position))))
+    (rau--manage-enqueue node-wl 'set-position (rau--cons-as new-position 'x 'y))))
 
 (defun rau--floating-on-move-end (window-wl seat-wl delta)
   (let* ((position (rau--window-wl-absolute-position window-wl)))
@@ -649,7 +649,7 @@ point where also the destroy request is sent."
                              (+ op (/ od 2) (- (/ wd 2))))
                            o-pos o-dim dimensions)))
       (setf (rau--window-wl-absolute-position window-wl) position)
-      (rau--render-enqueue node-wl 'set-position (rau--cons-as-xy position))
+      (rau--render-enqueue node-wl 'set-position (rau--cons-as position 'x 'y))
       (rau--render-enqueue window-wl 'show))
     (setf (rau--window-wl-actual-dimensions window-wl) dimensions)))
 
@@ -776,7 +776,7 @@ outputframe or external window."
   (pcase-let* (((map window) args))
     (setf (rau--state-pointer-in-window-id rau--state) window)))
 
-(defun rau--on-river-seat-v1-pointer-leave (_seat-wl args)
+(defun rau--on-river-seat-v1-pointer-leave (_seat-wl _args)
   (setf (rau--state-pointer-in-window-id rau--state) nil))
 
 (defun rau--on-river-seat-v1-window-interaction (_seat-wl args)
@@ -793,7 +793,7 @@ outputframe or external window."
       (setf (rau--state-pointer-op-delta rau--state) delta)
       (funcall (rau--state-pointer-op rau--state) window-wl delta))))
 
-(defun rau--on-river-seat-v1-op-release (_seat-wl args)
+(defun rau--on-river-seat-v1-op-release (_seat-wl _args)
   )
 
 ;;;; river-pointer-binding-v1 listeners
@@ -867,8 +867,7 @@ outputframe or external window."
             (lgr-trace rau--lgr "frame found: id=%d." (ewc-object-id frame-wl))
             (rau--request frame-wl
                           'propose-dimensions
-                          `((width . ,(car dimensions))
-                            (height . ,(cdr dimensions)))))
+                          (rau--cons-as dimensions 'width 'height)))
 
         (lgr-debug rau--lgr "no frame found for output, waiting for client state.")))))
 
@@ -887,8 +886,7 @@ outputframe or external window."
   (when-let* ((dimensions (rau--window-wl-dimensions window-wl)))
     (rau--request window-wl
                   'propose-dimensions
-                  `((width . ,(car dimensions))
-                    (height . ,(cdr dimensions))))))
+                  (rau--cons-as dimensions 'width 'height))))
 
 (defun rau--reconcile-new-external (window-wl)
   (let* ((id (ewc-object-id window-wl))
@@ -954,7 +952,7 @@ outputframe or external window."
              (lgr-trace rau--lgr "render frame %d for output %d."
                       (ewc-object-id frame-wl)
                       (ewc-object-id output-wl))
-             (rau--request node-wl 'set-position (rau--cons-as-xy position)))))
+             (rau--request node-wl 'set-position (rau--cons-as position 'x 'y)))))
 
 (defun rau--render-window-tiled (window-wl)
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
@@ -970,7 +968,7 @@ outputframe or external window."
           (rau--request window-wl 'show)
 
           (setf (rau--window-wl-absolute-position window-wl) position)
-          (rau--request node-wl 'set-position (rau--cons-as-xy position))
+          (rau--request node-wl 'set-position (rau--cons-as position 'x 'y))
 
           ;; Place window above the Emacs outputframe window but not at the top
           ;; In theory this should leave the top for floating windows

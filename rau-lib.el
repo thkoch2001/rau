@@ -36,9 +36,9 @@ LOCATION identifies where the error occurred."
   `(,(apply fn (mapcar #'car args)) .
     ,(apply fn (mapcar #'cdr args))))
 
-(defun rau--cons-as-xy (cons)
-  `((x . ,(car cons))
-    (y . ,(cdr cons))))
+(defun rau--cons-as (cons symbol1 symbol2)
+  `((,symbol1 . ,(car cons))
+    (,symbol2 . ,(cdr cons))))
 
 ;;; Remote Procedure Calls between front-end and back-end
 
