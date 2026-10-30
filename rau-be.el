@@ -453,11 +453,28 @@ switching fullscreen between windows, call this before
          ;; probably due to default-output being nil
          (position (rau--window-wl-absolute-position window-wl))
          (new-position (rau--apply-cons #'+ position delta)))
-    (rau--manage-enqueue node-wl 'set-position (rau--cons-as new-position 'x 'y))))
+    (rau--render-enqueue node-wl 'set-position (rau--cons-as new-position 'x 'y))))
 
 (defun rau--floating-on-move-end (window-wl seat-wl delta)
   (let* ((position (rau--window-wl-absolute-position window-wl)))
     (setf (rau--window-wl-absolute-position window-wl) (rau--apply-cons #'+ position delta))
+    (rau--manage-enqueue seat-wl 'op-end)))
+
+(defun rau--floating-on-resize-start (window-wl seat-wl)
+  (when (ewc-object-tagged-p window-wl rau--tag-floating)
+    (setf (rau--seat-wl-on-op-delta seat-wl) #'rau--floating-on-op-delta-resize
+          (rau--seat-wl-on-op-end seat-wl) #'rau--floating-on-resize-end
+          (rau--window-wl-dimensions window-wl) (rau--window-wl-actual-dimensions window-wl))
+    (rau--manage-enqueue seat-wl 'op-start-pointer)))
+
+(defun rau--floating-on-op-delta-resize (window-wl delta)
+  (let* ((dimensions (rau--window-wl-dimensions window-wl))
+         (new-dimensions (rau--apply-cons #'+ dimensions delta)))
+    (rau--manage-enqueue window-wl 'propose-dimensions (rau--cons-as new-dimensions 'width 'height))))
+
+(defun rau--floating-on-resize-end (window-wl seat-wl delta)
+  (let* ((dimensions (rau--window-wl-dimensions window-wl)))
+    (setf (rau--window-wl-dimensions window-wl) (rau--apply-cons #'+ dimensions delta))
     (rau--manage-enqueue seat-wl 'op-end)))
 
 ;;; Layer shell attachment helpers
@@ -501,7 +518,11 @@ switching fullscreen between windows, call this before
     (rau--init-pointer-binding seat-wl
                                rau-pointer-bindings-modifiers
                                rau--btn-left
-                               '(:on-pressed rau--floating-on-move-start))))
+                               '(:on-pressed rau--floating-on-move-start))
+    (rau--init-pointer-binding seat-wl
+                               rau-pointer-bindings-modifiers
+                               rau--btn-right
+                               '(:on-pressed rau--floating-on-resize-start))))
 
 ;;; Listeners
 
