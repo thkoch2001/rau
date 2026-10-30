@@ -93,7 +93,12 @@
 
 (cl-defstruct (rau--seat (:constructor rau--seat-make))
   "State for a River seat."
-  (ls-seat-wl nil :type ewc-object))
+  delta
+  (ls-seat-wl nil :type ewc-object)
+  on-op-delta
+  on-op-end
+  op-window-wl
+  pointer-in-window-id)
 
 (cl-defstruct (rau--binding (:constructor rau--binding-make))
   "State for one global XKB binding."
@@ -113,6 +118,7 @@
 
 (cl-defstruct (rau--pointer-binding (:constructor rau--pointer-binding-make))
   "State for one pointer binding."
+  (seat-wl nil :type ewc-object)
   on-pressed
   on-released)
 
@@ -134,11 +140,7 @@
   ;; manage queue: list of (ewc-object 'request args) for the next manage
   ;; cycle
   manage-queue
-  render-queue
-  pointer-op
-  pointer-op-delta
-  pointer-op-window-wl
-  pointer-in-window-id)
+  render-queue)
 
 (ewc-define-data-accessors rau--output)
 (ewc-define-data-accessors rau--ls-output)
@@ -441,11 +443,14 @@ switching fullscreen between windows, call this before
 
 (defun rau--floating-on-move-start (window-wl seat-wl)
   (when (ewc-object-tagged-p window-wl rau--tag-floating)
-    (setf (rau--state-pointer-op rau--state) #'rau--floating-on-op-delta-move)
+    (setf (rau--seat-wl-on-op-delta seat-wl) #'rau--floating-on-op-delta-move
+          (rau--seat-wl-on-op-end seat-wl) #'rau--floating-on-move-end)
     (rau--manage-enqueue seat-wl 'op-start-pointer)))
 
 (defun rau--floating-on-op-delta-move (window-wl delta)
   (let* ((node-wl (rau--window-wl-node-wl window-wl))
+         ;; TODO absolute-position is unknown for windows that existed before rau started
+         ;; probably due to default-output being nil
          (position (rau--window-wl-absolute-position window-wl))
          (new-position (rau--apply-cons #'+ position delta)))
     (rau--manage-enqueue node-wl 'set-position (rau--cons-as new-position 'x 'y))))
@@ -474,7 +479,7 @@ switching fullscreen between windows, call this before
   (let* ((client (rau--state-client rau--state))
          (pb-wl (ewc-object-add client 'river-pointer-binding-v1)))
     (setf (ewc-object-data pb-wl)
-          (apply #'rau--pointer-binding-make data))
+          (apply #'rau--pointer-binding-make :seat-wl seat-wl data))
     (rau--request seat-wl 'get-pointer-binding
                   `((id . ,(ewc-object-id pb-wl))
                     (button . ,button)
@@ -496,8 +501,7 @@ switching fullscreen between windows, call this before
     (rau--init-pointer-binding seat-wl
                                rau-pointer-bindings-modifiers
                                rau--btn-left
-                               '(:on-pressed rau--floating-on-move-start
-                                 :on-released rau--floating-on-move-end))))
+                               '(:on-pressed rau--floating-on-move-start))))
 
 ;;; Listeners
 
@@ -614,7 +618,7 @@ point where also the destroy request is sent."
         (rau--ensure-ls-seat seat-wl)))))
 
 ;;;; river-window-v1 listeners
-(defun rau--on-river-window-v1-closed (window-wl _)
+(defun rau--on-river-window-v1-closed (window-wl _args)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-tiled)))
     (rau--fe #'rau--tasks-enqueue #'rau--task-kill-buffer (ewc-object-id window-wl)))
   (when-let* ((node-wl (rau--window-wl-node-wl window-wl)))
@@ -735,12 +739,12 @@ outputframe or external window."
             (rau--fullscreen-exit current-fs output-wl)))
         (rau--fullscreen-enter window-wl output-wl)))))
 
-(defun rau--on-river-window-v1-exit-fullscreen-requested (window-wl _)
+(defun rau--on-river-window-v1-exit-fullscreen-requested (window-wl _args)
   (rau--do 'river-output-v1 output-wl rau--state
     (when (eq (rau--output-wl-fullscreen-window-wl output-wl) window-wl)
       (rau--fullscreen-exit window-wl output-wl))))
 
-(defun rau--on-river-window-v1-minimize-requested (window-wl _)
+(defun rau--on-river-window-v1-minimize-requested (window-wl _args)
   (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
     (rau--fe #'rau--tasks-enqueue #'rau--task-minimize-window (ewc-object-id window-wl))))
 
@@ -749,7 +753,7 @@ outputframe or external window."
     (setf (rau--window-wl-pid window-wl) unreliable-pid)))
 
 ;;;; river-output-v1 listeners
-(defun rau--on-river-output-v1-removed (output-wl _)
+(defun rau--on-river-output-v1-removed (output-wl _args)
   ;; TODO: check whether we lost focus
   (when-let* ((frame-id (rau--output-wl-frame-id output-wl)))
     (rau--fe #'rau--tasks-enqueue #'rau--task-delete-frame frame-id))
@@ -772,56 +776,58 @@ outputframe or external window."
 
 ;;;; river-seat-v1 listeners
 
-(defun rau--on-river-seat-v1-pointer-enter (_seat-wl args)
+(defun rau--on-river-seat-v1-pointer-enter (seat-wl args)
   (pcase-let* (((map window) args))
-    (setf (rau--state-pointer-in-window-id rau--state) window)))
+    (setf (rau--seat-wl-pointer-in-window-id seat-wl) window)))
 
-(defun rau--on-river-seat-v1-pointer-leave (_seat-wl _args)
-  (setf (rau--state-pointer-in-window-id rau--state) nil))
+(defun rau--on-river-seat-v1-pointer-leave (seat-wl _args)
+  (setf (rau--seat-wl-pointer-in-window-id seat-wl) nil))
 
 (defun rau--on-river-seat-v1-window-interaction (_seat-wl args)
   (pcase-let* (((map window) args))
     (lgr-debug rau--lgr "window interaction with %d" window)
     (rau--request-focus window)))
 
-(defun rau--on-river-seat-v1-op-delta (_seat-wl args)
+(defun rau--on-river-seat-v1-op-delta (seat-wl args)
   (pcase-let* (((map dx dy) args)
                (delta `(,dx . ,dy))
-               (window-wl (rau--state-pointer-op-window-wl rau--state)))
+               (window-wl (rau--seat-wl-op-window-wl seat-wl)))
     (if (not window-wl)
-        (lgr-error rau--lgr "op-delta but no pointer-op-window-wl")
-      (setf (rau--state-pointer-op-delta rau--state) delta)
-      (funcall (rau--state-pointer-op rau--state) window-wl delta))))
+        (lgr-error rau--lgr "op-delta but no op-window-wl")
+      (setf (rau--seat-wl-delta seat-wl) delta)
+      (funcall (rau--seat-wl-on-op-delta seat-wl) window-wl delta))))
 
 (defun rau--on-river-seat-v1-op-release (_seat-wl _args)
   )
 
 ;;;; river-pointer-binding-v1 listeners
 
-(defun rau--on-river-pointer-binding-v1-pressed (pb-wl _)
+(defun rau--on-river-pointer-binding-v1-pressed (pb-wl _args)
   (let* ((client (rau--state-client rau--state))
-         (window-id (rau--state-pointer-in-window-id rau--state))
-         (window-wl (ewc-object-get client window-id))
-         (seat-wl (ewc-first-object client 'river-seat-v1)))
+         (seat-wl (rau--pointer-binding-wl-seat-wl pb-wl))
+         (window-id (rau--seat-wl-pointer-in-window-id seat-wl))
+         (window-wl (ewc-object-get client window-id)))
     (lgr-debug rau--lgr "pb pressed: window-id=%S" window-id)
     (when-let* ((on-pressed (rau--pointer-binding-wl-on-pressed pb-wl)))
-      (setf (rau--state-pointer-op-window-wl rau--state) window-wl)
+      (setf (rau--seat-wl-op-window-wl seat-wl) window-wl)
       (funcall on-pressed window-wl seat-wl))))
 
-(defun rau--on-river-pointer-binding-v1-released (pb-wl _)
+(defun rau--on-river-pointer-binding-v1-released (pb-wl _args)
   (lgr-debug rau--lgr "pb released")
-  (let* ((client (rau--state-client rau--state))
-         (seat-wl (ewc-first-object client 'river-seat-v1))
-         (window-wl (rau--state-pointer-op-window-wl rau--state))
-         (delta (rau--state-pointer-op-delta rau--state)))
-    (setf (rau--state-pointer-op rau--state) nil
-          (rau--state-pointer-op-window-wl rau--state) nil)
-    (when-let* ((on-released (rau--pointer-binding-wl-on-released pb-wl)))
+  (let* ((seat-wl (rau--pointer-binding-wl-seat-wl pb-wl))
+         (window-wl (rau--seat-wl-op-window-wl seat-wl))
+         (delta (rau--seat-wl-delta seat-wl))
+         (on-released (or (rau--pointer-binding-wl-on-released pb-wl)
+                          (rau--seat-wl-on-op-end seat-wl))))
+    (setf (rau--seat-wl-on-op-end seat-wl) nil
+          (rau--seat-wl-on-op-delta seat-wl) nil
+          (rau--seat-wl-op-window-wl seat-wl) nil)
+    (when-let* (on-released)
       (funcall on-released window-wl seat-wl delta))))
 
 ;;;; river-xkb-bindings-v1 protocol
 ;;;; river-xkb-binding-v1 listeners
-(defun rau--on-river-xkb-binding-v1-pressed (binding-wl _)
+(defun rau--on-river-xkb-binding-v1-pressed (binding-wl _args)
   (unless (and (rau--state-session-locked rau--state)
                (not (rau--binding-wl-allow-when-locked binding-wl)))
     (let* ((event (rau--binding-wl-event binding-wl))
@@ -847,7 +853,7 @@ outputframe or external window."
           (rau--ls-output-wl-non-excl-dimensions ls-output-wl) `(,width . ,height))))
 
 ;;;; river-layer-shell-seat-v1 listeners
-(defun rau--on-river-layer-shell-seat-v1-focus-none (_ls-seat-wl _)
+(defun rau--on-river-layer-shell-seat-v1-focus-none (_ls-seat-wl _args)
   "Give focus back to the last window that had it."
   (rau--request-focus t))
 
