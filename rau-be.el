@@ -863,8 +863,10 @@ outputframe or external window."
                            frame-id
                            (ewc-objects client rau--tag-outputframe)
                            :key #'rau--window-wl-frame-id)))
-          (let ((dimensions (rau--dimensions-for-outputframe output-wl)))
+          (when-let* ((dimensions (rau--dimensions-for-outputframe output-wl))
+                      ((not (equal dimensions (rau--window-wl-dimensions frame-wl)))))
             (lgr-trace rau--lgr "frame found: id=%d." (ewc-object-id frame-wl))
+            (setf (rau--window-wl-dimensions frame-wl) dimensions)
             (rau--request frame-wl
                           'propose-dimensions
                           (rau--cons-as dimensions 'width 'height)))
@@ -939,12 +941,14 @@ outputframe or external window."
 (defun rau--render-frames ()
   "Run the render-sequence reconciliation for frames."
   (rau--do rau--tag-outputframe frame-wl rau--state
-           (when-let* ((node-wl (rau--window-wl-node-wl frame-wl))
-                       (output-wl (rau--outframe-wl-output-wl frame-wl))
-                       (position (rau--position-for-outputframe output-wl)))
+           (when-let* ((output-wl (rau--outframe-wl-output-wl frame-wl))
+                       (position (rau--position-for-outputframe output-wl))
+                       ((not (equal position (rau--window-wl-absolute-position frame-wl))))
+                       (node-wl (rau--window-wl-node-wl frame-wl)))
              (lgr-trace rau--lgr "render frame %d for output %d."
                       (ewc-object-id frame-wl)
                       (ewc-object-id output-wl))
+             (setf (rau--window-wl-absolute-position frame-wl) position)
              (rau--request node-wl 'set-position (rau--cons-as position 'x 'y)))))
 
 ;;; Receive fe-ui-state

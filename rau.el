@@ -530,7 +530,7 @@ Call this function once when starting Emacs inside of river."
 
   (message "Launching rau (pure Elisp) ...")
   (unless (= 1 (length (frame-list)))
-    (user-error "There should be exactly one frame when starting Rau."))
+    (user-error "There should be exactly one frame when starting Rau"))
 
   (modify-frame-parameters nil (rau--make-outputframe-parameters))
 
