@@ -521,6 +521,13 @@ switching fullscreen between windows, call this before
                                '(:on-pressed rau--floating-on-move-start))
     (rau--init-pointer-binding seat-wl
                                rau-pointer-bindings-modifiers
+                               rau--btn-middle
+                               '(:on-pressed
+                                 (lambda (window-wl _seat-wl)
+                                   (when (ewc-object-tagged-p window-wl rau--tag-external)
+                                     (rau--manage-enqueue window-wl 'close)))))
+    (rau--init-pointer-binding seat-wl
+                               rau-pointer-bindings-modifiers
                                rau--btn-right
                                '(:on-pressed rau--floating-on-resize-start))))
 
