@@ -11,6 +11,10 @@
 
 ;;; SPDX-License-Identifier: GPL-3.0-or-later
 
+;;; Commentary:
+
+;; Backend part of Rau, see rau.el for more information.
+
 ;;; Code:
 
 (require 'cl-lib)
@@ -990,6 +994,7 @@ outputframe or external window."
 (defun rau--update-window-tiled-position (window-wl win-position)
   (let* ((node-wl (rau--window-wl-node-wl window-wl))
          (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
+         (_ (unless frame-wl (error "No frame-wl found")))
          (output-wl (rau--outframe-wl-output-wl frame-wl))
          (frame-node-wl (rau--window-wl-node-wl frame-wl))
          (frame-node-id (ewc-object-id frame-node-wl))
@@ -998,7 +1003,7 @@ outputframe or external window."
          (position (rau--apply-cons #'+ win-position frame-position)))
     (setf (rau--window-wl-absolute-position window-wl) position
           (rau--window-wl-position window-wl) win-position)
-    (when (not old-position)
+    (unless old-position
       (rau--render-enqueue window-wl 'show))
     (rau--render-enqueue node-wl 'set-position (rau--cons-as position 'x 'y))
     ;; Place window above the Emacs outputframe window but not at the top
@@ -1011,7 +1016,7 @@ outputframe or external window."
   (let ((dirty))
     ;; frame-id must be updated before updating position!
     (setf (rau--window-wl-frame-id window-wl) frame-id)
-    (when (not (equal dimensions (rau--window-wl-dimensions window-wl)))
+    (unless (equal dimensions (rau--window-wl-dimensions window-wl))
       (rau--manage-enqueue window-wl
                            'propose-dimensions
                            (rau--cons-as dimensions 'width 'height))
@@ -1022,8 +1027,11 @@ outputframe or external window."
                            (height . ,(cdr dimensions))))
       (setf (rau--window-wl-dimensions window-wl) dimensions
             dirty t))
-    (when (not (equal position (rau--window-wl-position window-wl)))
-      (rau--update-window-tiled-position window-wl position)
+    (unless (equal position (rau--window-wl-position window-wl))
+      (condition-case-unless-debug err
+          (rau--update-window-tiled-position window-wl position)
+        (lgr-error rau--lgr "Error positioning window id=%d: %S"
+                   (ewc-object-id window-wl) err))
       (setq dirty t))
     dirty))
 
@@ -1058,6 +1066,8 @@ outputframe or external window."
                  (not (member (ewc-object-id window-wl) visible)))
         (rau--render-enqueue window-wl 'hide)
         (setf (rau--window-wl-position window-wl) nil
+              (rau--window-wl-dimensions window-wl) nil
+              (rau--window-wl-frame-id window-wl) nil
               dirty t)))
     (when dirty (rau--mark-manage-dirty))))
 
