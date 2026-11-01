@@ -475,9 +475,12 @@ is completely valid."
                       (window-id (buffer-local-value 'rau--window-id buffer)))
             (pcase-let* ((edges (window-inside-absolute-pixel-edges w))
                          (`(,left ,top ,right ,bottom) edges)
-                         (position (,left . ,top))
-                         (dimensions (,(- right left) . ,(- bottom top))))
-              (push `[,window-id ,frame-id ,position ,dimensions] wins)))))
+                         (position `(,left . ,top))
+                         (dimensions-override (and (buffer-local-boundp 'rau--dimensions buffer)
+                                                (buffer-local-value 'rau--dimensions buffer)))
+                         (dimensions (or dimensions-override
+                                         `(,(- right left) . ,(- bottom top)))))
+              (push `[,window-id ,frame-id ,position ,dimensions] wins))))))
     `[,(sort frames) ,(sort wins)]))
 
 (defun rau--send-fe-ui-state ()
