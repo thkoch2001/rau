@@ -473,7 +473,11 @@ is completely valid."
         (dolist (w (window-list f 'no-minibuffer))
           (when-let* ((buffer (window-buffer w))
                       (window-id (buffer-local-value 'rau--window-id buffer)))
-            (push `[,window-id ,frame-id ,(window-inside-absolute-pixel-edges w)] wins)))))
+            (pcase-let* ((edges (window-inside-absolute-pixel-edges w))
+                         (`(,left ,top ,right ,bottom) edges)
+                         (position (,left . ,top))
+                         (dimensions (,(- right left) . ,(- bottom top))))
+              (push `[,window-id ,frame-id ,position ,dimensions] wins)))))
     `[,(sort frames) ,(sort wins)]))
 
 (defun rau--send-fe-ui-state ()

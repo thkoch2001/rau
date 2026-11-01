@@ -1010,9 +1010,9 @@ outputframe or external window."
     ;; In theory this should leave the top for floating windows
     (rau--render-enqueue node-wl 'place-above `((other . ,frame-node-id)))))
 
-(defun rau--update-window-tiled (window-wl frame-id dimensions position)
-  (lgr-trace rau--lgr "updating window id=%d frame-id=%s dimensions=%S position=%S"
-    (ewc-object-id window-wl) frame-id dimensions position)
+(defun rau--update-window-tiled (window-wl frame-id position dimensions)
+  (lgr-trace rau--lgr "updating window id=%d frame-id=%s position=%S dimensions %S"
+    (ewc-object-id window-wl) frame-id position dimensions)
   (let ((dirty))
     ;; frame-id must be updated before updating position!
     (setf (rau--window-wl-frame-id window-wl) frame-id)
@@ -1051,14 +1051,11 @@ outputframe or external window."
         (when output-wl
           (setf (rau--output-wl-frame-id output-wl) frame-id))))
     (dolist (win wins)
-      (pcase-let* ((`[,window-id ,frame-id ,edges] win)
-                   (`(,left ,top ,right ,bottom) edges)
+      (pcase-let* ((`[,window-id ,frame-id ,position ,dimensions] win)
                    (window-wl (ewc-object-get client window-id)))
         (push window-id visible)
         (when (and window-wl
-                   (rau--update-window-tiled window-wl frame-id
-                                             `(,(- right left) . ,(- bottom top))
-                                             `(,left . ,top)))
+                   (rau--update-window-tiled window-wl frame-id position dimensions))
           (setq dirty t))))
     ;; Hide all tiled windows that still have a position and were not received
     (dolist (window-wl (ewc-objects client rau--tag-tiled))
