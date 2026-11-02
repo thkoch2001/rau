@@ -369,11 +369,21 @@ This function should be run from the `rau-ready-hook'."
   (let ((parsed-keys (rau--parse-keys keys)))
     (rau--be #'rau--bind-parsed-keys parsed-keys)))
 
-(defun rau--global-unset-key-if (key command)
-  "Unset KEY in the global map if it is currently bound to COMMAND."
-  (when-let* ((kbd-key (kbd key))
-              ((eq (lookup-key global-map kbd-key) command)))
-    (global-unset-key kbd-key)))
+(defun rau--save-delete-frame ()
+  "Save replacement for C-x 5 0 binding to avoid deleting rau frames."
+  (interactive)
+  (let ((frame (selected-frame)))
+    (if (or (frame-parameter frame 'rau--window-id)
+            (frame-parameter frame 'rau--output-id))
+        (user-error "Must not delete rau frame")
+      (delete-frame))))
+
+(defun rau--global-unset-key-if (key command &optional new-command)
+  "Unset KEY if it is currently bound to COMMAND or set it to NEW-COMMAND."
+  (when (eq command (keymap-global-lookup key))
+    (if new-command
+        (keymap-global-set key new-command)
+      (keymap-global-unset key))))
 
 ;;; Emacs handler functions for hooks
 
@@ -526,6 +536,7 @@ Call this function once when starting Emacs inside of river."
   (rau--global-unset-key-if "C-x C-c" 'save-buffers-kill-terminal)
   (rau--global-unset-key-if "C-z" 'suspend-frame)
   (rau--global-unset-key-if "C-x C-z" 'suspend-frame)
+  (rau--global-unset-key-if "C-x 5 0" 'delete-frame #'rau--save-delete-frame)
 
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
