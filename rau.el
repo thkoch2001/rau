@@ -116,9 +116,9 @@ event handler."
     (while-let ((task (pop tasks)))
       (let ((fn (car task))
             (args (cdr task)))
-        (rau--condition-case
-         (format "task %s" fn)
-         (apply fn args))))))
+        (condition-case-unless-debug err
+            (apply fn args)
+          (error (lgr-error rau--lgr "Error executing task %S with args %S: %S" fn args err)))))))
 
 (defun rau--tasks-schedule-execution ()
   "Schedule task processing if not already scheduled."

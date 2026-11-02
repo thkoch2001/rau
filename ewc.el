@@ -357,10 +357,10 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
     (if listener
         (condition-case-unless-debug err
             (funcall listener object args)
-          (error (message "ewc: listener error id=%d if=%s opcode=%s (%s): %S"
-                          id
-                          (ewc-object-interface object)
-                          opcode (car spec) err)))
+          (error (lgr-error ewc--lgr "ewc: listener error id=%d if=%s opcode=%s (%s): %S"
+                            id
+                            (ewc-object-interface object)
+                            opcode (car spec) err)))
       (lgr-trace ewc--lgr "ewc: no listener if=%s opcode=%s (%s)"
                  (ewc-object-interface object)
                  opcode (car spec)))))

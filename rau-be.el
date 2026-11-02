@@ -296,12 +296,9 @@ See also `rau-on-wl-display-delete-id'."
            0 nil
            (lambda ()
              (setf (rau--state-manage-dirty-timer rau--state) nil)
-             (rau--condition-case
-              "request-manage-dirty"
-              (when-let* ((client (rau--state-client rau--state))
-                          (wm-wl (ewc-first-object client
-                                                   'river-window-manager-v1)))
-                (rau--request wm-wl 'manage-dirty))))))))
+             (when-let* ((client (rau--state-client rau--state))
+                         (wm-wl (ewc-first-object client 'river-window-manager-v1)))
+               (rau--request wm-wl 'manage-dirty)))))))
 
 (defun rau--manage-enqueue (ewc-object request &optional args)
   "Enqueue REQUEST on EWC-OBJECT (or id) with ARGS for next manage cycle."
@@ -962,18 +959,17 @@ outputframe or external window."
 
 (defun rau--queue-send (queue)
   "Send the requests from the given queue."
-  (rau--condition-case
-   "run-queue"
-   (let ((client (rau--state-client rau--state))
-         (requests (nreverse queue)))
-     (dolist (request requests)
-       (pcase-let* ((`(,obj-or-id ,rq ,args) request)
-                    (object-id (if (ewc-object-p obj-or-id)
-                                   (ewc-object-id obj-or-id)
-                                 obj-or-id)))
-         (if-let* ((object-wl (ewc-object-get client object-id)))
-             (rau--request object-wl rq args)
-           (lgr-error rau--lgr "enqueued rq on destroyed obj: %S %S %S" object-id rq args)))))))
+  (let ((client (rau--state-client rau--state))
+        (requests (nreverse queue)))
+    (dolist (request requests)
+      (pcase-let* ((`(,obj-or-id ,rq ,args) request)
+                   (object-id (if (ewc-object-p obj-or-id)
+                                  (ewc-object-id obj-or-id)
+                                obj-or-id)))
+        (if-let* ((object-wl (ewc-object-get client object-id)))
+            (rau--request object-wl rq args)
+          (lgr-error rau--lgr "enqueued rq on destroyed obj: %S %S %S" object-id rq args))))))
+
 ;;; Render cycle
 
 (defun rau--render-frames ()
@@ -1030,8 +1026,8 @@ outputframe or external window."
     (unless (equal position (rau--window-wl-position window-wl))
       (condition-case-unless-debug err
           (rau--update-window-tiled-position window-wl position)
-        (lgr-error rau--lgr "Error positioning window id=%d: %S"
-                   (ewc-object-id window-wl) err))
+        (error (lgr-error rau--lgr "Error positioning window id=%d: %S"
+                   (ewc-object-id window-wl) err)))
       (setq dirty t))
     dirty))
 
