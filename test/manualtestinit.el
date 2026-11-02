@@ -1,4 +1,46 @@
 ;; -*- lexical-binding: t; -*-
+
+(use-package emacs
+  :custom
+  (async-shell-command-buffer 'new-buffer)
+  (async-shell-command-display-buffer nil)
+  (global-auto-revert-mode t)
+  (scroll-bar-mode nil)
+  (select-enable-clipboard t)
+  (show-paren-mode t)
+  (tab-bar-new-tab-choice "*scratch*")
+  (tab-bar-show 1)
+  (tab-bar-tab-hints 1)
+  (tab-bar-select-tab-modifiers '(meta super))
+  (tab-width 4)
+  ;; see window-min-height
+  (temp-buffer-max-height 10)
+  (tool-bar-mode nil)
+  ;; prevent frequent resizes of completions or other temp-buffer-resize-mode windows
+  (window-min-height 7)
+
+  (font-use-system-font t)
+  (frame-resize-pixelwise t)
+  (window-resize-pixelwise t)
+  (mode-line-compact 'long)
+
+;;;; Mouse-related options
+  (context-menu-mode t)
+  (save-interprogram-paste-before-kill t)
+  (mouse-yank-at-point t)
+  (pixel-scroll-mode t)
+ ;; '(pixel-scroll-precision-mode t) ;; see bug#69972
+  (mouse-drag-and-drop-region t)
+  (mouse-drag-and-drop-region-cross-program t)
+  (mouse-drag-mode-line-buffer t)
+  (global-xref-mouse-mode t)
+
+;;;; Frame- and window-related options
+  (frame-inhibit-implied-resize t)
+  (help-window-select t)
+  (window-combination-resize t)
+)
+
 (setq inhibit-message t)
 (setq multiple-terminals-merge-keyboards t)
 (print "running init" #'external-debugging-output)
@@ -58,6 +100,7 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
      (:needs-focus "C-x" "C-u" "C-h" "M-x")
      )))
 
+(add-to-list 'display-buffer-alist '((derived-mode . rau-mode)	display-buffer-full-frame))
 (add-hook 'rau-ready-hook #'rau-test-bind-keys)
 (setopt rau-backend-init-file
         (expand-file-name "rau-be-init.el" (file-name-directory load-file-name)))
@@ -69,23 +112,4 @@ Only runs in GUI mode to prevent duplicate output in terminal/batch modes."
 (print "done with init" #'external-debugging-output)
 (switch-to-buffer "*Messages*")
 
-(easy-menu-define words-menu global-map
-       "Menu for word navigation commands."
-       '("Words"
-          ["Forward word" forward-word]
-          ["Backward word" backward-word]))
-
-;; TODO: find a way to disable the below functions when rau is running since
-;; they freeze Emacs. Advincing does not seem to work. Maybe redefining?
-;(x-popup-menu t words-menu)
-(define-advice display-popup-menus-p (:override (&rest _))
-  "Always return nil to force text-based fallbacks instead of GUI popups."
-  nil)
-(define-advice x-popup-menu (:override (&rest _))
-  "Always return nil to force text-based fallbacks instead of GUI popups."
-  nil)
-(define-advice x-popup-dialog (:override (&rest _))
-  "Always return nil to force text-based fallbacks instead of GUI popups."
-  nil)
 (toggle-debug-on-error)
-
