@@ -19,6 +19,7 @@ river:
 # opens a window in the parent X11/wayland session
 # number of outputs to create
 	export WLR_WL_OUTPUTS=1 && \
+	export XKB_DEFAULT_LAYOUT=de && \
 	river -log-level debug -no-xwayland -c "env|grep WAYLAND && sleep infinity"
 
 # connect a new emacs instance to the above river process
