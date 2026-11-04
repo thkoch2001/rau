@@ -30,12 +30,11 @@
 (declare-function rau--task-delete-frame "rau" (frame-id))
 (declare-function rau--task-kill-buffer "rau" (window-id))
 (declare-function rau--task-link-emacs-frame-to-window "rau" (title window-id))
-(declare-function rau--task-minimize-window "rau" (window-id))
-(declare-function rau--task-recover-focus "rau" (window-id name))
 (declare-function rau--task-rename-buffer "rau" (window-id name))
 (declare-function rau--task-select-window "rau" (window-id))
 (declare-function rau--task-setup-new-external-window "rau" (window-id) title)
 (declare-function rau--tasks-enqueue "rau" (fn &rest args))
+(declare-function rau--update-focus-request "rau" ())
 
 ;;; Configuration and state
 
@@ -43,7 +42,7 @@
   "Current global rau WM state.")
 
 (defcustom rau-pointer-bindings-modifiers '(super)
-  "modifiers for pointer bindings")
+  "Modifiers for pointer bindings.")
 
 ;;; State structs
 
@@ -156,6 +155,7 @@
 ;;; Data access helpers
 
 (defun rau--outframe-wl-output-wl (frame-wl)
+  "Find OUTPUT-WL for FRAME-WL via `frame-id'."
   (when-let* ((frame-id (rau--window-wl-frame-id frame-wl))
               (client (rau--state-client rau--state)))
     (cl-find frame-id
@@ -163,8 +163,7 @@
              :key #'rau--output-wl-frame-id)))
 
 (defun rau--frame-wl-for-extwin-wl (window-wl)
-  "Return the Emacs outputframe window-wl displaying external
-WINDOW-WL."
+  "Find outputframe window-wl displaying external WINDOW-WL via `frame-id'."
   (when-let* ((client (rau--state-client rau--state))
               (outputframes (ewc-objects client rau--tag-outputframe))
               (frame-id (rau--window-wl-frame-id window-wl)))
@@ -173,7 +172,7 @@ WINDOW-WL."
              return frame-wl)))
 
 (defun rau--dimensions-for-outputframe (output-wl)
-  "Get dimensions from output-wl or its ls-output-wl non-exclusive-area."
+  "Get dimensions from OUTPUT-WL or its ls-output-wl non-exclusive-area."
   (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
             (non-excl-dimensions (rau--ls-output-wl-non-excl-dimensions ls-output-wl))
             ((not (equal '(0 . 0) non-excl-dimensions))))
@@ -181,7 +180,7 @@ WINDOW-WL."
     (rau--output-wl-dimensions output-wl)))
 
 (defun rau--position-for-outputframe (output-wl)
-  "Get position from output-wl or its ls-output-wl non-exclusive-area."
+  "Get position from OUTPUT-WL or its ls-output-wl non-exclusive-area."
   (if-let* ((ls-output-wl (rau--output-wl-ls-output-wl output-wl))
             (non-excl-position (rau--ls-output-wl-non-excl-position ls-output-wl))
             ((not (equal '(0 . 0) non-excl-position))))
@@ -260,7 +259,7 @@ when used from other files (e.g. tests)."
       title-trunc)))
 
 (cl-defmacro rau--do (tag obj state &body body)
-  "Iterate over the ewc objects in STATE tagged with TAG.
+  "Iterate over ewc objects in STATE with TAG, set OBJ to current item.
 TAG is a form that evaluates to or is an ewc-object tag, for example
 `rau--tag-external', `rau--tag-outputframe', or `'river-output-v1'.
 
@@ -273,7 +272,7 @@ STATE is evaluated once and bound to that same name within BODY."
        ,@body)))
 
 (defun rau--remove (object-wl)
-  "Remove object from ewc objects table.
+  "Remove OBJECT-WL from ewc objects table.
 See also `rau-on-wl-display-delete-id'."
   (ewc-object-remove (rau--state-client rau--state) object-wl))
 
@@ -312,6 +311,7 @@ See also `rau-on-wl-display-delete-id'."
 ;;; Focus
 
 (defun rau--get-focus-target-wl ()
+  "Return Wayland window that should be focused."
   (unwind-protect
       (when-let* ((requested (rau--state-focus-requested rau--state))
                   (requested-id (if (equal requested t)
@@ -321,7 +321,7 @@ See also `rau-on-wl-display-delete-id'."
                   (client (rau--state-client rau--state)))
         (if-let* ((target-wl (ewc-object-get client requested-id)))
             target-wl
-          (rau--fe #'rau--tasks-enqueue #'rau--task-recover-focus)
+          (rau--fe #'rau--tasks-enqueue #'rau--update-focus-request)
           (lgr-warn rau--lgr "focus target gone: requested=%S" requested)
           (throw 'focus-target-gone nil)))
     (setf (rau--state-focus-requested rau--state) nil)))
@@ -352,8 +352,8 @@ See also `rau-on-wl-display-delete-id'."
         (rau--fe #'rau--tasks-enqueue #'rau--task-select-window target-id)))))
 
 (defun rau--request-focus (target)
-  "Request focus for TARGET, either ewc-object, object id or t for
-last focused."
+  "Request focus to TARGET.
+TARGET is either an ewc-object, an object id or t for last focused."
   (when-let* ((id (if (ewc-object-p target) (ewc-object-id target) target)))
     (setf (rau--state-focus-requested rau--state) id)
     (rau--mark-manage-dirty)))
@@ -443,12 +443,14 @@ switching fullscreen between windows, call this before
 ;;;; Move floating window
 
 (defun rau--floating-on-move-start (window-wl seat-wl)
+  "Start a move pointer operation for floating WINDOW-WL on SEAT-WL."
   (when (ewc-object-tagged-p window-wl rau--tag-floating)
     (setf (rau--seat-wl-on-op-delta seat-wl) #'rau--floating-on-op-delta-move
           (rau--seat-wl-on-op-end seat-wl) #'rau--floating-on-move-end)
     (rau--manage-enqueue seat-wl 'op-start-pointer)))
 
 (defun rau--floating-on-op-delta-move (window-wl delta)
+  "Update the move pointer operation for floating WINDOW-WL to DELTA."
   (let* ((node-wl (rau--window-wl-node-wl window-wl))
          ;; TODO absolute-position is unknown for windows that existed before rau started
          ;; probably due to default-output being nil
@@ -457,11 +459,13 @@ switching fullscreen between windows, call this before
     (rau--render-enqueue node-wl 'set-position (rau--cons-as new-position 'x 'y))))
 
 (defun rau--floating-on-move-end (window-wl seat-wl delta)
+  "Finish the move pointer operation for floating WINDOW-WL on SEAT-WL with DELTA."
   (let* ((position (rau--window-wl-absolute-position window-wl)))
     (setf (rau--window-wl-absolute-position window-wl) (rau--apply-cons #'+ position delta))
     (rau--manage-enqueue seat-wl 'op-end)))
 
 (defun rau--floating-on-resize-start (window-wl seat-wl)
+  "Start a resize pointer operation for floating WINDOW-WL on SEAT-WL."
   (when (ewc-object-tagged-p window-wl rau--tag-floating)
     (setf (rau--seat-wl-on-op-delta seat-wl) #'rau--floating-on-op-delta-resize
           (rau--seat-wl-on-op-end seat-wl) #'rau--floating-on-resize-end
@@ -469,11 +473,13 @@ switching fullscreen between windows, call this before
     (rau--manage-enqueue seat-wl 'op-start-pointer)))
 
 (defun rau--floating-on-op-delta-resize (window-wl delta)
+  "Update the resize pointer operation for floating WINDOW-WL to DELTA."
   (let* ((dimensions (rau--window-wl-dimensions window-wl))
          (new-dimensions (rau--apply-cons #'+ dimensions delta)))
     (rau--manage-enqueue window-wl 'propose-dimensions (rau--cons-as new-dimensions 'width 'height))))
 
 (defun rau--floating-on-resize-end (window-wl seat-wl delta)
+  "Finish resize pointer operation for floating WINDOW-WL on SEAT-WL with DELTA."
   (let* ((dimensions (rau--window-wl-dimensions window-wl)))
     (setf (rau--window-wl-dimensions window-wl) (rau--apply-cons #'+ dimensions delta))
     (rau--manage-enqueue seat-wl 'op-end)))
@@ -494,6 +500,9 @@ switching fullscreen between windows, call this before
                     (output . ,(ewc-object-id output-wl))))))
 
 (defun rau--init-pointer-binding (seat-wl modifiers button data)
+  "Init pointer binding for SEAT-WL.
+See `rau--modifiers-bitmap' for MODIFIERS.  See rau--btn- constants for
+BUTTON.  See `rau--pointer-binding' for DATA."
   (let* ((client (rau--state-client rau--state))
          (pb-wl (ewc-object-add client 'river-pointer-binding-v1)))
     (setf (ewc-object-data pb-wl)
@@ -505,7 +514,7 @@ switching fullscreen between windows, call this before
     (rau--manage-enqueue pb-wl 'enable)))
 
 (defun rau--ensure-ls-seat (seat-wl)
-  "Create a layer-shell seat object for the current seat if possible."
+  "Create a layer-shell seat object for the SEAT-WL."
   (when-let* (((null (rau--seat-wl-ls-seat-wl seat-wl)))
               (client (rau--state-client rau--state))
               (ls-wl (ewc-first-object client 'river-layer-shell-v1))
@@ -554,7 +563,7 @@ switching fullscreen between windows, call this before
 (defun rau--on-wl-display-delete-id (_display-wl args)
   "Server acknowledges deletion of object created by client.
 Note that server does not send this event for objects created by
-server (e.g. window, output). Thus object removal must be done at the
+server (e.g. window, output).  Thus object removal must be done at the
 point where also the destroy request is sent."
   (pcase-let (((map id) args)
               (client (rau--state-client rau--state)))
@@ -773,10 +782,6 @@ outputframe or external window."
     (when (eq (rau--output-wl-fullscreen-window-wl output-wl) window-wl)
       (rau--fullscreen-exit window-wl output-wl))))
 
-(defun rau--on-river-window-v1-minimize-requested (window-wl _args)
-  (when-let* (((ewc-object-tagged-p window-wl rau--tag-external)))
-    (rau--fe #'rau--tasks-enqueue #'rau--task-minimize-window (ewc-object-id window-wl))))
-
 (defun rau--on-river-window-v1-unreliable-pid (window-wl args)
   (pcase-let* (((map unreliable-pid) args))
     (setf (rau--window-wl-pid window-wl) unreliable-pid)))
@@ -958,7 +963,7 @@ outputframe or external window."
                 title)))))
 
 (defun rau--queue-send (queue)
-  "Send the requests from the given queue."
+  "Send the requests from the given QUEUE."
   (let ((client (rau--state-client rau--state))
         (requests (nreverse queue)))
     (dolist (request requests)
@@ -1072,6 +1077,7 @@ outputframe or external window."
 ;;; Remote Procedure Call communication with Frontend
 
 (defun rau--rpc-server-log (_server connection msg)
+  "React to CONNECTION from Rau frontend, log MSG."
   (rau--rpc-create-recv-buffer)
   (setq rau--rpc-proc connection)
   (lgr-info rau--lgr "new connection: %S" msg)
@@ -1095,3 +1101,4 @@ outputframe or external window."
   (lgr-debug rau--lgr "Socket created"))
 
 (provide 'rau-be)
+;;; rau-be.el ends here

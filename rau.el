@@ -26,6 +26,7 @@
 
 (require 'cl-lib)
 (require 'rau-lib)
+(require 'server)
 
 (declare-function rau--bind-parsed-keys "rau-be" (parsed-keys))
 (declare-function rau--manage-enqueue "rau-be" (ewc-object request &optional args))
@@ -40,13 +41,14 @@
   :prefix "rau-")
 
 (defcustom rau-ready-hook nil
-  "Hook run when rau is ready.  At the moment this means that all global
-Wayland objects have been registered."
+  "Hook run when Rau is ready.
+At the moment this means that all global Wayland objects have been registered.
+This is the right place to setup keybindings."
   :type 'hook)
 
 (defcustom rau-backend-init-file nil
-  "Emacs lisp init file for the backend Emacs instance.  Logging can be
-configured there."
+  "Emacs Lisp init file for the backend Emacs instance.
+Logging for the backend can be configured there."
   :type 'file
   :risky t)
 
@@ -64,9 +66,9 @@ configured there."
 
 (defun rau--window-id-for-emacs-window (emacs-window)
   "Return window-id for any EMACS-WINDOW rau-mode or not.
-For a window with a rau-mode buffer return window-id pointing to an
-external window. For all other buffers return the window-id of the emacs
-frame."
+For a window with a `rau-mode' buffer return window-id pointing to an
+external window.  For all other buffers return the window-id of the
+Emacs frame."
   (if-let* ((buffer (window-buffer emacs-window))
             (window-id (buffer-local-value 'rau--window-id buffer)))
       window-id
@@ -74,6 +76,7 @@ frame."
       (frame-parameter emacs-frame 'rau--window-id))))
 
 (defun rau--buffer-for-window-id (window-id)
+  "Return Emacs buffer for Wayland WINDOW-ID."
   (cl-find window-id
            (buffer-list)
            :key (lambda (b) (buffer-local-value 'rau--window-id b))))
@@ -86,14 +89,12 @@ frame."
 ;;; Emacs integration, interaction
 
 (defun rau--make-outputframe-parameters ()
-  "Return alist of frame parameters with unique name as expected by title
-event handler."
+  "Make standard frame parameters for a Rau output frame."
   `((name . ,(make-temp-name "rau-frame-"))
     (undecorated . t)
     (window-system . pgtk)
     ;; avoid showing the same rau buffer twice
     (buffer-predicate . rau--buffer-predicate)))
-
 
 ;; Major mode for rau-managed buffers
 (defvar-local rau--window-id nil
@@ -131,14 +132,14 @@ event handler."
              (rau--tasks-execute))))))
 
 (defun rau--tasks-enqueue (fn &rest args)
-  "Queue FN with ARGS for execution by rau--tasks-execute.
+  "Queue FN with ARGS for execution by `rau--tasks-execute'.
 Also schedule the task execution timer if not yet done so.  Only to be
 used in event listeners."
   (push `(,fn . ,args) (rau--fe-state-task-queue rau--fe-state))
   (rau--tasks-schedule-execution))
 
 (defun rau--task-assign-emacs-frame (output-id)
-  "Find initial frame or create one and set OUTPUT-ID in frame-parameter."
+  "Find initial frame or create one and set OUTPUT-ID in `frame-parameter'."
   (let ((emacs-frame
          (or
           ;; search the initial frame
@@ -152,7 +153,7 @@ used in event listeners."
   (rau--send-fe-ui-state))
 
 (defun rau--task-consume-key-event (event needs-focus)
-  "Forward EVENT to emacs and setup to recover focus if NEEDS-FOCUS."
+  "Forward EVENT to Emacs and setup to recover focus if NEEDS-FOCUS."
   (push (cons t event) unread-command-events)
   (when needs-focus
     (add-hook 'post-command-hook #'rau--recover-focus-after-binding-pressed)))
@@ -164,32 +165,26 @@ used in event listeners."
     (delete-frame emacs-frame)))
 
 (defun rau--task-kill-buffer (window-id)
-  "Remove kill inhibiting hook and kill."
+  "Remove kill inhibiting hook in buffer for WINDOW-ID and kill buffer."
   (when-let* ((buffer (rau--buffer-for-window-id window-id)))
     (with-current-buffer buffer
       (remove-hook 'kill-buffer-query-functions #'rau--buffer-killed t))
     (kill-buffer buffer)))
 
 (defun rau--task-link-emacs-frame-to-window (title window-id)
+  "Link Emacs frame with name TITLE to Wayland window with WINDOW-ID."
   (let ((emacs-frame
          (cl-find title (frame-list)
                   :test #'equal
                   :key (lambda (f) (frame-parameter f 'name)))))
     (unless emacs-frame
-      (error "No emacs frame found for wayland window. id=%d title=%s." window-id title))
+      (error "No Emacs frame found for wayland window: id=%d title=%s" window-id title))
 
     (set-frame-parameter emacs-frame 'rau--window-id window-id)
     (rau--send-fe-ui-state)))
 
-(defun rau--task-minimize-window (window-id)
-  (when-let* ((buffer (rau--buffer-for-window-id window-id)))
-    (bury-buffer buffer)))
-
-(defun rau--task-recover-focus ()
-  (rau--update-focus-request))
-
 (defun rau--task-rename-buffer (window-id name)
-  "Rename buffer for external window to NAME."
+  "Rename buffer for Wayland window with WINDOW-ID to NAME."
   (when-let* ((buffer (rau--buffer-for-window-id window-id)))
     (with-current-buffer buffer
       (rename-buffer name t))))
@@ -200,14 +195,14 @@ used in event listeners."
     (select-window emacs-window 'norecord)))
 
 (defun rau--task-setup-new-external-window (window-id title)
-  "Create and display Rau mode buffer for WINDOW-ID."
+  "Create and display Rau mode buffer with name TITLE for WINDOW-ID."
   (let* ((name (or title (make-temp-name "rau-external-")))
          (buffer (get-buffer-create name)))
     (with-current-buffer buffer
       (rau-mode)
       (setq-local rau--window-id window-id)
       (unless (display-buffer buffer)
-        (error "display-buffer failed for window %d buffer %S." window-id buffer)))))
+        (error "display-buffer failed for window %d buffer %S" window-id buffer)))))
 
 ;;; Keybindings
 
@@ -220,7 +215,7 @@ used in event listeners."
     (list event key mods)))
 
 (defun rau--parse-keys (keys)
-  "Parse KEYS into a list of rau--binding structs. See `rau-bind-keys'."
+  "Parse KEYS into a list of rau--binding structs.  See `rau-bind-keys'."
   (let ((seen (make-hash-table :test #'equal))
         (result nil))
     (dolist (item keys)
@@ -237,7 +232,7 @@ used in event listeners."
            ((memq elt '(:needs-focus :allow-when-locked))
             (push (cons elt t) flags))
            ((keywordp elt)
-            (error "unknown flag %S" elt))
+            (error "Unknown flag %S" elt))
            (t
             (error "Unexpected element in key binding spec: %S" elt))))
         (dolist (key keys)
@@ -312,10 +307,9 @@ used in event listeners."
     ("display"   . #x1008FF85)
     ("tools"     . #x1008FF89)
     ("wlan"      . #x1008FF95)
-    ("audiomicmute" . #x1008FFB2)
-    )
-  "Small fallback table mapping key names to XKB keysyms. See
-X11/XF86keysym.h.")
+    ("audiomicmute" . #x1008FFB2))
+  "Fallback table mapping key names to XKB keysyms.
+See X11/XF86keysym.h.")
 
 (defun rau--utf32-to-keysym (cp)
   "Convert Unicode codepoint CP to an XKB keysym."
@@ -346,9 +340,9 @@ KEY may be an integer codepoint, a symbol, or a string key name."
    (t (error "Key should be an integer, symbol or string"))))
 
 (defun rau-bind-keys (keys)
-  "Bind KEYS to always be sent to Emacs.  KEYS is a list either of strings
-acceptable to `kbd' or of lists of strings and one or more of the
-following keywords:
+  "Bind KEYS to always be sent to Emacs.
+KEYS is a list either of strings acceptable to `kbd' or of lists of
+strings and one or more of the following keywords:
 
 - :allow-when-locked - keys are also active when the session is locked,
    e.g. Volume or Brightness control
@@ -357,20 +351,18 @@ following keywords:
 
 Example:
 
-(\"s-e\" \"s-f\"
-  (\"s-d\" \"C-h\" :needs-focus)
+\(\"s\-e\" \"\s\-f\"
+  (\"s\-d\" \"C\-h\" :needs-focus)
   (:allow-when-locked \"M-x\" :needs-focus)
   (:allow-when-locked \"s-c\" \"s-z\" :layout 2))
 
 This function should be run from the `rau-ready-hook'."
-  ;; TODO: other check needed after split
-  ;; (unless rau--state
-  ;;   (error "Rau has not yet been started."))
+  ;; TODO: check whether Rau has already been started
   (let ((parsed-keys (rau--parse-keys keys)))
     (rau--be #'rau--bind-parsed-keys parsed-keys)))
 
 (defun rau--save-delete-frame ()
-  "Save replacement for C-x 5 0 binding to avoid deleting rau frames."
+  "Save replacement for C\-x 5 0 binding to avoid deleting rau frames."
   (interactive)
   (let ((frame (selected-frame)))
     (if (or (frame-parameter frame 'rau--window-id)
@@ -396,7 +388,7 @@ This function should be run from the `rau-ready-hook'."
        (zerop (recursion-depth))))
 
 (defun rau--update-focus-request (&rest args)
-  "Reconcile Wayland focus with the selected window."
+  "Reconcile Wayland focus with the selected window, ignores ARGS."
   (lgr-debug rau--lgr "update-focus-request %S" args)
   (when-let* (((rau--focus-change-allowed-p))
               (emacs-window (selected-window))
@@ -404,9 +396,7 @@ This function should be run from the `rau-ready-hook'."
     (rau--be #'rau--request-focus target-id)))
 
 (defun rau--recover-focus-after-binding-pressed ()
-  "Give focus back to external window after it was given to Emacs to handle
-a keybinding pressed event. This function is meant to be bound to
-post-command-hook in the enqueued command of the pressed event handler."
+  "Recover focus after it was given to Emacs to handle a keybinding."
   (lgr-debug rau--lgr "recover focus. not t-c=%S u-c-e=%d t-s-c-k=%d m-d=%d r-d=%d"
              (not this-command)
              (length unread-command-events)
@@ -432,8 +422,8 @@ post-command-hook in the enqueued command of the pressed event handler."
 This is necessary for external windows to resize when the minibuffer
 expands.  This needs to be added to the global hook since local hooks
 don't get called for windows that disappear.  Also
-window-size-change-functions does not get called when minibuffer expands
-and thus minibuffer ends up below external window."
+`window-size-change-functions' does not get called when minibuffer
+expands and thus minibuffer ends up below external window."
   (rau--be #'rau--mark-manage-dirty))
 
 ;;; Other Emacs config functions: advices, predicates
@@ -444,7 +434,7 @@ and thus minibuffer ends up below external window."
       (not (get-buffer-window buffer t))))
 
 (defun rau--split-window-advice (new-window)
-  "Advice window splits to always display another buffer."
+  "Advice window splits to not duplicate a `rau-mode' buffer in NEW-WINDOW."
   (with-selected-window new-window
     (with-current-buffer (window-buffer)
       (when (derived-mode-p 'rau-mode)
@@ -454,7 +444,8 @@ and thus minibuffer ends up below external window."
 (defun rau--set-window-buffer-advice (orig win buf &rest r)
   "Avoid double-display of rau buffers, by stealing them.
 Note that displaying the same buffer in two different tabs, for example,
-is completely valid."
+is completely valid.
+See `set-window-buffer' and `advice-add' for ORIG, WIN BUF R arguments."
   (with-current-buffer buf
     (when (derived-mode-p 'rau-mode)
       (dolist (other (get-buffer-window-list buf nil 'visible))
@@ -473,6 +464,7 @@ is completely valid."
 ;;; fe-state
 
 (defun rau--fe-ui-state ()
+  "Build ui-state data to be sent to the backend."
   (let (frames wins)
     (dolist (f (frame-list))
       (let ((frame-id (frame-id f))
@@ -494,6 +486,7 @@ is completely valid."
     `[,(sort frames) ,(sort wins)]))
 
 (defun rau--send-fe-ui-state ()
+  "Send UI-state data to the backend."
   (let ((new-state (rau--fe-ui-state))
         (last-state (rau--fe-state-last-send-state rau--fe-state)))
     (if (equal new-state last-state)
@@ -502,6 +495,7 @@ is completely valid."
       (setf (rau--fe-state-last-send-state rau--fe-state) new-state))))
 
 (defun rau--window-state-change-handler ()
+  "Update UI-state and focus any time Emacs window configuration changes."
   (rau--send-fe-ui-state)
   (rau--update-focus-request)
 
@@ -563,10 +557,10 @@ Call this function once when starting Emacs inside of river."
   "The backend Emacs subprocess.")
 
 (defun rau--make-be-server-name (&optional number)
-  "Create unique server-name for be-server, iterating recursively with
-NUMBER + 1. Multiple rau-be servers happen mostly during development.
-This function assumes that server-socket-dir will be the same in the be
-emacs instance!"
+  "Create unique `server-name' for the Rau backend server.
+Iterates recursively with NUMBER + 1. Multiple Rau backend servers
+happen mostly during development.  This function assumes that
+`server-socket-dir' will be the same in the backend Emacs instance!"
   (let* ((number (or number 1))
          (server-name (format "rau-backend-%d" number))
          (server-file (expand-file-name server-name server-socket-dir)))

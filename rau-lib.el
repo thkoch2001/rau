@@ -1,4 +1,10 @@
-;; -*- lexical-binding: t; -*-
+;;; rau-lib --- library of common functions for Rau frontend and backend -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026 Thomas Koch
+
+;;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Code:
 
 (require 'lgr)
 
@@ -13,7 +19,8 @@
   "Modifier bits as per river_seat_v1.modifiers / XKB.")
 
 (defun rau--modifiers-bitmap (modifier-symbols)
-  "Get bitmap for binding modifiers as defined in rau--modifier-bits."
+  "Make bitmap for binding MODIFIER-SYMBOLS.
+See `rau--modifier-bits' for valid symbols."
   (let ((modifier-bits (seq-keep (lambda (mod)
                                    (alist-get mod rau--modifier-bits))
                                  modifier-symbols)))
@@ -28,11 +35,13 @@
           xs))
 
 (defun rau--apply-cons (fn &rest args)
-  "map FN over cars and cdrs of ARGS separately."
+  "Map FN over cars and cdrs of ARGS separately.
+This can be used for simple two dimensional vector calculations."
   `(,(apply fn (rau--map-if #'listp #'car args)) .
     ,(apply fn (rau--map-if #'listp #'cdr args))))
 
 (defun rau--cons-as (cons symbol1 symbol2)
+  "Transform CONS cell into a plist with names SYMBOL1 and SYMBOL2."
   `((,symbol1 . ,(car cons))
     (,symbol2 . ,(cdr cons))))
 
@@ -59,7 +68,7 @@
     (process-send-string process (format "%s\n" msg))))
 
 (defun rau--rpc-send (fn &rest args)
-  "Call FN with ARGS on the backend. Return values are ignored."
+  "Call FN with ARGS on the remote site.  Return values are ignored."
   ;; (rau--rpc-send (cons fn args))
   (let ((sexp `(,fn . ,args)))
     (rau--rpc-send-sexp rau--rpc-proc sexp)))
@@ -68,13 +77,14 @@
 (defalias 'rau--fe #'rau--rpc-send)
 
 (defun rau--rpc-handle (fn args)
-  "Execute the requested function. Return values are ignored."
-  (condition-case err
+  "Execute the requested function FN with ARGS.
+Return values are ignored and errors catched and logged."
+  (condition-case-unless-debug err
       (apply fn args)
     (lgr-error rau--lgr "RPC error %S with %S: %S" fn args err)))
 
-(defun rau--rpc-filter (proc string)
-  "Process filter for incoming RPCs."
+(defun rau--rpc-filter (_proc string)
+  "Process filter for incoming RPC STRING."
   (let ((coding-system-for-read 'utf-8-emacs-unix))
     (with-current-buffer rau--rpc-recv-buffer
       (goto-char (point-max))
@@ -93,3 +103,4 @@
           (delete-region (point-min) end-pos))))))
 
 (provide 'rau-lib)
+;;; rau-lib.el ends here

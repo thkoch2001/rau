@@ -337,10 +337,10 @@ unibyte or multibyte, see struct Lisp_String in src/lisp.h."
                 (funcall (bindat--type-ue ewc--msg-head)))
                (object (ewc-object-get client id))
                (_ (unless (ewc-object-p object)
-                    (error "ewc: event for unknown object id=%s" id)))
+                    (error "ewc: Event for unknown object id=%s" id)))
                (events (ewc-object-events object))
                (_ (unless (< opcode (length events))
-                    (error "ewc: illegal event opcode=%d for if=%s"
+                    (error "ewc: Illegal event opcode=%d for if=%s"
                            opcode (ewc-object-interface object))))
                (spec (nth opcode events))
                (listeners (ewc-object-listeners object))
