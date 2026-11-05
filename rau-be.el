@@ -35,7 +35,10 @@
   "Current global rau WM state.")
 
 (defcustom rau-pointer-bindings-modifiers '(super)
-  "Modifiers for pointer bindings.")
+  "Modifiers for pointer bindings."
+  :type `(set ,@(mapcar (lambda (cons) `(const ,(car cons)))
+                        rau--modifier-bits))
+  :group 'rau)
 
 ;;; State structs
 

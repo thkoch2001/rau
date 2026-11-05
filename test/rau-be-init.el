@@ -12,4 +12,4 @@
       (lgr-set-threshold lgr lgr-level-debug)
       ))
 
-(setopt rau-pointer-bindings-modifiers '(shift))
+(setopt rau-pointer-bindings-modifiers '(meta super))
