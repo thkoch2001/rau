@@ -2,13 +2,6 @@
 
 ;; Copyright (C) 2026 Thomas Koch
 
-;; Author: Thomas Koch <thomas@koch.ro>
-;; Version: 0.3
-;; Keywords: frames
-;; URL: https://github.com/thkoch2001/rau
-;; Package-Requires: ((emacs "31.1")
-;;                    (lgr "0.1.0"))
-
 ;;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
@@ -831,9 +824,6 @@ outputframe or external window."
       (setf (rau--seat-wl-delta seat-wl) delta)
       (funcall (rau--seat-wl-on-op-delta seat-wl) window-wl delta))))
 
-(defun rau--on-river-seat-v1-op-release (_seat-wl _args)
-  )
-
 ;;;; river-pointer-binding-v1 listeners
 
 (defun rau--on-river-pointer-binding-v1-pressed (pb-wl _args)
@@ -1102,3 +1092,6 @@ outputframe or external window."
 
 (provide 'rau-be)
 ;;; rau-be.el ends here
+;; Local Variables:
+;; package-lint-main-file: "rau.el"
+;; End:

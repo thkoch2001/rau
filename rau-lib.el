@@ -103,4 +103,8 @@ Return values are ignored and errors catched and logged."
           (delete-region (point-min) end-pos))))))
 
 (provide 'rau-lib)
+
 ;;; rau-lib.el ends here
+;; Local Variables:
+;; package-lint-main-file: "rau.el"
+;; End:
