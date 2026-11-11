@@ -180,8 +180,8 @@ used in event listeners."
     (unless emacs-frame
       (error "No Emacs frame found for wayland window: id=%d title=%s" window-id title))
 
-    (set-frame-parameter emacs-frame 'rau--window-id window-id)
-    (rau--send-fe-ui-state)))
+    (set-frame-parameter emacs-frame 'rau--window-id window-id))
+  (rau--send-fe-ui-state))
 
 (defun rau--task-rename-buffer (window-id name)
   "Rename buffer for Wayland window with WINDOW-ID to NAME."
@@ -429,9 +429,18 @@ expands and thus minibuffer ends up below external window."
 ;;; Other Emacs config functions: advices, predicates
 
 (defun rau--buffer-predicate (buffer)
-  "Buffer predicate to avoid accidentally showing the same rau BUFFER twice."
-  (or (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))
-      (not (get-buffer-window buffer t))))
+  "Avoid showing a rau BUFFER."
+  (not (with-current-buffer buffer (derived-mode-p 'rau-mode))))
+
+(defun rau--initial-frame-buffer (frame)
+  (lgr-trace rau--lgr "init frame buffer frame-id=%S"
+             (frame-id frame))
+  (dolist (window (window-list frame))
+    (with-current-buffer (window-buffer window)
+      (when (derived-mode-p 'rau-mode)
+        (let ((new-buffer (other-buffer)))
+          (lgr-trace rau--lgr "switching buffer to %S" (buffer-name new-buffer))
+          (switch-to-buffer new-buffer))))))
 
 (defun rau--split-window-advice (new-window)
   "Advice window splits to not duplicate a `rau-mode' buffer in NEW-WINDOW."
@@ -549,7 +558,8 @@ Call this function once when starting Emacs inside of river."
   ;; TODO catch errors, log and return
   (rau--rpc-start-backend)
 
-  (add-hook 'window-state-change-hook #'rau--window-state-change-handler))
+  (add-hook 'window-state-change-hook #'rau--window-state-change-handler)
+  (add-hook 'after-make-frame-functions #'rau--initial-frame-buffer))
 
 ;;; RPC State
 

@@ -976,19 +976,30 @@ outputframe or external window."
            (when-let* ((output-wl (rau--outframe-wl-output-wl frame-wl))
                        (position (rau--position-for-outputframe output-wl))
                        ((not (equal position (rau--window-wl-absolute-position frame-wl))))
-                       (node-wl (rau--window-wl-node-wl frame-wl)))
-             (lgr-trace rau--lgr "render frame %d for output %d."
+                       (node-wl (rau--window-wl-node-wl frame-wl))
+                       (frame-id (rau--window-wl-frame-id frame-wl))
+                       (client (rau--state-client rau--state)))
+             (lgr-trace rau--lgr "render frame %d for output %d. frame-id=%s"
                       (ewc-object-id frame-wl)
-                      (ewc-object-id output-wl))
+                      (ewc-object-id output-wl)
+                      frame-id)
              (setf (rau--window-wl-absolute-position frame-wl) position)
-             (rau--request node-wl 'set-position (rau--cons-as position 'x 'y)))))
+             (rau--request node-wl 'set-position (rau--cons-as position 'x 'y))
+             (dolist (window-wl (ewc-objects client rau--tag-tiled))
+               (when-let* ((win-position (rau--window-wl-position window-wl))
+                           ((equal frame-id (rau--window-wl-frame-id window-wl))))
+                 (lgr-trace rau--lgr "Reposition window id=%d"
+                            (ewc-object-id window-wl))
+                 (rau--update-window-tiled-position window-wl win-position frame-wl))))))
 
 ;;; Receive fe-ui-state
 
-(defun rau--update-window-tiled-position (window-wl win-position)
+(defun rau--update-window-tiled-position (window-wl win-position &optional frame-wl)
   (let* ((node-wl (rau--window-wl-node-wl window-wl))
-         (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
-         (_ (unless frame-wl (error "No frame-wl found")))
+         (frame-wl (or frame-wl (rau--frame-wl-for-extwin-wl window-wl)))
+         (_ (unless frame-wl
+              (error "No frame-wl found for frame-id=%S"
+                     (rau--window-wl-frame-id window-wl))))
          (output-wl (rau--outframe-wl-output-wl frame-wl))
          (frame-node-wl (rau--window-wl-node-wl frame-wl))
          (frame-node-id (ewc-object-id frame-node-wl))
@@ -1005,7 +1016,7 @@ outputframe or external window."
     (rau--render-enqueue node-wl 'place-above `((other . ,frame-node-id)))))
 
 (defun rau--update-window-tiled (window-wl frame-id position dimensions)
-  (lgr-trace rau--lgr "updating window id=%d frame-id=%s position=%S dimensions %S"
+  (lgr-trace rau--lgr "Updating window id=%d frame-id=%s position=%S dimensions=%S"
     (ewc-object-id window-wl) frame-id position dimensions)
   (let ((dirty))
     ;; frame-id must be updated before updating position!
@@ -1033,6 +1044,7 @@ outputframe or external window."
   (pcase-let* ((client (rau--state-client rau--state))
                (`[,frames ,wins] state)
                (dirty nil)
+               (frame-without-window nil)
                (visible nil))
     (lgr-debug rau--lgr "Update fe-ui state %d frames, %d wins"
                (length frames) (length wins))
@@ -1040,8 +1052,11 @@ outputframe or external window."
       (pcase-let* ((`[,frame-id ,window-id ,output-id] frame)
                    (window-wl (ewc-object-get client window-id))
                    (output-wl (ewc-object-get client output-id)))
-        (when window-wl
-          (setf (rau--window-wl-frame-id window-wl) frame-id))
+        (lgr-debug rau--lgr "Updating frame frame-id=%S window-id=%S output-id=%S"
+                   frame-id window-id output-id)
+        (if window-wl
+            (setf (rau--window-wl-frame-id window-wl) frame-id)
+          (setf frame-without-window t))
         (when output-wl
           (setf (rau--output-wl-frame-id output-wl) frame-id))))
     (dolist (win wins)
@@ -1053,7 +1068,7 @@ outputframe or external window."
           (setq dirty t))))
     ;; Hide all tiled windows that still have a position and were not received
     (dolist (window-wl (ewc-objects client rau--tag-tiled))
-      (when (and (rau--window-wl-position window-wl)
+      (when (and (or frame-without-window (rau--window-wl-position window-wl))
                  (not (member (ewc-object-id window-wl) visible)))
         (rau--render-enqueue window-wl 'hide)
         (setf (rau--window-wl-position window-wl) nil
