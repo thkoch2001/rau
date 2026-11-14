@@ -210,7 +210,7 @@ wrap it in a `with-current-buffer'."
 (defun rau--task-setup-new-external-window (window-id title)
   "Create and display Rau mode buffer with name TITLE for WINDOW-ID."
   (let* ((name (or title (make-temp-name "rau-external-")))
-         (buffer (get-buffer-create name)))
+         (buffer (generate-new-buffer name)))
     (with-current-buffer buffer
       (rau-mode)
       (setq-local rau--window-id window-id)
