@@ -138,6 +138,19 @@ used in event listeners."
   (push `(,fn . ,args) (rau--fe-state-task-queue rau--fe-state))
   (rau--tasks-schedule-execution))
 
+(defun rau--good-new-frame-buffer-p (buffer)
+  (and (not (string-prefix-p " " (buffer-name buffer)))
+       (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))))
+
+(defun rau--make-frame ()
+  "Make frame for a new output that will not show a rau-mode buffer.
+`make-frame' assigns the current buffer to the new frame. So we need to
+wrap it in a `with-current-buffer'."
+  (let ((buffer (or (cl-find-if #'rau--good-new-frame-buffer-p (buffer-list))
+                    (get-buffer-create "*scratch*"))))
+    (with-current-buffer buffer
+      (make-frame (rau--make-outputframe-parameters)))))
+
 (defun rau--task-assign-emacs-frame (output-id)
   "Find initial frame or create one and set OUTPUT-ID in `frame-parameter'."
   (let ((emacs-frame
@@ -148,7 +161,7 @@ used in event listeners."
                    for is_rau_frame = (string-prefix-p "rau-frame-" name)
                    for is_assigned = (frame-parameter f 'rau--output-id)
                    if (and is_rau_frame (not is_assigned)) return f)
-          (make-frame (rau--make-outputframe-parameters)))))
+          (rau--make-frame))))
     (set-frame-parameter emacs-frame 'rau--output-id output-id))
   (rau--send-fe-ui-state))
 
@@ -430,17 +443,19 @@ expands and thus minibuffer ends up below external window."
 
 (defun rau--buffer-predicate (buffer)
   "Avoid showing a rau BUFFER."
-  (not (with-current-buffer buffer (derived-mode-p 'rau-mode))))
+  (or (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))
+      (not (get-buffer-window buffer t))))
 
 (defun rau--initial-frame-buffer (frame)
   (lgr-trace rau--lgr "init frame buffer frame-id=%S"
              (frame-id frame))
-  (dolist (window (window-list frame))
-    (with-current-buffer (window-buffer window)
-      (when (derived-mode-p 'rau-mode)
-        (let ((new-buffer (other-buffer)))
-          (lgr-trace rau--lgr "switching buffer to %S" (buffer-name new-buffer))
-          (switch-to-buffer new-buffer))))))
+  (dolist (window (window-list frame 'no-minibuffer))
+    (when-let* ((current-buffer (window-buffer window))
+                ((with-current-buffer current-buffer
+                   (derived-mode-p 'rau-mode)))
+                (new-buffer (other-buffer current-buffer t)))
+      (lgr-trace rau--lgr "switching initial-frame buffer to %S" (buffer-name new-buffer))
+      (set-window-buffer window new-buffer))))
 
 (defun rau--split-window-advice (new-window)
   "Advice window splits to not duplicate a `rau-mode' buffer in NEW-WINDOW."
