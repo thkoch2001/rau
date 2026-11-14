@@ -100,11 +100,24 @@ Emacs frame."
 (defvar-local rau--window-id nil
   "Wayland window id for this `rau-mode' buffer.")
 
+(defun rau--show-only-once (win)
+  "Hide rau buffer on any other window than WIN."
+  (when-let* (((windowp win))
+              (buffer (current-buffer))
+              ;; only react to runs for newly added buffer
+              ((eq (window-buffer win) buffer)))
+    (dolist (frame (frame-list))
+      (dolist (other-win (window-list frame 'no-minibuffer))
+        (when (and (not (eq win other-win))
+                   (eq buffer (window-buffer other-win)))
+          (rau--tasks-enqueue #'set-window-buffer other-win (other-buffer)))))))
+
 (define-derived-mode rau-mode special-mode "Rau"
   "Major mode for buffers representing windows managed by rau."
   :group 'rau
   (setq-local buffer-read-only t)
   (add-hook 'kill-buffer-query-functions #'rau--buffer-killed nil t)
+  (add-hook 'window-buffer-change-functions #'rau--show-only-once nil t)
   (scroll-bar-mode 0)
   (setq-local left-fringe-width 0
               right-fringe-width 0))
@@ -439,8 +452,6 @@ don't get called for windows that disappear.  Also
 expands and thus minibuffer ends up below external window."
   (rau--be #'rau--mark-manage-dirty))
 
-;;; Other Emacs config functions: advices, predicates
-
 (defun rau--buffer-predicate (buffer)
   "Avoid showing a rau BUFFER."
   (or (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))
@@ -456,27 +467,6 @@ expands and thus minibuffer ends up below external window."
                 (new-buffer (other-buffer current-buffer t)))
       (lgr-trace rau--lgr "switching initial-frame buffer to %S" (buffer-name new-buffer))
       (set-window-buffer window new-buffer))))
-
-(defun rau--split-window-advice (new-window)
-  "Advice window splits to not duplicate a `rau-mode' buffer in NEW-WINDOW."
-  (with-selected-window new-window
-    (with-current-buffer (window-buffer)
-      (when (derived-mode-p 'rau-mode)
-        (switch-to-buffer (other-buffer)))))
-  new-window)
-
-(defun rau--set-window-buffer-advice (orig win buf &rest r)
-  "Avoid double-display of rau buffers, by stealing them.
-Note that displaying the same buffer in two different tabs, for example,
-is completely valid.
-See `set-window-buffer' and `advice-add' for ORIG, WIN BUF R arguments."
-  (with-current-buffer buf
-    (when (derived-mode-p 'rau-mode)
-      (dolist (other (get-buffer-window-list buf nil 'visible))
-        (unless (eq (or win (selected-window)) other)
-          (with-selected-window other
-            (switch-to-buffer (other-buffer)))))))
-  (apply orig win buf r))
 
 (defun rau-toggle-fullscreen ()
   "Toggle fullscreen for the currently focused external window."
@@ -559,10 +549,6 @@ Call this function once when starting Emacs inside of river."
   ;; TODO: this is a hack for lack of ability to figure out alignment ...
   (menu-bar-mode 0)
   (tool-bar-mode 0)
-
-  (advice-add 'split-window-below :filter-return #'rau--split-window-advice)
-  (advice-add 'split-window-right :filter-return #'rau--split-window-advice)
-  (advice-add 'set-window-buffer :around #'rau--set-window-buffer-advice)
 
   (message "Launching rau (pure Elisp) ...")
   (unless (= 1 (length (frame-list)))
