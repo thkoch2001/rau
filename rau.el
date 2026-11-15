@@ -105,12 +105,10 @@ Emacs frame."
   (when-let* (((windowp win))
               (buffer (current-buffer))
               ;; only react to runs for newly added buffer
-              ((eq (window-buffer win) buffer)))
-    (dolist (frame (frame-list))
-      (dolist (other-win (window-list frame 'no-minibuffer))
-        (when (and (not (eq win other-win))
-                   (eq buffer (window-buffer other-win)))
-          (rau--tasks-enqueue #'set-window-buffer other-win (other-buffer)))))))
+              ((eq (window-buffer win) buffer))
+              (wins (get-buffer-window-list buffer 'nomb t)))
+    (dolist (other-win (cdr wins))
+      (rau--tasks-enqueue #'set-window-buffer other-win (other-buffer)))))
 
 (define-derived-mode rau-mode special-mode "Rau"
   "Major mode for buffers representing windows managed by rau."
