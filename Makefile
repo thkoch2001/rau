@@ -3,6 +3,7 @@
 
 test:
 	emacs --batch -Q -L . -L test -l ert \
+	  -l rau-rpc-tests.el \
 	  -l rau-tests.el \
 	  -l rau-tests-functional.el \
 	  -l ewc-tags-tests.el \
@@ -10,6 +11,7 @@ test:
 
 test-interactiv:
 	emacs -nw -Q -L . -L test -l ert \
+	  -l rau-rpc-tests.el \
 	  -l rau-tests.el \
 	  -l rau-tests-functional.el \
 	  -l ewc-tags-tests.el \
