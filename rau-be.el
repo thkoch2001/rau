@@ -88,6 +88,8 @@
   pid
   ;; position=nil means the window is hidden
   position
+  ;; Last frame node used for tiled placement; nil until shown or after hiding.
+  (placed-frame-node-wl nil :type (or null ewc-object))
   title)
 
 (cl-defstruct (rau--seat (:constructor rau--seat-make))
@@ -613,6 +615,8 @@ point where also the destroy request is sent."
   (rau--queue-send (rau--state-render-queue rau--state))
   (setf (rau--state-render-queue rau--state) nil)
   (rau--render-frames)
+  (rau--do rau--tag-tiled window-wl rau--state
+    (rau--render-window-tiled window-wl))
   (rau--request wm-wl 'render-finish))
 
 (defun rau--on-river-window-manager-v1-session-locked (_wm-wl _)
@@ -983,32 +987,36 @@ outputframe or external window."
              (setf (rau--window-wl-absolute-position frame-wl) position)
              (rau--request node-wl 'set-position (rau--cons-as position 'x 'y)))))
 
+(defun rau--render-window-tiled (window-wl)
+  "Reconcile placement against the current frame and output at render time."
+  (when-let* ((win-position (rau--window-wl-position window-wl))
+              (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
+              (output-wl (rau--outframe-wl-output-wl frame-wl)))
+    ;; Nodes are created with their windows, before frame/tiled tagging.
+    (let ((node-wl (rau--window-wl-node-wl window-wl))
+          (frame-node-wl (rau--window-wl-node-wl frame-wl))
+          (position (rau--apply-cons #'+ win-position
+                                    (rau--position-for-outputframe output-wl)))
+          (placed-frame-node-wl (rau--window-wl-placed-frame-node-wl window-wl)))
+      (unless (and (eq frame-node-wl placed-frame-node-wl)
+                   (equal position (rau--window-wl-absolute-position window-wl)))
+        (unless placed-frame-node-wl
+          (rau--request window-wl 'show))
+        (rau--request node-wl 'set-position (rau--cons-as position 'x 'y))
+        ;; Keep external windows above their own Emacs frame, below floaters.
+        (rau--request node-wl 'place-above `((other . ,(ewc-object-id frame-node-wl))))
+        (setf (rau--window-wl-absolute-position window-wl) position
+              (rau--window-wl-placed-frame-node-wl window-wl) frame-node-wl)))))
+
 ;;; Receive fe-ui-state
 
-(defun rau--update-window-tiled-position (window-wl win-position)
-  (let* ((node-wl (rau--window-wl-node-wl window-wl))
-         (frame-wl (rau--frame-wl-for-extwin-wl window-wl))
-         (_ (unless frame-wl (error "No frame-wl found")))
-         (output-wl (rau--outframe-wl-output-wl frame-wl))
-         (frame-node-wl (rau--window-wl-node-wl frame-wl))
-         (frame-node-id (ewc-object-id frame-node-wl))
-         (old-position (rau--window-wl-position window-wl))
-         (frame-position (rau--position-for-outputframe output-wl))
-         (position (rau--apply-cons #'+ win-position frame-position)))
-    (setf (rau--window-wl-absolute-position window-wl) position
-          (rau--window-wl-position window-wl) win-position)
-    (unless old-position
-      (rau--render-enqueue window-wl 'show))
-    (rau--render-enqueue node-wl 'set-position (rau--cons-as position 'x 'y))
-    ;; Place window above the Emacs outputframe window but not at the top
-    ;; In theory this should leave the top for floating windows
-    (rau--render-enqueue node-wl 'place-above `((other . ,frame-node-id)))))
-
 (defun rau--update-window-tiled (window-wl frame-id position dimensions)
+  "Update desired tiled geometry; return non-nil if any of it changed."
   (lgr-trace rau--lgr "updating window id=%d frame-id=%s position=%S dimensions %S"
     (ewc-object-id window-wl) frame-id position dimensions)
-  (let ((dirty))
-    ;; frame-id must be updated before updating position!
+  (unless (and (equal frame-id (rau--window-wl-frame-id window-wl))
+               (equal position (rau--window-wl-position window-wl))
+               (equal dimensions (rau--window-wl-dimensions window-wl)))
     (setf (rau--window-wl-frame-id window-wl) frame-id)
     (unless (equal dimensions (rau--window-wl-dimensions window-wl))
       (rau--manage-enqueue window-wl
@@ -1019,15 +1027,9 @@ outputframe or external window."
                            (y . 0)
                            (width . ,(car dimensions))
                            (height . ,(cdr dimensions))))
-      (setf (rau--window-wl-dimensions window-wl) dimensions
-            dirty t))
-    (unless (equal position (rau--window-wl-position window-wl))
-      (condition-case-unless-debug err
-          (rau--update-window-tiled-position window-wl position)
-        (error (lgr-error rau--lgr "Error positioning window id=%d: %S"
-                   (ewc-object-id window-wl) err)))
-      (setq dirty t))
-    dirty))
+      (setf (rau--window-wl-dimensions window-wl) dimensions))
+    (setf (rau--window-wl-position window-wl) position)
+    t))
 
 (defun rau--update-fe-ui-state (state)
   (pcase-let* ((client (rau--state-client rau--state))
@@ -1040,10 +1042,16 @@ outputframe or external window."
       (pcase-let* ((`[,frame-id ,window-id ,output-id] frame)
                    (window-wl (ewc-object-get client window-id))
                    (output-wl (ewc-object-get client output-id)))
-        (when window-wl
-          (setf (rau--window-wl-frame-id window-wl) frame-id))
-        (when output-wl
-          (setf (rau--output-wl-frame-id output-wl) frame-id))))
+        ;; The frontend is asynchronous: removed IDs may already have been
+        ;; recycled for a different interface.  Never write through an ID alone.
+        (when (and window-wl (ewc-object-tagged-p window-wl rau--tag-outputframe)
+                   (not (equal frame-id (rau--window-wl-frame-id window-wl))))
+          (setf (rau--window-wl-frame-id window-wl) frame-id)
+          (setq dirty t))
+        (when (and output-wl (eq (ewc-object-interface output-wl) 'river-output-v1)
+                   (not (equal frame-id (rau--output-wl-frame-id output-wl))))
+          (setf (rau--output-wl-frame-id output-wl) frame-id)
+          (setq dirty t))))
     (dolist (win wins)
       (pcase-let* ((`[,window-id ,frame-id ,position ,dimensions] win)
                    (window-wl (ewc-object-get client window-id)))
@@ -1057,6 +1065,7 @@ outputframe or external window."
                  (not (member (ewc-object-id window-wl) visible)))
         (rau--render-enqueue window-wl 'hide)
         (setf (rau--window-wl-position window-wl) nil
+              (rau--window-wl-placed-frame-node-wl window-wl) nil
               (rau--window-wl-dimensions window-wl) nil
               (rau--window-wl-frame-id window-wl) nil
               dirty t)))

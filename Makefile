@@ -6,6 +6,7 @@ test:
 	  -l rau-tests.el \
 	  -l rau-tests-functional.el \
 	  -l ewc-tags-tests.el \
+	  -l rau-placement-tests.el \
 	  -f ert-run-tests-batch-and-exit
 
 test-interactiv:
@@ -13,6 +14,7 @@ test-interactiv:
 	  -l rau-tests.el \
 	  -l rau-tests-functional.el \
 	  -l ewc-tags-tests.el \
+	  -l rau-placement-tests.el \
 	  --eval="(ert t)" -f delete-other-windows
 
 river:
