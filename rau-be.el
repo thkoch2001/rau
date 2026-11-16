@@ -1006,14 +1006,16 @@ outputframe or external window."
          (old-position (rau--window-wl-position window-wl))
          (frame-position (rau--position-for-outputframe output-wl))
          (position (rau--apply-cons #'+ win-position frame-position)))
-    (setf (rau--window-wl-absolute-position window-wl) position
-          (rau--window-wl-position window-wl) win-position)
-    (unless old-position
-      (rau--render-enqueue window-wl 'show))
-    (rau--render-enqueue node-wl 'set-position (rau--cons-as position 'x 'y))
-    ;; Place window above the Emacs outputframe window but not at the top
-    ;; In theory this should leave the top for floating windows
-    (rau--render-enqueue node-wl 'place-above `((other . ,frame-node-id)))))
+    (when (not (equal position (rau--window-wl-absolute-position window-wl)))
+      (setf (rau--window-wl-absolute-position window-wl) position
+            (rau--window-wl-position window-wl) win-position)
+      (unless old-position
+        (rau--render-enqueue window-wl 'show))
+      (rau--render-enqueue node-wl 'set-position (rau--cons-as position 'x 'y))
+      ;; Place window above the Emacs outputframe window but not at the top
+      ;; In theory this should leave the top for floating windows
+      (rau--render-enqueue node-wl 'place-above `((other . ,frame-node-id))))
+    t))
 
 (defun rau--update-window-tiled (window-wl frame-id position dimensions)
   (lgr-trace rau--lgr "Updating window id=%d frame-id=%s position=%S dimensions=%S"
@@ -1032,12 +1034,11 @@ outputframe or external window."
                            (height . ,(cdr dimensions))))
       (setf (rau--window-wl-dimensions window-wl) dimensions
             dirty t))
-    (unless (equal position (rau--window-wl-position window-wl))
-      (condition-case-unless-debug err
-          (rau--update-window-tiled-position window-wl position)
-        (error (lgr-error rau--lgr "Error positioning window id=%d: %S"
-                   (ewc-object-id window-wl) err)))
-      (setq dirty t))
+    (condition-case-unless-debug err
+        (when (rau--update-window-tiled-position window-wl position)
+          (setq dirty t))
+      (error (lgr-error rau--lgr "Error positioning window id=%d: %S"
+                        (ewc-object-id window-wl) err)))
     dirty))
 
 (defun rau--update-fe-ui-state (state)
@@ -1071,9 +1072,10 @@ outputframe or external window."
       (when (and (or frame-without-window (rau--window-wl-position window-wl))
                  (not (member (ewc-object-id window-wl) visible)))
         (rau--render-enqueue window-wl 'hide)
-        (setf (rau--window-wl-position window-wl) nil
+        (setf (rau--window-wl-absolute-position window-wl) nil
               (rau--window-wl-dimensions window-wl) nil
               (rau--window-wl-frame-id window-wl) nil
+              (rau--window-wl-position window-wl) nil
               dirty t)))
     (when dirty (rau--mark-manage-dirty))))
 
