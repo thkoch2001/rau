@@ -81,7 +81,7 @@ This can be used for simple two dimensional vector calculations."
 Return values are ignored and errors catched and logged."
   (condition-case-unless-debug err
       (apply fn args)
-    (lgr-error rau--lgr "RPC error %S with %S: %S" fn args err)))
+    (error (lgr-error rau--lgr "RPC error %S with %S: %S" fn args err))))
 
 (defun rau--rpc-filter (_proc string)
   "Process filter for incoming RPC STRING."
