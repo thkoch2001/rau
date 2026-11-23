@@ -557,16 +557,12 @@ Call this function once when starting Emacs inside of river."
 
   (modify-frame-parameters nil (rau--make-outputframe-parameters))
 
-  ;; TODO catch errors, log and return
   (rau--rpc-start-backend)
 
   (add-hook 'window-state-change-hook #'rau--window-state-change-handler)
   (add-hook 'after-make-frame-functions #'rau--initial-frame-buffer))
 
 ;;; RPC State
-
-(defvar rau--rpc-backend-proc nil
-  "The backend Emacs subprocess.")
 
 (defun rau--make-be-server-name (&optional number)
   "Create unique `server-name' for the Rau backend server.
@@ -613,29 +609,19 @@ happen mostly during development.  This function assumes that
                     "-l" ,(locate-library "rau-be")
                     ,@init-file-args
                     "--eval=(rau-be-main)"
-                    ,sock-file))
-         (proc (make-process
-                :name "rau-backend"
-                :command command
-                :buffer " *rau-backend-stdout*"
-                :noquery t
-                :stderr " *rau-backend-stderr*"))
-         (_ (rau--wait-for-file sock-file 0.1 30))
-         (conn (make-network-process
-                :name "rau-rpc"
-                :service nil
-                :remote sock-file
-                :filter #'rau--rpc-filter
-                :noquery t)))
-    (setq rau--rpc-proc conn
-          rau--rpc-backend-proc proc)
-    (rau--rpc-create-recv-buffer)
+                    ,sock-file)))
+    (make-process :name "rau-backend"
+                  :command command
+                  :buffer " *rau-backend-stdout*"
+                  :noquery t
+                  :stderr " *rau-backend-stderr*")
+    (rau--wait-for-file sock-file 0.1 30)
+    (rau--rpc-connect sock-file)
     ;; The Emacs subprocess probably gets killed and might not have time to
     ;; clean up the socket. Ignore error in case the subprocess did actually
     ;; delete the file.
     (add-hook 'kill-emacs-hook
-              (lambda () (ignore-error file-error (delete-file sock-file))))
-    proc))
+              (lambda () (ignore-error file-error (delete-file sock-file))))))
 
 (provide 'rau)
 ;;; rau.el ends here

@@ -1088,9 +1088,7 @@ outputframe or external window."
 
 (defun rau--rpc-server-log (_server connection msg)
   "React to CONNECTION from Rau frontend, log MSG."
-  (rau--rpc-create-recv-buffer)
-  (setq rau--rpc-proc connection)
-  (lgr-info rau--lgr "new connection: %S" msg)
+  (rau--rpc-accept-connection connection msg)
   (rau--connect-river))
 
 (defun rau-be-main ()

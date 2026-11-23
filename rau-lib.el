@@ -64,8 +64,24 @@ This can be used for simple two dimensional vector calculations."
     (integers-as-characters . nil))
   "Settings for `prin1-to-string' in RPC data serialization.")
 
-(defun rau--rpc-create-recv-buffer ()
-  (setq rau--rpc-recv-buffer (get-buffer-create " *rau--rpc-recv-buffer*")))
+(defun rau--rpc-init-connection (connection)
+  "Store CONNECTION and create its receive buffer."
+  (setq rau--rpc-proc connection
+        rau--rpc-recv-buffer (get-buffer-create " *rau--rpc-recv-buffer*")))
+
+(defun rau--rpc-connect (socket-file)
+  "Create RPC connection to unix SOCKET-FILE."
+  (rau--rpc-init-connection
+   (make-network-process :name "rau-rpc"
+                         :service nil
+                         :remote socket-file
+                         :filter #'rau--rpc-filter
+                         :noquery t)))
+
+(defun rau--rpc-accept-connection (connection msg)
+  "Accept RPC CONNECTION, log MSG, see :log in `make-network-process'."
+  (rau--rpc-init-connection connection)
+  (lgr-info rau--lgr "new connection: %S" msg))
 
 (defun rau--rpc-send-sexp (process sexp)
   (let ((coding-system-for-write 'utf-8-emacs-unix)
