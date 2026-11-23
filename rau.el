@@ -7,6 +7,7 @@
 ;; Keywords: frames
 ;; URL: https://github.com/thkoch2001/rau
 ;; Package-Requires: ((emacs "31.1")
+;;                    (ewc)
 ;;                    (lgr "0.1.0"))
 
 ;;; Commentary:
