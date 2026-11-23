@@ -629,8 +629,10 @@ happen mostly during development.  This function assumes that
           rau--rpc-backend-proc proc)
     (rau--rpc-create-recv-buffer)
     ;; The Emacs subprocess probably gets killed and might not have time to
-    ;; clean up the socket
-    (add-hook 'kill-emacs-hook (lambda () (ignore-errors (delete-file sock-file))))
+    ;; clean up the socket. Ignore error in case the subprocess did actually
+    ;; delete the file.
+    (add-hook 'kill-emacs-hook
+              (lambda () (ignore-error file-error (delete-file sock-file))))
     proc))
 
 (provide 'rau)
