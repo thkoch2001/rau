@@ -25,9 +25,9 @@
 (declare-function rau--task-link-emacs-frame-to-window "rau" (title window-id))
 (declare-function rau--task-rename-buffer "rau" (window-id name))
 (declare-function rau--task-select-window "rau" (window-id))
-(declare-function rau--task-setup-new-external-window "rau" (window-id) title)
+(declare-function rau--task-setup-new-external-window "rau" (window-id title))
 (declare-function rau--tasks-enqueue "rau" (fn &rest args))
-(declare-function rau--update-focus-request "rau" ())
+(declare-function rau--update-focus-request "rau" (&rest args))
 
 ;;; Configuration and state
 
