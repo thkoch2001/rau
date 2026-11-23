@@ -151,6 +151,7 @@ used in event listeners."
   (rau--tasks-schedule-execution))
 
 (defun rau--good-new-frame-buffer-p (buffer)
+  "Whether BUFFER is good to be shown as initial buffer in a new frame."
   (and (not (string-prefix-p " " (buffer-name buffer)))
        (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))))
 
@@ -457,6 +458,7 @@ expands and thus minibuffer ends up below external window."
       (not (get-buffer-window buffer t))))
 
 (defun rau--initial-frame-buffer (frame)
+  "Set initial buffer for FRAME in `after-make-frame-functions' hook."
   (lgr-trace rau--lgr "init frame buffer frame-id=%S"
              (frame-id frame))
   (dolist (window (window-list frame 'no-minibuffer))
@@ -601,7 +603,7 @@ happen mostly during development.  This function assumes that
          (coding-system-for-write 'utf-8-emacs-unix)
          (init-file-args (when rau-backend-init-file
                            (unless (file-readable-p rau-backend-init-file)
-                             (error "rau-backend-init-file not readable: %S" rau-backend-init-file))
+                             (error "Not readable rau-backend-init-file: %S" rau-backend-init-file))
                            `("-l" ,rau-backend-init-file)))
          (command `(,(expand-file-name invocation-name invocation-directory)
                     "-Q"

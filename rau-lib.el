@@ -4,6 +4,10 @@
 
 ;;; SPDX-License-Identifier: GPL-3.0-or-later
 
+;;; Commentary:
+
+;; Common code for frontend (rau.el) and backend (rau-be.el)
+
 ;;; Code:
 
 (require 'lgr)
@@ -57,7 +61,8 @@ This can be used for simple two dimensional vector calculations."
     (escape-newlines . t)
     (escape-control-characters . t)
     (float-format . nil)
-    (integers-as-characters . nil)))
+    (integers-as-characters . nil))
+  "Settings for `prin1-to-string' in RPC data serialization.")
 
 (defun rau--rpc-create-recv-buffer ()
   (setq rau--rpc-recv-buffer (get-buffer-create " *rau--rpc-recv-buffer*")))
