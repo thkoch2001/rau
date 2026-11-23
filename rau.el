@@ -156,8 +156,8 @@ used in event listeners."
        (not (with-current-buffer buffer (derived-mode-p 'rau-mode)))))
 
 (defun rau--make-frame ()
-  "Make frame for a new output that will not show a rau-mode buffer.
-`make-frame' assigns the current buffer to the new frame. So we need to
+  "Make frame for a new output that will not show a `rau-mode' buffer.
+`make-frame' assigns the current buffer to the new frame.  So we need to
 wrap it in a `with-current-buffer'."
   (let ((buffer (or (cl-find-if #'rau--good-new-frame-buffer-p (buffer-list))
                     (get-buffer-create "*scratch*"))))
@@ -219,6 +219,12 @@ wrap it in a `with-current-buffer'."
   "Let Emacs select the underlying emacs-window for the external WINDOW-ID."
   (when-let* ((emacs-window (rau--emacs-window-for-window-id window-id)))
     (select-window emacs-window 'norecord)))
+
+(defun rau--task-set-frame-position (frame-id position)
+  "Set parameter rau--frame-position of frame FRAME-ID to (x . y) POSITION.
+This can be used e.g. to have predictable numbering in ace-window.el."
+  (when-let* ((frame (frame-by-id frame-id)))
+    (set-frame-parameter frame 'rau--frame-position position)))
 
 (defun rau--task-setup-new-external-window (window-id title)
   "Create and display Rau mode buffer with name TITLE for WINDOW-ID."

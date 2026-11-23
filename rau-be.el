@@ -25,6 +25,7 @@
 (declare-function rau--task-link-emacs-frame-to-window "rau" (title window-id))
 (declare-function rau--task-rename-buffer "rau" (window-id name))
 (declare-function rau--task-select-window "rau" (window-id))
+(declare-function rau--task-set-frame-position "rau" (frame-id position))
 (declare-function rau--task-setup-new-external-window "rau" (window-id title))
 (declare-function rau--tasks-enqueue "rau" (fn &rest args))
 (declare-function rau--update-focus-request "rau" (&rest args))
@@ -985,6 +986,7 @@ outputframe or external window."
                       frame-id)
              (setf (rau--window-wl-absolute-position frame-wl) position)
              (rau--request node-wl 'set-position (rau--cons-as position 'x 'y))
+             (rau--fe #'rau--task-set-frame-position frame-id position)
              (dolist (window-wl (ewc-objects client rau--tag-tiled))
                (when-let* ((win-position (rau--window-wl-position window-wl))
                            ((equal frame-id (rau--window-wl-frame-id window-wl))))
@@ -1005,17 +1007,17 @@ outputframe or external window."
          (frame-node-id (ewc-object-id frame-node-wl))
          (old-position (rau--window-wl-position window-wl))
          (frame-position (rau--position-for-outputframe output-wl))
-         (position (rau--apply-cons #'+ win-position frame-position)))
-    (when (not (equal position (rau--window-wl-absolute-position window-wl)))
-      (setf (rau--window-wl-absolute-position window-wl) position
+         (absolute-position (rau--apply-cons #'+ win-position frame-position)))
+    (when (not (equal absolute-position (rau--window-wl-absolute-position window-wl)))
+      (setf (rau--window-wl-absolute-position window-wl) absolute-position
             (rau--window-wl-position window-wl) win-position)
       (unless old-position
         (rau--render-enqueue window-wl 'show))
-      (rau--render-enqueue node-wl 'set-position (rau--cons-as position 'x 'y))
+      (rau--render-enqueue node-wl 'set-position (rau--cons-as absolute-position 'x 'y))
       ;; Place window above the Emacs outputframe window but not at the top
       ;; In theory this should leave the top for floating windows
-      (rau--render-enqueue node-wl 'place-above `((other . ,frame-node-id))))
-    t))
+      (rau--render-enqueue node-wl 'place-above `((other . ,frame-node-id)))
+      t)))
 
 (defun rau--update-window-tiled (window-wl frame-id position dimensions)
   (lgr-trace rau--lgr "Updating window id=%d frame-id=%s position=%S dimensions=%S"
