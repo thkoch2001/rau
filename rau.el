@@ -53,6 +53,20 @@ Logging for the backend can be configured there."
   :type 'file
   :risky t)
 
+(defcustom rau-menu-bar-height nil
+  "Vertical offset in pixels for Wayland windows if `menu-bar-mode' is enabled.
+There is no way from inside Emacs to find out this value, so it needs to
+be set for each setup individually by trial-and-error.  This is
+experimental!"
+  :type 'integer)
+
+(defcustom rau-tool-bar-height nil
+  "Vertical offset in pixels for Wayland windows if `tool-bar-mode' is enabled.
+There is no way from inside Emacs to find out this value, so it needs to
+be set for each setup individually by trial-and-error.  This is
+experimental!"
+  :type 'integer)
+
 (defvar rau--fe-state nil
   "Current global rau WM front-end state.")
 
@@ -91,11 +105,16 @@ Emacs frame."
 
 (defun rau--make-outputframe-parameters ()
   "Make standard frame parameters for a Rau output frame."
-  `((name . ,(make-temp-name "rau-frame-"))
-    (undecorated . t)
-    (window-system . pgtk)
-    ;; avoid showing the same rau buffer twice
-    (buffer-predicate . rau--buffer-predicate)))
+  (let ((params `((name . ,(make-temp-name "rau-frame-"))
+                  (undecorated . t)
+                  (window-system . pgtk)
+                  ;; avoid showing the same rau buffer twice
+                  (buffer-predicate . rau--buffer-predicate))))
+    (unless rau-menu-bar-height
+      (push '(menu-bar-lines . 0) params))
+    (unless rau-tool-bar-height
+      (push '(tool-bar-lines . 0) params))
+    params))
 
 ;; Major mode for rau-managed buffers
 (defvar-local rau--window-id nil
@@ -486,9 +505,11 @@ expands and thus minibuffer ends up below external window."
 
 (defun rau--fe-ui-state ()
   "Build ui-state data to be sent to the backend."
-  (let (frames wins)
+  (let* (frames wins)
     (dolist (f (frame-list))
-      (let ((frame-id (frame-id f))
+      (let ((offset (+ (* rau-tool-bar-height (frame-parameter f 'tool-bar-lines))
+                       (* rau-menu-bar-height (frame-parameter f 'menu-bar-lines))))
+            (frame-id (frame-id f))
             (window-id (frame-parameter f 'rau--window-id))
             (output-id (frame-parameter f 'rau--output-id)))
         (when (or window-id output-id)
@@ -498,7 +519,7 @@ expands and thus minibuffer ends up below external window."
                       (window-id (buffer-local-value 'rau--window-id buffer)))
             (pcase-let* ((edges (window-inside-absolute-pixel-edges w))
                          (`(,left ,top ,right ,bottom) edges)
-                         (position `(,left . ,top))
+                         (position `(,left . ,(+ top offset)))
                          (dimensions-override (and (buffer-local-boundp 'rau--dimensions buffer)
                                                 (buffer-local-value 'rau--dimensions buffer)))
                          (dimensions (or dimensions-override
@@ -530,8 +551,6 @@ expands and thus minibuffer ends up below external window."
 
 ;;; Startup
 
-
-
 ;; NOTE: No need for rau-disable since this Emacs process is serving as a
 ;; Window Manager and disabling rau while keeping the Emacs process running
 ;; would result in an unresponsive user environment.
@@ -552,10 +571,6 @@ Call this function once when starting Emacs inside of river."
   (rau--global-unset-key-if "C-z" 'suspend-frame)
   (rau--global-unset-key-if "C-x C-z" 'suspend-frame)
   (rau--global-unset-key-if "C-x 5 0" 'delete-frame #'rau--save-delete-frame)
-
-  ;; TODO: this is a hack for lack of ability to figure out alignment ...
-  (menu-bar-mode 0)
-  (tool-bar-mode 0)
 
   (message "Launching rau (pure Elisp) ...")
   (unless (= 1 (length (frame-list)))
