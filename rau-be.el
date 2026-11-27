@@ -202,21 +202,21 @@ happens to be loading, so `rau--read-protocols' expands correctly even
 when used from other files (e.g. tests)."
     (let* ((rau-file
             (cond
-             ;; rau.el is currently being loaded.
+             ;; rau-be.el is currently being loaded.
              ((and load-file-name
                    (member (file-name-nondirectory load-file-name)
-                           '("rau.el" "rau.elc")))
+                           '("rau-be.el" "rau-be.elc")))
               load-file-name)
-             ;; rau.el is currently being byte-compiled.
+             ;; rau-be.el is currently being byte-compiled.
              ((and (bound-and-true-p byte-compile-current-file)
                    (member (file-name-nondirectory byte-compile-current-file)
-                           '("rau.el" "rau.elc")))
+                           '("rau-be.el" "rau-be.elc")))
               byte-compile-current-file)
-             ;; Expansion originates from some other file: find rau.el
+             ;; Expansion originates from some other file: find rau-be.el
              ;; on the load path.
              (t
-              (or (locate-file "rau" load-path '(".el" ".elc"))
-                  (error "Rau: cannot locate rau.el; add its directory to `load-path'")))))
+              (or (locate-file "rau-be" load-path '(".el" ".elc"))
+                  (error "Rau: cannot locate rau-be.el; add its directory to `load-path'")))))
            (rau-dir (file-name-directory (expand-file-name rau-file))))
       (expand-file-name "protocol" rau-dir)))
 
